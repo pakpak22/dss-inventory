@@ -41,4 +41,5 @@ npm run dev                     # http://localhost:3800
 ## 운영 배포
 
 담당자가 한다. `Dockerfile`(deps → builder → tools → runner, standalone)과 `docker-compose.yml`(개발 DB)이 재료다.
+**전환일(실자료 넣는 날) 절차와 명령은 `docs/전환일_절차서_2026-10-12.md`.**
 운영 주소 `https://inventory.dss21.co.kr` 등록, 백채널 로그아웃 URI 등록, 야간 백업(DB·데이터 폴더·엑셀 틀 두 벌)은 NAS 로 옮길 때 담당자가 한다.

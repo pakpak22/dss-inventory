@@ -24,11 +24,13 @@ FROM ${NODE_IMAGE} AS tools
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=deps /app/node_modules ./node_modules
-COPY package.json drizzle.config.ts ./
+# 🔴 src 전체를 담는다(2026-10-12 고침). 가져오기(import-workbook)는 src/lib/legacy·xlsx 를, 자체 점검(workbook-selftest)은
+#    src/lib/excel 을 쓰고 그 안의 "@/..." 는 tsconfig.json 의 paths 로 푼다 — src/db 와 env.ts 만 담으면 migrate 만 돌고 나머지는 모듈을 못 찾는다.
+COPY package.json drizzle.config.ts tsconfig.json ./
 COPY drizzle ./drizzle
 COPY scripts ./scripts
-COPY src/db ./src/db
-COPY src/lib/env.ts ./src/lib/env.ts
+COPY src ./src
+# 전환일 명령은 docs/전환일_절차서_2026-10-12.md. 기본은 마이그레이션.
 CMD ["npx", "tsx", "scripts/migrate.ts"]
 
 # ── 4. runner: 실제로 도는 이미지 (standalone) ───────────────────────────────
