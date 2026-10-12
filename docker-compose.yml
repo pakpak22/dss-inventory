@@ -1,0 +1,27 @@
+# 개발용 데이터베이스. 앱은 컨테이너로 돌리지 않고 `npm run dev` 로 띄운다.
+# 🔴 docker compose 는 .env 만 자동으로 읽고 .env.local 은 읽지 않는다.
+#    그래서 package.json 의 db:* 스크립트가 --env-file .env.local 을 넘긴다. 직접 칠 때도 그렇게 친다.
+#    빠뜨리면 비밀번호가 빈 값이 되어 DB 컨테이너가 재시작 루프에 빠진다. (CLAUDE.md 12-2절)
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: dss-inventory-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dss_inventory_app
+      POSTGRES_PASSWORD: ${DEV_POSTGRES_PASSWORD:?DEV_POSTGRES_PASSWORD 가 비어 있습니다. --env-file .env.local 을 넘기십시오}
+      POSTGRES_DB: dss_inventory_dev
+      TZ: Asia/Seoul
+    ports:
+      # 개발 DB 포트는 5450 (5448 은 휴가 관리의 DB — 2026-10-06 정정)
+      - "127.0.0.1:5450:5432"
+    volumes:
+      - dss-inventory-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dss_inventory_app -d dss_inventory_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  dss-inventory-pgdata:

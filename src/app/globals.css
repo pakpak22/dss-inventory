@@ -1,0 +1,43 @@
+@import "tailwindcss";
+
+/* CLAUDE.md 9-2절 그대로. 사내 시스템과 같은 모양을 유지한다. */
+
+:root { color-scheme: light; }   /* 사무실 PC에서 표를 읽는 화면이다. 밝게 고정 */
+
+@theme inline {
+  --font-sans: "Pretendard", -apple-system, BlinkMacSystemFont, "Segoe UI",
+               "Malgun Gothic", "맑은 고딕", sans-serif;
+  --font-mono: "Cascadia Mono", "Consolas", "D2Coding", ui-monospace, monospace;
+}
+
+html, body { height: 100%; }
+body {
+  background: #f1f5f9;
+  color: #0f172a;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 🔴 지우지 마라. Tailwind preflight 의 margin:0 이 브라우저 기본 margin:auto 를
+   지워서, 이게 없으면 모든 팝업이 화면 왼쪽 위 구석에 붙는다. */
+dialog { margin: auto; }
+
+@media (max-width: 30rem) {
+  dialog:modal { width: calc(100% - 2rem); }
+}
+
+/* 숫자를 세로로 맞춰 읽는다 — 수량·금액 칸에 쓴다 */
+.tabular { font-variant-numeric: tabular-nums; }
+
+/* 인쇄 (조각 6에서 쓴다. 자리만 미리 둔다) */
+@media print {
+  .no-print { display: none !important; }
+  /* 재고 현황 인쇄 (조각 6): A4 가로, 쪽마다 머리글 되풀이, 줄이 쪽 사이에서 잘리지 않게 */
+  @page { size: A4 landscape; margin: 10mm; }
+  .print-table thead { display: table-header-group; }
+  .print-table tr { break-inside: avoid; }
+  .print-table th { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+@media screen {
+  .print-only { display: none !important; }
+}

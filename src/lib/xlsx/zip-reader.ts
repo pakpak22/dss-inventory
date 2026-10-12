@@ -1,0 +1,182 @@
+/*
+ * ───────────────────────────────────────────────────────────────────────────
+ * 이 파일은 A/S 관리 시스템(RF_Service_System)의 src/lib/xlsx/ 에서
+ * 2026-10-02 에 복사해 왔다. 한 글자도 고치지 않았다.
+ *
+ * 고칠 일이 생기면 양쪽을 함께 고친다 — 한쪽만 고치면 나중에 "어느 쪽이
+ * 맞나"를 아무도 답할 수 없게 된다. 세 번째 시스템이 같은 코드를 쓰게 되면
+ * 그때 공용으로 뺀다.
+ *
+ * 무엇을 하는 코드인지: 같은 폴더의 README.md
+ * ───────────────────────────────────────────────────────────────────────────
+ */
+import { readFileSync } from "node:fs";
+import { inflateRawSync } from "node:zlib";
+
+/**
+ * Minimal ZIP central-directory reader, just enough to pull named entries
+ * (xl/worksheets/sheetN.xml, xl/drawings/drawingN.xml, etc.) out of an
+ * .xlsx, which is an ordinary ZIP/OOXML package. Deliberately not a general
+ * ZIP library and not a new dependency — this project has no existing
+ * xlsx-parsing package, and the importer only ever needs to read a handful
+ * of known-shaped XML entries by exact path, so a ~100-line reader using
+ * only Node's built-in `zlib.inflateRawSync` is less surface area than
+ * pulling in a third-party unzip library for one script.
+ *
+ * Supports the two compression methods every real-world .xlsx writer uses
+ * (0 = stored, 8 = deflate). No ZIP64 support — not needed for files well
+ * under 4 GB, which every worksheet/drawing entry in this workbook is by a
+ * wide margin.
+ */
+
+const EOCD_SIGNATURE = 0x06054b50;
+const CENTRAL_DIR_SIGNATURE = 0x02014b50;
+const LOCAL_HEADER_SIGNATURE = 0x04034b50;
+
+export type ZipEntryMetadata = {
+  name: string;
+  compressionMethod: number;
+  compressedSize: number;
+  uncompressedSize: number;
+  localHeaderOffset: number;
+};
+
+export class ZipArchive {
+  private readonly buf: Buffer;
+  private readonly entries: Map<string, ZipEntryMetadata>;
+  private readonly duplicateEntryCount: number;
+
+  private constructor(
+    buf: Buffer,
+    entries: Map<string, ZipEntryMetadata>,
+    duplicateEntryCount: number
+  ) {
+    this.buf = buf;
+    this.entries = entries;
+    this.duplicateEntryCount = duplicateEntryCount;
+  }
+
+  static fromFile(filePath: string): ZipArchive {
+    const buf = readFileSync(filePath);
+    return ZipArchive.fromBuffer(buf);
+  }
+
+  static fromBuffer(buf: Buffer): ZipArchive {
+    const eocdOffset = findEndOfCentralDirectory(buf);
+    const totalEntries = buf.readUInt16LE(eocdOffset + 10);
+    const centralDirOffset = buf.readUInt32LE(eocdOffset + 16);
+
+    const entries = new Map<string, ZipEntryMetadata>();
+    const normalizedNames = new Set<string>();
+    let duplicateEntryCount = 0;
+    let ptr = centralDirOffset;
+    for (let i = 0; i < totalEntries; i++) {
+      const sig = buf.readUInt32LE(ptr);
+      if (sig !== CENTRAL_DIR_SIGNATURE) {
+        throw new Error(
+          `Malformed zip: expected central directory signature at offset ${ptr}, found 0x${sig.toString(16)}`
+        );
+      }
+      const compressionMethod = buf.readUInt16LE(ptr + 10);
+      const compressedSize = buf.readUInt32LE(ptr + 20);
+      const uncompressedSize = buf.readUInt32LE(ptr + 24);
+      const nameLen = buf.readUInt16LE(ptr + 28);
+      const extraLen = buf.readUInt16LE(ptr + 30);
+      const commentLen = buf.readUInt16LE(ptr + 32);
+      const localHeaderOffset = buf.readUInt32LE(ptr + 42);
+      const name = buf.toString("utf8", ptr + 46, ptr + 46 + nameLen);
+
+      const normalizedName = name.replace(/\\/g, "/").toLowerCase();
+      if (normalizedNames.has(normalizedName)) duplicateEntryCount++;
+      normalizedNames.add(normalizedName);
+      entries.set(name, {
+        name,
+        compressionMethod,
+        compressedSize,
+        uncompressedSize,
+        localHeaderOffset,
+      });
+      ptr += 46 + nameLen + extraLen + commentLen;
+    }
+
+    return new ZipArchive(buf, entries, duplicateEntryCount);
+  }
+
+  has(entryName: string): boolean {
+    return this.entries.has(entryName);
+  }
+
+  list(): string[] {
+    return [...this.entries.keys()];
+  }
+
+  /** Central-directory metadata only; does not inflate entry contents. */
+  listEntries(): ZipEntryMetadata[] {
+    return [...this.entries.values()].map((entry) => ({ ...entry }));
+  }
+
+  hasDuplicateEntryNames(): boolean {
+    return this.duplicateEntryCount > 0;
+  }
+
+  entryCount(): number {
+    return this.entries.size + this.duplicateEntryCount;
+  }
+
+  /** Returns the entry's decompressed bytes, or null if it doesn't exist. */
+  readEntry(entryName: string, maxOutputLength?: number): Buffer | null {
+    const entry = this.entries.get(entryName);
+    if (!entry) return null;
+
+    const localSig = this.buf.readUInt32LE(entry.localHeaderOffset);
+    if (localSig !== LOCAL_HEADER_SIGNATURE) {
+      throw new Error(
+        `Malformed zip: expected local file header signature for "${entryName}" at offset ${entry.localHeaderOffset}`
+      );
+    }
+    const nameLen = this.buf.readUInt16LE(entry.localHeaderOffset + 26);
+    const extraLen = this.buf.readUInt16LE(entry.localHeaderOffset + 28);
+    const dataStart = entry.localHeaderOffset + 30 + nameLen + extraLen;
+    const compressed = this.buf.subarray(dataStart, dataStart + entry.compressedSize);
+
+    if (entry.compressionMethod === 0) {
+      if (maxOutputLength !== undefined && compressed.length > maxOutputLength) {
+        throw new Error(`Zip entry exceeds configured output limit: "${entryName}"`);
+      }
+      return Buffer.from(compressed);
+    }
+    if (entry.compressionMethod === 8) {
+      return inflateRawSync(
+        compressed,
+        maxOutputLength === undefined ? undefined : { maxOutputLength }
+      );
+    }
+    throw new Error(
+      `Unsupported zip compression method ${entry.compressionMethod} for entry "${entryName}"`
+    );
+  }
+
+  /** Same as readEntry, but decoded as UTF-8 text; throws if the entry is missing. */
+  readText(entryName: string, maxOutputLength?: number): string {
+    const bytes = this.readEntry(entryName, maxOutputLength);
+    if (!bytes) throw new Error(`Zip entry not found: "${entryName}"`);
+    return bytes.toString("utf8");
+  }
+
+  readTextOrNull(entryName: string, maxOutputLength?: number): string | null {
+    const bytes = this.readEntry(entryName, maxOutputLength);
+    return bytes ? bytes.toString("utf8") : null;
+  }
+}
+
+function findEndOfCentralDirectory(buf: Buffer): number {
+  // The EOCD record is at least 22 bytes and can be followed by a comment
+  // up to 65535 bytes long, so scan backward from the end within that
+  // window rather than assuming it's the last 22 bytes.
+  const maxCommentLength = 65535;
+  const searchStart = Math.max(0, buf.length - 22 - maxCommentLength);
+  for (let i = buf.length - 22; i >= searchStart; i--) {
+    if (buf.readUInt32LE(i) === EOCD_SIGNATURE) return i;
+  }
+  throw new Error("Not a valid zip file: end-of-central-directory record not found");
+}

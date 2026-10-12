@@ -1,0 +1,35 @@
+# 의존성
+/node_modules
+
+# Next.js 빌드 산출물
+/.next/
+/out/
+/build
+next-env.d.ts
+*.tsbuildinfo
+
+# 🔴 환경변수 — 시크릿이 들어 있다. 절대 올리지 않는다. (CLAUDE.md 13·15절)
+.env
+.env.*
+!.env.example
+
+# 로그·디버그
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# OS·편집기
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# 사람끼리 주고받은 자료 — 저장소에 넣지 않는다 (현황판 사본·엑셀 코드 zip·답변서)
+/받은자료/
+/보낼자료/
+/답변_*.md
+/답변2_*.md
+
+# 로컬 데이터(엑셀 틀·결과물·가져오기 CSV)는 C:\DSS-INVENTORY-DATA 에 두고 저장소에 넣지 않는다
+/data/

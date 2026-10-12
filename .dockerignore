@@ -1,0 +1,19 @@
+node_modules
+.next
+out
+.git
+.gitignore
+# 🔴 환경변수는 이미지에 담지 않는다. 운영 값은 compose 에서 넣는다.
+.env*
+!.env.example
+# 사람끼리 주고받은 자료·문서
+받은자료
+보낼자료
+답변_*.md
+답변2_*.md
+*.md
+!README.md
+tests
+.vscode
+.idea
+npm-debug.log*

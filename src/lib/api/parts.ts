@@ -1,0 +1,104 @@
+import type { Category, Currency, Owner } from "@/db/schema/codes";
+import { CATEGORY_LABEL, OWNER_LABEL, isCategory, isOwner } from "@/lib/parts/codes";
+
+/**
+ * 바깥(A/S·PO)에 내주는 부품 한 줄의 모양 — **현황판 12칸 그대로** + 코드값과 한글을 함께.
+ *
+ * 🔴 이 모양은 다른 시스템이 의존하는 약속이다. 칸을 **더하는 것**은 괜찮지만 이름을 바꾸거나 빼면 저쪽이 깨진다.
+ *    바꿔야 하면 `v2` 를 새로 열고 담당자와 날짜를 정한다. 설명은 저장소의 API.md.
+ *
+ * - 부품을 가리키는 값은 `no`(No., 바뀌지 않는다). UUID 는 내주지 않는다.
+ * - 없는 값은 글자 칸이면 "" , 금액이면 null. 엑셀의 `-` 는 쓰지 않는다.
+ */
+export interface ApiPart {
+  no: number;
+  name: string;
+  name2: string;
+  kyosanPartNo: string;
+  drawingNo: string;
+  quantity: number;
+  supplyPrice: number | null;
+  /** JPY | KRW */
+  supplyCurrency: Currency;
+  /** 항상 원 */
+  quotePrice: number | null;
+  note: string;
+  item: { code: string; name: string };
+  category: { code: Category; label: string };
+  owner: { code: Owner; label: string };
+  /** ISO 8601 (UTC). 이 시각 뒤에 바뀐 것만 받으려면 ?since= 에 넣는다 */
+  updatedAt: string;
+}
+
+export interface ApiPartSource {
+  no: number;
+  name: string;
+  name2: string;
+  kyosanPartNo: string;
+  drawingNo: string;
+  quantity: number;
+  supplyPrice: number | null;
+  supplyCurrency: Currency;
+  quotePrice: number | null;
+  note: string;
+  itemCode: string;
+  itemName: string;
+  category: Category;
+  owner: Owner;
+  updatedAt: Date;
+}
+
+export function toApiPart(p: ApiPartSource): ApiPart {
+  return {
+    no: p.no,
+    name: p.name,
+    name2: p.name2,
+    kyosanPartNo: p.kyosanPartNo,
+    drawingNo: p.drawingNo,
+    quantity: p.quantity,
+    supplyPrice: p.supplyPrice,
+    supplyCurrency: p.supplyCurrency,
+    quotePrice: p.quotePrice,
+    note: p.note,
+    item: { code: p.itemCode, name: p.itemName },
+    category: { code: p.category, label: CATEGORY_LABEL[p.category] },
+    owner: { code: p.owner, label: OWNER_LABEL[p.owner] },
+    updatedAt: p.updatedAt.toISOString(),
+  };
+}
+
+/** 목록 API 의 검색 조건 (주소의 쿼리). 모르는 값은 400 으로 돌려준다 — 조용히 전체를 주면 저쪽이 모른다. */
+export interface ApiPartsFilter {
+  owner: Owner | null;
+  category: Category | null;
+  item: string | null;
+  q: string;
+  since: Date | null;
+}
+
+export type ParseFilterResult = { ok: true; filter: ApiPartsFilter } | { ok: false; error: string };
+
+export function parseApiPartsFilter(sp: URLSearchParams): ParseFilterResult {
+  const owner = sp.get("owner");
+  const category = sp.get("category");
+  const item = sp.get("item");
+  const q = (sp.get("q") ?? "").trim().slice(0, 100);
+  const sinceRaw = sp.get("since");
+  if (owner !== null && owner !== "" && !isOwner(owner)) return { ok: false, error: `owner 는 DSS | KYOSAN | SERVICE_SPARE 중 하나입니다 (받은 값: ${owner})` };
+  if (category !== null && category !== "" && !isCategory(category)) return { ok: false, error: `category 는 RFG | MB | COMPATIBLE 중 하나입니다 (받은 값: ${category})` };
+  if (item !== null && item !== "" && !/^[A-Z][A-Z0-9_]{0,39}$/.test(item)) return { ok: false, error: "item 은 항목 코드(영문 대문자)입니다" };
+  let since: Date | null = null;
+  if (sinceRaw) {
+    since = new Date(sinceRaw);
+    if (Number.isNaN(since.getTime())) return { ok: false, error: "since 는 ISO 8601 시각입니다 (예: 2026-10-06T00:00:00Z)" };
+  }
+  return { ok: true, filter: { owner: owner && isOwner(owner) ? owner : null, category: category && isCategory(category) ? category : null, item: item || null, q, since } };
+}
+
+/** 찾기: 품명·품명2·교산 품번·도번에 낱말이 모두 들어 있는 것 (화면 찾기와 같은 규칙) */
+export function matchesQuery(p: Pick<ApiPartSource, "name" | "name2" | "kyosanPartNo" | "drawingNo">, q: string): boolean {
+  const toks = q.toLowerCase().split(/\s+/).filter(Boolean);
+  if (toks.length === 0) return true;
+  const hay = `${p.name} ${p.name2} ${p.kyosanPartNo} ${p.drawingNo}`.toLowerCase();
+  return toks.every((t) => hay.includes(t));
+}

@@ -1,0 +1,49 @@
+{
+  "name": "dss-inventory",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DSS 재고관리 시스템 — 통합 로그인 포털(dss-auth) 뒤에 붙는 사내 시스템. 포트 3800.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "next dev --webpack -p 3800",
+    "build": "next build --webpack",
+    "start": "next start -p 3800",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test \"tests/**/*.test.ts\" \"src/lib/xlsx/*.test.ts\"",
+    "db:up": "docker compose --env-file .env.local up -d",
+    "db:down": "docker compose --env-file .env.local down",
+    "db:logs": "docker compose --env-file .env.local logs -f db",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:seed-items": "tsx scripts/seed-items.ts",
+    "db:seed-demo": "tsx scripts/seed-demo.ts",
+    "db:seed-demo-legacy": "tsx scripts/seed-demo-legacy.ts",
+    "db:import": "tsx scripts/import-workbook.ts",
+    "workbook:selftest": "tsx scripts/workbook-selftest.ts",
+    "workbook:parked-diff": "node --conditions=react-server --import tsx scripts/workbook-parked-diff.ts"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.3",
+    "jose": "^6.2.12",
+    "next": "16.3.8",
+    "postgres": "^3.4.9",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "server-only": "^0.0.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "drizzle-kit": "^0.31.11",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.8",
+    "tailwindcss": "^4",
+    "tsx": "^4",
+    "typescript": "^5"
+  }
+}
