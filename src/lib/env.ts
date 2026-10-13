@@ -35,6 +35,32 @@ function stripTrailingSlash(url: string): string {
   return url.replace(/\/+$/, "");
 }
 
+/** 포털이 로그인 끝에 브라우저를 되돌려 보내는 경로. `SSO_REDIRECT_URI` 가 이 글자로 끝난다. */
+export const SSO_CALLBACK_PATH = "/api/auth/sso/callback";
+
+/**
+ * 「밖에서 이 시스템에 닿는 주소」의 앞머리. 알림 줄의 링크(`href`)가 여기서 나온다.
+ *
+ * ── 왜 환경변수를 새로 두지 않는가 ──────────────────────────────────────
+ * `SSO_REDIRECT_URI` 가 **이미 그 주소**다. 포털이 브라우저를 되돌려 보내는 곳이라
+ * 정의상 밖에서 닿는 주소와 같아야 하고, 포털 등록값과 글자 단위로 같아야 로그인이
+ * 된다. 값을 하나 더 두면 둘이 어긋날 수 있고, 어긋난 쪽이 알림 링크라면 증상이
+ * 「다른 시스템의 종에서 누르면 엉뚱한 데로 간다」 하나뿐이라 원인을 찾기 어렵다.
+ * 여기서 뽑으면 틀렸을 때 **로그인 단계에서 먼저** 드러난다.
+ * (컨테이너 안에서 자기 주소를 `auto` 로 알아내면 172.x 가 나온다 — 그래서도 이 값이다.)
+ *
+ * 🔴 조용히 물러서지 않고 던진다. 그냥 넘어가면 알림 링크가
+ * `…/api/auth/sso/callback/entries` 꼴이 되어, 눌러 보기 전까지 아무도 모른다.
+ * 종 하나 때문에 모든 화면이 죽지 않게 삼키는 것은 부르는 쪽(notifications/queries.ts)의 몫이다.
+ */
+export function ownBaseUrlFrom(redirectUri: string): string {
+  const trimmed = redirectUri.trim();
+  if (!trimmed.endsWith(SSO_CALLBACK_PATH)) {
+    throw new Error(`SSO_REDIRECT_URI 는 ${SSO_CALLBACK_PATH} 로 끝나야 합니다 — 이 값에서 이 시스템 자신의 주소도 읽습니다.`);
+  }
+  return trimmed.slice(0, -SSO_CALLBACK_PATH.length).replace(/\/+$/, "");
+}
+
 export const env = {
   /** PostgreSQL 접속 문자열. 개발은 127.0.0.1:5450 */
   get databaseUrl(): string {
@@ -86,6 +112,15 @@ export const env = {
   /** 포털 등록값과 글자 단위로 같아야 한다. */
   get ssoRedirectUri(): string {
     return required("SSO_REDIRECT_URI");
+  },
+
+  /**
+   * 밖에서 이 시스템에 닿는 주소의 앞머리(예: `http://192.168.1.132:3800`). 끝 슬래시 없음.
+   * 알림 줄의 링크가 여기서 나온다 — 그 줄은 다른 시스템의 종에도 실리므로 **절대 주소**여야 한다.
+   * 🔴 별도 환경변수를 두지 않는 까닭은 위 `ownBaseUrlFrom` 머리말에.
+   */
+  get ownBaseUrl(): string {
+    return ownBaseUrlFrom(env.ssoRedirectUri);
   },
 
   /**

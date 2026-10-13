@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import "@dss/ui/styles.css";
+import "@dss/ui/notification-bell.css";
 
 export const metadata: Metadata = {
   title: { default: "재고 관리", template: "%s · 재고 관리" },

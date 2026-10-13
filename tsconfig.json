@@ -21,7 +21,8 @@
     "paths": {
       "@/*": ["./src/*"],
       "@dss/ui": ["./vendor/dss-ui/src/index.ts"],
-      "@dss/ui/styles.css": ["./vendor/dss-ui/src/service-menu/service-menu.css"]
+      "@dss/ui/styles.css": ["./vendor/dss-ui/src/service-menu/service-menu.css"],
+      "@dss/ui/notification-bell.css": ["./vendor/dss-ui/src/notification-bell/notification-bell.css"]
     }
   },
   "include": [

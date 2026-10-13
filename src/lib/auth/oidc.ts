@@ -64,8 +64,13 @@ export async function getDiscovery(now = Date.now()): Promise<Discovery> {
   return value;
 }
 
-/** JWKS 는 한 번 만들어 재사용한다 — jose 가 캐시와 키 교체를 처리한다. 지연 생성 (6-4절). */
-function jwks(): JWTVerifyGetKey {
+/**
+ * JWKS 는 한 번 만들어 재사용한다 — jose 가 캐시와 키 교체를 처리한다. 지연 생성 (6-4절).
+ *
+ * 🔴 **한 벌을 돌려쓴다.** ID 토큰·로그아웃 토큰과 포털 서비스 토큰(auth/portal-service-token.ts)이
+ * 같은 캐시를 본다 — 두 벌로 나누면 포털이 열쇠를 바꾸는 날 한쪽만 늦게 따라간다.
+ */
+export function portalJwks(): JWTVerifyGetKey {
   const c = store();
   return (c.jwks ??= createRemoteJWKSet(new URL(`${env.ssoIssuer}/.well-known/jwks.json`), {
     timeoutDuration: FETCH_TIMEOUT_MS,
@@ -164,7 +169,7 @@ export interface IdTokenClaims {
 export async function verifyIdToken(
   idToken: string,
   expectedNonce: string,
-  keySet: JWTVerifyGetKey = jwks(),
+  keySet: JWTVerifyGetKey = portalJwks(),
 ): Promise<IdTokenClaims> {
   let payload: JWTPayload;
   try {
@@ -224,7 +229,7 @@ export const BACKCHANNEL_EVENT = "http://schemas.openid.net/event/backchannel-lo
 
 export async function verifyLogoutToken(
   logoutToken: string,
-  keySet: JWTVerifyGetKey = jwks(),
+  keySet: JWTVerifyGetKey = portalJwks(),
 ): Promise<{ sub?: string; sid?: string }> {
   let payload: JWTPayload;
   try {

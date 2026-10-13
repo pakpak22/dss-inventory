@@ -25,13 +25,21 @@ export interface AppHeaderProps {
   canRecord: boolean;
   /** 확인 대기 중인 반출 신청 수. 0 이면 표시 없음 */
   pendingRequests: number;
+  /**
+   * 통합 알림 종(@dss/ui). **다 그려진 노드**를 받는다 — 여기서 자료를 가져오지 않는다.
+   * 🔴 위 `pendingRequests` 배지와 **역할이 다르다**: 배지는 「기록 내역 화면에 할 일이
+   * 있다」는 표시이고, 종은 여러 사내 시스템의 알림을 모으는 자리다. 둘 다 남는다.
+   * 🔵 알림이 0건이면 조각이 스스로 null 이 되고, 래퍼로 감싸지 않으므로 **머리말이
+   * 예전과 글자 하나 다르지 않다**(빈 칸도 여백도 생기지 않는다).
+   */
+  notificationBell?: React.ReactNode;
   /** 개발 전용 역할 바꿔 보기 조각. 운영에서는 null */
   devRoleSwitch?: React.ReactNode;
 }
 
 const NAV_LINK = "rounded-md px-2 py-1 text-sm text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900";
 
-export function AppHeader({ user, portalUrl, services, currentServiceId, isAdmin, canRecord, pendingRequests, devRoleSwitch }: AppHeaderProps) {
+export function AppHeader({ user, portalUrl, services, currentServiceId, isAdmin, canRecord, pendingRequests, notificationBell, devRoleSwitch }: AppHeaderProps) {
   return (
     <header className="border-b border-zinc-200 bg-white">
       <div className="mx-auto flex w-full max-w-[1400px] items-center justify-between gap-4 px-4 py-3">
@@ -100,6 +108,11 @@ export function AppHeader({ user, portalUrl, services, currentServiceId, isAdmin
               로그아웃
             </button>
           </form>
+          {/* 통합 알림 종. [로그아웃] **오른쪽**, 머리말 맨 끝에 선다 — 펼친 목록이 종에
+              오른쪽 끝을 맞춰 왼쪽으로 펼쳐지므로(@dss/ui 의 CSS 는 right: 0) 머리말
+              맨 오른쪽 끝인 이 자리와 잘 맞는다. 자료를 가져오는 것은 이 파일이
+              아니다(위 prop 주석). */}
+          {notificationBell}
         </div>
       </div>
     </header>

@@ -64,6 +64,24 @@ export async function upsertUserFromLogin(claims: IdTokenClaims, now = new Date(
   return { ok: true, user: updated };
 }
 
+/**
+ * 포털 쪽 `sub` 로 이 시스템의 사람을 되짚는다. 없거나 지워졌으면 null.
+ *
+ * 포털이 사람 대신 물으러 오는 통합 알림 통로(api/integration/*)가 쓴다 — 거기서는
+ * 쿠키도 세션도 없고, **누구의 알림인지는 토큰의 sub 안에서만** 온다.
+ *
+ * 🔴 세션을 읽는 자리(findActiveUserById)와 **같은 줄**이다 — 지워진 사람은 못 찾은
+ * 것으로 친다. 한쪽만 느슨해지면 이 화면에서 막힌 사람이 포털에서는 통과한다.
+ * 🔵 `auth_sub` 는 **text 칸**이라(schema/users.ts) 모양이 달라도 던지지 않는다.
+ *    uuid 칸인 시스템(게시판)이 모양을 먼저 보는 것과 다른 점이다.
+ */
+export async function findActiveUserByAuthSub(authSub: string): Promise<User | null> {
+  if (!authSub) return null;
+  const u = await db().query.users.findFirst({ where: eq(users.authSub, authSub) });
+  if (!u || u.isDeleted) return null;
+  return u;
+}
+
 /** 세션 검사용: 살아 있는 사용자 한 명. 없거나 삭제됐으면 null. */
 export async function findActiveUserById(id: string): Promise<User | null> {
   const u = await db().query.users.findFirst({ where: eq(users.id, id) });

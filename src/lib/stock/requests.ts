@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, count, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, min, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { auditLogs } from "@/db/schema/audit-logs";
 import { parts } from "@/db/schema/parts";
@@ -211,4 +211,69 @@ async function attachNames(rows: Array<typeof stockRequests.$inferSelect>): Prom
 export async function countPendingRequests(): Promise<number> {
   const [r] = await db().select({ n: count() }).from(stockRequests).where(inArray(stockRequests.status, ["PENDING", "CONFIRMING"]));
   return r?.n ?? 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* 머리말의 알림 종이 쓰는 조회 (2026-10-13)                            */
+/* 🔴 위의 함수들은 화면이 쓰고 있다 — 동작을 바꾸지 않고 **더하기만** 한다. */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 확인 대기 요약 — 건수와 **가장 오래 기다린 신청의 시각**.
+ *
+ * `countPendingRequests()` 와 세는 범위가 같다(PENDING + CONFIRMING). 둘을 합치지
+ * 않은 까닭: 머리말의 「대기 N」 배지는 숫자 하나만 쓰고 모든 화면에 딸려 오므로,
+ * 거기에 집계 한 칸을 더 얹지 않는다. 종은 줄에 적을 날짜가 필요해 따로 묻는다.
+ */
+export async function summarizePendingRequests(): Promise<{ count: number; oldestAt: Date | null }> {
+  const [r] = await db()
+    .select({ n: count(), oldest: min(stockRequests.requestedAt) })
+    .from(stockRequests)
+    .where(inArray(stockRequests.status, ["PENDING", "CONFIRMING"]));
+  // 드라이버가 timestamptz 를 Date 로 주지만, 집계는 글자로 올 수도 있어 둘 다 받는다.
+  const oldest = (r?.oldest ?? null) as Date | string | null;
+  return {
+    count: r?.n ?? 0,
+    oldestAt: oldest === null ? null : oldest instanceof Date ? oldest : new Date(oldest),
+  };
+}
+
+/** 종에 실을 「내 반려된 신청」 한 줄. 사유 본문은 싣지 않는다 — 화면에서 본다. */
+export interface RejectedRequestRow {
+  id: string;
+  summary: string;
+  decidedByName: string | null;
+  decidedAt: Date | null;
+}
+
+/**
+ * 그 사람이 낸 신청 중 **반려된 것**을, `since` 이후에 결정된 것만.
+ *
+ * - 🔴 확인(CONFIRMED)·취소(CANCELLED)는 뺀다. 확인은 수량이 바뀌어 화면에서 바로
+ *   보이고(2026-10-13 사용자 결정), 취소는 본인이 거둔 것이라 알릴 일이 아니다.
+ * - `since` 를 부르는 쪽이 정한다 — 「7일」이 적힌 곳은 notifications/bell-items.ts
+ *   하나뿐이어야 하기 때문이다(그 파일의 `rejectionCutoff`).
+ * - 🔴 `total` 은 **상한에 걸리기 전의 전체 개수**다. 배지 숫자가 참말이어야 한다
+ *   (@dss/ui README 7절). 창 함수는 WHERE 뒤·LIMIT 앞에 계산되므로 세는 질의를 따로
+ *   보내지 않아도 된다 — 종은 모든 화면에 딸려 오므로 왕복 한 번이 곧 모든 화면의 비용이다.
+ * - 색인 `stock_requests_requester_idx`(requested_by)를 탄다.
+ */
+export async function listRejectedRequestsFor(userId: string, since: Date, limit: number): Promise<{ rows: RejectedRequestRow[]; total: number }> {
+  const rows = await db()
+    .select({
+      id: stockRequests.id,
+      summary: stockRequests.summary,
+      decidedByName: stockRequests.decidedByName,
+      decidedAt: stockRequests.decidedAt,
+      total: sql<number>`count(*) over ()`.mapWith(Number),
+    })
+    .from(stockRequests)
+    .where(and(eq(stockRequests.status, "REJECTED"), eq(stockRequests.requestedBy, userId), gte(stockRequests.decidedAt, since)))
+    .orderBy(desc(stockRequests.decidedAt), desc(stockRequests.id))
+    .limit(limit);
+  if (rows.length === 0) return { rows: [], total: 0 };
+  return {
+    rows: rows.map((r) => ({ id: r.id, summary: r.summary, decidedByName: r.decidedByName, decidedAt: r.decidedAt })),
+    total: rows[0].total,
+  };
 }
