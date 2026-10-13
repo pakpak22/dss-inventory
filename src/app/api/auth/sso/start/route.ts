@@ -3,6 +3,7 @@ import { SSO_TX_COOKIE, ssoTxCookieOptions } from "@/lib/auth/cookies";
 import { buildAuthorizeUrl, getDiscovery, OidcError } from "@/lib/auth/oidc";
 import { createPkcePair, randomToken } from "@/lib/auth/pkce";
 import { encodeSsoTx, safeReturnTo } from "@/lib/auth/session-codec";
+import { redirectRelative } from "@/lib/http/redirect-relative";
 
 /**
  * 로그인 시작 (CLAUDE.md 6-2절 1~2번).
@@ -18,7 +19,8 @@ export async function GET(request: NextRequest) {
   } catch (e) {
     const code = e instanceof OidcError ? e.code : "server_error";
     console.error("[sso/start]", e instanceof Error ? e.message : e);
-    return NextResponse.redirect(new URL(`/login?error=${code}`, request.url));
+    // 상대 경로 — `request.url` 의 호스트는 dev 에서 늘 localhost 다 (redirect-relative.ts 주석).
+    return redirectRelative(`/login?error=${code}`);
   }
 
   const { codeVerifier, codeChallenge } = createPkcePair();

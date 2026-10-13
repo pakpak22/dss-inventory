@@ -1,4 +1,4 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { type NextRequest } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { writeAudit } from "@/lib/audit";
 import {
@@ -13,6 +13,7 @@ import { exchangeCode, getDiscovery, OidcError, verifyIdToken } from "@/lib/auth
 import { encodeServiceMenu } from "@/lib/auth/service-menu-cookie";
 import { decodeSsoTx, encodeSession } from "@/lib/auth/session-codec";
 import { upsertUserFromLogin } from "@/lib/auth/users";
+import { redirectRelative } from "@/lib/http/redirect-relative";
 
 /**
  * 포털에서 돌아오는 곳 (CLAUDE.md 6-2절 4~6번). 등록된 redirect_uri 와 글자 단위로 같아야 한다:
@@ -27,7 +28,9 @@ export async function GET(request: NextRequest) {
   const fail = (code: LoginErrorCode, detail: string, extra?: Record<string, unknown>) => {
     console.warn(`[sso/callback] ${code}: ${detail}`);
     void writeAudit({ action: "LOGIN_REJECTED", detail: { code, detail, ...extra } });
-    const res = NextResponse.redirect(new URL(`/login?error=${code}`, request.url));
+    // 상대 경로로 보낸다 — `request.url` 의 호스트는 dev 에서 늘 localhost 라 호스트가 바뀐다
+    // (redirect-relative.ts 주석). 들어온 호스트에 그대로 머물러야 쿠키를 읽을 수 있다.
+    const res = redirectRelative(`/login?error=${code}`);
     res.cookies.set(SSO_TX_COOKIE, "", expiredCookieOptions("/api/auth/sso"));
     return res;
   };
@@ -66,7 +69,9 @@ export async function GET(request: NextRequest) {
       detail: { role: result.user.role, roleClaimPresent: claims.roleClaimPresent },
     });
 
-    const res = NextResponse.redirect(new URL(tx.returnTo, request.url));
+    // 여기서 호스트가 바뀌면 바로 아래에서 굽는 세션 쿠키를 못 읽는다 — 상대 경로로 보낸다.
+    // tx.returnTo 는 safeReturnTo() 가 같은 사이트 경로만 통과시킨 값이다 (session-codec.ts).
+    const res = redirectRelative(tx.returnTo);
     res.cookies.set(SESSION_COOKIE, session, sessionCookieOptions());
     res.cookies.set(SERVICE_MENU_COOKIE, encodeServiceMenu(claims.dssServices, now), sessionCookieOptions());
     res.cookies.set(SSO_TX_COOKIE, "", expiredCookieOptions("/api/auth/sso"));
