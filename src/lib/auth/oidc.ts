@@ -247,3 +247,28 @@ export async function verifyLogoutToken(
   if (!sub && !sid) throw new OidcError("invalid_id_token", "logout_token 에 sub·sid 둘 다 없음");
   return { sub, sid };
 }
+
+/**
+ * 포털 로그아웃 주소(`end_session_endpoint`). 여기로 보내면 포털의 SSO 세션까지 끊긴다.
+ * discovery 에 그 항목이 없으면 null — 부르는 쪽이 물러설 길을 고른다.
+ *
+ * 🔴 **돌아갈 주소(`post_logout_redirect_uri`)를 붙이지 않는다.** 포털은 `id_token_hint` 와
+ * `post_logout_redirect_uri` 가 **둘 다** 있을 때만 그 주소로 돌려보내고, 아니면 자기 로그인
+ * 화면에 머물게 한다. 로그아웃한 사람이 있어야 할 곳이 바로 거기다 — 재고 로그인 화면으로
+ * 돌아오면 「포털로 가세요」 한 장을 더 거칠 뿐이고, 공용 PC 에서는 방금 모든 시스템에서
+ * 나간 사람을 다시 이 사이트 앞에 세우는 꼴이 된다.
+ * 애초에 붙일 수도 없다: 이 시스템은 id_token 을 어디에도 보관하지 않아(콜백이 검증만 하고
+ * 버린다) `id_token_hint` 를 만들 수 없다.
+ *
+ * 🔵 discovery 를 못 읽으면 `getDiscovery` 가 `OidcError("portal_unreachable")` 를 던진다.
+ * 그 경우에도 **이 사이트에서는 이미 나가 있어야** 하므로, 부르는 쪽이 세션을 먼저 끊고
+ * 나서 이 함수를 부른다 (actions/auth.ts).
+ */
+export async function buildLogoutUrl(): Promise<string | null> {
+  const discovery = await getDiscovery();
+  if (!discovery.end_session_endpoint) return null;
+
+  const u = new URL(discovery.end_session_endpoint);
+  u.searchParams.set("client_id", env.ssoClientId);
+  return u.toString();
+}
