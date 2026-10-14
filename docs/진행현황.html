@@ -65,26 +65,39 @@
 <div class="card">
   <h2>지금 어디까지</h2>
 
-  <div class="legend">조각 10개 — <b>끝남 2</b> · 남음 8</div>
+  <div class="legend">조각 10개 — <b>끝남 3</b> · 남음 7 · 🔵 <b>재고 관리 안에서 할 일은 다 됐습니다</b></div>
   <div class="bar">
-    <span class="done" style="flex:2">1 · 2</span>
-    <span class="todo" style="flex:8">남은 8조각</span>
+    <span class="done" style="flex:3">1 · 2 · 3</span>
+    <span class="todo" style="flex:7">남은 7조각</span>
   </div>
 
   <div class="note green">
-    <b>조각 1·2 끝남 (2026-10-14)</b><br>
+    <b>조각 1·2·3 끝남 (2026-10-14)</b><br>
     <b>1</b> — 고객사 품명 칸 · 입력 폼 · 상세 창에서 그 자리 고치기 · 변경 이력.
     개발 DB 적용 완료(마이그레이션 10) · 부품 83개 전부 빈 값으로 시작.<br>
     <b>2</b> — 재고 현황 표에 열(품명 왼쪽) · 찾을 곳 · 정렬 · 인쇄 표 ·
-    <b>기록 내역에서도 찾기</b>.<br>
-    시험 276개 통과 · <b>엑셀 유출 0</b>.
-    <br>🔴 <b>운영에는 아직 안 나갔습니다</b> — 조각 3 과 함께 배포합니다.
+    <b>기록 내역 표와 찾기</b> · 기록 취소 팝업이 넘치던 것.<br>
+    <b>3</b> — 부품 조회 API 응답 <b>14 → 15칸</b> · 그 이름으로 찾기 · <code>API.md</code>.<br>
+    시험 277개 통과 · <b>엑셀 유출 0</b>.
+    <br>🔵 <b>재고 관리 안에서 할 일은 여기까지입니다.</b>
+  </div>
+
+  <div class="note red">
+    <b>🔴 운영에는 아직 안 나갔습니다.</b>
+    올릴 때 함께 가야 하는 것 셋 —
+    ① 마이그레이션 0009(운영 DB 에 칸이 생깁니다 · <code>ADD COLUMN</code> 한 줄이라 부품 319개에 빈 값)
+    ② 새 이미지
+    ③ <b>운영 API 토큰</b>(만들어 설정에 넣어 두었습니다 · 64자)
+    <br>🔴 토큰이 <b>32자 미만이면</b> 서버는 멀쩡히 뜨고 <b>첫 호출에서 500</b> 이 납니다 —
+    시작 검사 목록에 없어서 증상이 엉뚱하게 보입니다.
   </div>
 
   <div class="note blue">
-    <b>다음 — 조각 3</b><br>
-    부품 조회 API 에 고객사 품명을 싣고 <b>운영 토큰</b>을 발급합니다.
-    여기까지가 재고 관리 안에서 완결되는 묶음이고, <b>운영 배포는 이 셋을 한 번에</b> 합니다.
+    <b>다음 — 조각 4</b><br>
+    요청 표를 늘리고(줄 단위 · 부분 불출) O/H 템플릿 표를 만듭니다.
+    🔴 여기부터는 <b>설계가 한 번 더</b> 필요합니다 — 지금 요청이 JSON 한 덩어리로 도는데
+    줄 단위를 더하면 확인될 때 원장에 쓰는 길이 바뀔 수 있습니다.
+    🔴 <b>수량 변경 기록은 그대로 둡니다.</b>
   </div>
 
   <div class="note amber">
@@ -133,17 +146,17 @@
         <span style="color:var(--green);font-size:13px">✅ 머리글·본문 둘 다 · 한 줄 고정(224px 상한, 넘치면 … + 마우스로 전체)</span></td>
       <td>재고 관리</td><td><span class="st done">끝남</span></td>
     </tr>
-    <tr class="is-now">
+    <tr class="is-done">
       <td><b>3</b></td>
-      <td>부품 조회 API 에 고객사 품명 싣기 + <b>운영 토큰 발급</b><br>
-        <span style="color:var(--red);font-size:13px">🔴 API 시험이 키 14개를 통째로 맞춰 보므로 그 줄도 같이 고쳐야 함 · 토큰이 없으면 통로가 503</span></td>
-      <td>재고 관리</td><td><span class="st now">다음</span></td>
+      <td>부품 조회 API 에 고객사 품명 · 그 이름으로 찾기 · <code>API.md</code><br>
+        <span style="color:var(--green);font-size:13px">✅ 응답 14 → 15칸(이름·차례 그대로라 옛 호출이 돈다) · 운영 토큰 64자 발급</span></td>
+      <td>재고 관리</td><td><span class="st done">끝남</span></td>
     </tr>
-    <tr>
-      <td>4</td>
+    <tr class="is-now">
+      <td><b>4</b></td>
       <td>요청 표 늘리기(줄 단위·부분 불출) · O/H 템플릿 표 만들기<br>
-        <span style="color:var(--red);font-size:13px">🔴 수량 변경 기록은 손대지 않는다</span></td>
-      <td>재고 관리</td><td><span class="st todo">남음</span></td>
+        <span style="color:var(--red);font-size:13px">🔴 <b>설계가 먼저</b> — 지금 요청은 JSON 한 덩어리로 돈다 · 수량 변경 기록은 손대지 않는다</span></td>
+      <td>재고 관리</td><td><span class="st now">다음</span></td>
     </tr>
     <tr>
       <td>5</td><td>부품 요청 관리 · 승인 화면</td>
