@@ -93,7 +93,7 @@
   </div>
 
   <div class="note green">
-    <b>조각 4 코드 끝남 — 4a·4b·4c·4d (2026-10-14) · 화면 확인 대기</b><br>
+    <b>조각 4 끝남 — 4a·4b·4c·4d (2026-10-14) · ✅ 눈 확인 완료 · 커밋 <code>94e82a2</code></b><br>
     <b>4a</b> — 회차 표 하나 + 상태값 하나. 개발 DB 적용(마이그레이션 <b>11</b> · 표 14).<br>
     <b>4b</b> — 확인할 때 <b>일부 수량만</b> 내주기. 원장으로 가는 길을 변환 함수 하나로 모았습니다.<br>
     <b>4c</b> — 「일부 나감」을 <b>대기로</b> 셉니다. 가르는 글자를 한 곳으로 모아
@@ -107,12 +107,34 @@
     「다 나감」과 「마감」은 회차를 <b>세어서</b> 가립니다.
   </div>
 
+  <div class="note green">
+    <b>조각 5a 끝남 — O/H 부품 템플릿의 표 둘 (2026-10-14) · 커밋 <code>0cd1da5</code></b><br>
+    <b>oh_part_templates</b> — 기종 코드(<code>15·20·301·302</code>)·이름·차례 + 소프트 삭제 4칸.
+    지운 코드는 다시 쓸 수 있습니다.<br>
+    <b>oh_part_template_items</b> — 부품 줄. <b>부품 연결은 비어도 됩니다</b>(재고 마스터에 없는
+    이름이 있어서, 그 줄을 버리면 템플릿이 반쪽이 됩니다). <b>O/H 단가</b>가 이 줄에 붙습니다.<br>
+    개발 DB 에 적용했습니다(표 <b>14 → 16</b>). 시험 <b>321개</b> 통과(새 14개).
+    <br>🔵 <b>되돌리기 시험을 먼저 했습니다</b> — <code>BEGIN … ROLLBACK</code> 으로 돌려 보고,
+    적용한 뒤 칸·인덱스·CHECK·외래키를 DB 에서 다시 읽어 확인했습니다.
+    <br>🔴 <b>운영에는 아직 안 나갔습니다.</b>
+  </div>
+
+  <div class="note amber">
+    <b>원본(A/S)과 일부러 다르게 한 둘 (조각 5a)</b><br>
+    ① <b>제품 모델 잇기 표는 안 옮깁니다.</b> A/S 에는 「제품 모델 ↔ 템플릿」 표가 있지만
+    재고 관리에는 제품 모델 표가 없습니다. 재고 관리는 <b>기종 코드만</b> 알고,
+    「제품 모델 → 기종 코드」 잇기는 A/S 에 남깁니다.<br>
+    ② 🔴 <b>O/H 단가를 템플릿 줄에 붙입니다</b>(2026-10-14 결정). A/S 는 <b>부품마다 하나</b>였습니다.
+    같은 부품이 템플릿 여러 개에 들어 있어서(실측 최대 3개) 값이 <b>서로 달라도 되고,
+    어긋나도 시스템은 모릅니다.</b> 알고 고른 것이고, 어긋남은 <b>5b 화면이 옆에 보여 주는 것</b>으로
+    다룹니다.
+  </div>
+
   <div class="note blue">
-    <b>다음 — 눈으로 확인할 것 (조각 4d)</b><br>
-    ① 기록 권한자로 반출 신청(한 부품 8개) → ② 관리자로 [확인] → 상자에서 <b>5</b> 만 적고 [내주기] →
-    ③ 목록에 「일부 나감 · 요청 8 중 5 나감 · 3 남음」이 보이고 [확인]이 <b>계속 눌리는지</b> →
-    ④ 한 번 더 [확인] 해 칸을 <b>비운 채</b> [내주기](= 남은 3 전부) 또는 [마감]으로 닫기 →
-    ⑤ 변경 이력(<code>/audit</code>)에서 <b>「반출 마감」</b>이 반려와 다른 글자로 남았는지.
+    <b>다음 — 조각 5b (화면)</b><br>
+    템플릿 만들기 · 고치기 · 부품 담기. 🔴 <b>같은 부품이 다른 템플릿에서 다른 O/H 단가를
+    가질 때 그 사실을 옆에 보여 주는 것</b>이 이 화면의 숙제입니다.
+    화면이 생기는 조각이라 <b>눈 확인</b>과 <code>npm run build</code> 가 완료 기준에 들어갑니다.
   </div>
 
   <div class="note green">
@@ -181,24 +203,30 @@
         <span style="color:var(--green);font-size:13px">✅ 응답 14 → 15칸(이름·차례 그대로라 옛 호출이 돈다) · 운영 토큰 64자 발급</span></td>
       <td>재고 관리</td><td><span class="st done">끝남</span></td>
     </tr>
-    <tr class="is-now">
+    <tr class="is-done">
       <td><b>4</b></td>
-      <td><b>부분 불출</b> — 넷 다 만들었고 <b>화면 확인만</b> 남았습니다<br>
+      <td><b>부분 불출</b> — 넷 다 끝났고 <b>눈으로 확인했습니다</b><br>
         <span style="font-size:13px">
         <b style="color:var(--green)">4a ✅ 회차 표 + 상태값</b> ·
         <b style="color:var(--green)">4b ✅ 불출 수량으로 입력 만들기</b> ·
         <b style="color:var(--green)">4c ✅ 대기로 세기</b> ·
         <b style="color:var(--green)">4d ✅ 화면 + 마감</b></span><br>
         <span style="color:var(--green);font-size:13px">✅ 원장은 네 조각 내내 한 글자도 안 바뀜(지문 확인)</span></td>
-      <td>재고 관리</td><td><span class="st now">눈 확인</span></td>
+      <td>재고 관리</td><td><span class="st done">끝남</span></td>
+    </tr>
+    <tr class="is-now">
+      <td><b>5</b></td>
+      <td><b>O/H 부품 템플릿</b> (<b>O/H 단가가 여기 산다</b>)<br>
+        <span style="font-size:13px">
+        <b style="color:var(--green)">5a ✅ 표 둘 + 개발 DB 적용</b> ·
+        <b>5b ⬜ 화면 — 만들기 · 고치기 · 부품 담기</b></span></td>
+      <td>재고 관리</td><td><span class="st now">하는 중</span></td>
     </tr>
     <tr>
-      <td>5</td><td>부품 요청 관리 · 승인 화면</td>
-      <td>재고 관리</td><td><span class="st todo">남음</span></td>
-    </tr>
-    <tr>
-      <td>6</td><td>O/H 부품 템플릿 화면 (<b>O/H 단가가 여기 산다</b>)</td>
-      <td>재고 관리</td><td><span class="st todo">남음</span></td>
+      <td>6</td><td>(4·5 가 끝나면 비는 자리)<br>
+        <span style="font-size:13px">「부품 요청 관리 · 승인 화면」은 <b>조각 4 가 대신했습니다</b> —
+        재고 관리의 반출 신청을 늘리기로 해서 새로 만들 화면이 없어졌습니다.</span></td>
+      <td>—</td><td><span class="st done">없어짐</span></td>
     </tr>
     <tr>
       <td>7</td><td>A/S → 재고 관리 통로 (부품 검색 · 요청 만들기)</td>
