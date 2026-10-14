@@ -8,6 +8,7 @@ const ITEMS = [
   { key: "transition", href: "/settings/transition", label: "전환일" },
   { key: "workbook", href: "/settings/workbook", label: "엑셀 상태" },
   { key: "approval", href: "/settings/approval-routes", label: "승인 절차" },
+  { key: "oh", href: "/settings/oh-templates", label: "O/H 템플릿" },
 ] as const;
 
 export function SettingsNav({ current }: { current: (typeof ITEMS)[number]["key"] }) {
