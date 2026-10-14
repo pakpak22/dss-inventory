@@ -1,0 +1,12 @@
+# 🔴 이 파일을 지우지 마세요 — 폴더가 사라지면 이미지 빌드가 깨집니다.
+#
+# Dockerfile 의 runner 스테이지가 `COPY --from=builder /app/public ./public` 을 한다.
+# standalone 출력은 public 과 .next/static 을 자동으로 담지 않기 때문이다(Next 문서 output.md).
+# 그런데 git 은 빈 폴더를 추적하지 않아, 이 파일이 없으면 public/ 자체가 사라지고
+# 그 COPY 가 `"/app/public": not found` 로 실패한다.
+#
+# 🔴 `next dev` 도 `next build` 도 이것 때문에 깨지지 않는다 —
+#    **이미지를 구워야만 드러난다.** 2026-10-14 에 실제로 그렇게 드러났다.
+#
+# public/ 에 실제 파일(로고 등)이 들어가면 이 파일은 지워도 된다.
+# 탭 아이콘은 여기가 아니라 src/app/favicon.ico 에 있다(App Router 방식).
