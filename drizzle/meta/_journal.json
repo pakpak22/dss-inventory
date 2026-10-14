@@ -71,6 +71,13 @@
       "when": 1791957231151,
       "tag": "0009_volatile_sue_storm",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791965655400,
+      "tag": "0010_concerned_lucky_pierre",
+      "breakpoints": true
     }
   ]
 }
