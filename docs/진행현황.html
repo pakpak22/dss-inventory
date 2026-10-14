@@ -59,7 +59,7 @@
 
 <h1>부품 요청 · 승인 · O/H 템플릿을 재고 관리로</h1>
 <div class="sub">
-  마지막 갱신 <b>2026-10-14</b> · 설계서 <code>docs/부품요청_이관_설계_2026-10-14.md</code>
+  마지막 갱신 <b>2026-10-15</b> · 설계서 <code>docs/부품요청_이관_설계_2026-10-14.md</code>
 </div>
 
 <div class="card">
@@ -130,10 +130,25 @@
     다룹니다.
   </div>
 
+  <div class="note green">
+    <b>조각 6·7 끝남 — 통로와 승인 절차 (2026-10-15)</b><br>
+    <b>통로 셋</b> — A/S 에 읽기 전용 통로를 열었습니다(인수번호 · 사람 명부 · 제품 모델).
+    공유 토큰을 머리말로 받고, 토큰이 없으면 <b>열어 두지 않고 닫습니다</b>(503).
+    🔴 휴지통에 든 수리 건은 안 내줍니다 — 기존 조회 함수는 가져오기용이라 휴지통을 포함합니다.<br>
+    <b>승인 절차</b> — 설정에서 결재선을 짭니다. 🔴 <b>처음엔 꺼진 채로</b> 들어가고, 결재선을
+    저장하는 순간 켜집니다. 단계를 모두 지우고 저장하면 다시 꺼집니다 —
+    <b>판은 지우지 않으므로 0개짜리 판이 절차를 끄는 유일한 출구</b>입니다.
+    <br>🔴 결재자는 <b>A/S 사람</b>이라 명부를 열 때마다 받아 옵니다. 이름·역할은 그때의 사본을
+    함께 적어 두어 <b>A/S 가 꺼져 있어도 저장된 절차가 그대로 보입니다.</b>
+    <br>🔴 <b>「못 받아 왔다」와 「명부에 없다」를 가릅니다</b> — 꺼져 있을 때 「자격 없음」으로 그리면
+    멀쩡한 결재선이 깨진 것처럼 보입니다.
+  </div>
+
   <div class="note blue">
-    <b>다음 — 조각 5b (화면)</b><br>
-    템플릿 만들기 · 고치기 · 부품 담기. 🔴 <b>같은 부품이 다른 템플릿에서 다른 O/H 단가를
-    가질 때 그 사실을 옆에 보여 주는 것</b>이 이 화면의 숙제입니다.
+    <b>다음 — 조각 8 (O/H 부품 템플릿 화면)</b><br>
+    원본 788줄을 그대로 옮깁니다. 만들기 · 고치기 · 부품 담기 · 제품 모델 잇기 · 부품당 O/H 단가.
+    🔵 원본 주석에 적힌 까닭들(<b>13줄이 상한인 까닭</b> = OH 견적서 양식이 34~46행,
+    <b>품명을 고치면 재고 연결이 풀리는 까닭</b>)을 함께 옮깁니다.
     화면이 생기는 조각이라 <b>눈 확인</b>과 <code>npm run build</code> 가 완료 기준에 들어갑니다.
   </div>
 
@@ -214,40 +229,65 @@
         <span style="color:var(--green);font-size:13px">✅ 원장은 네 조각 내내 한 글자도 안 바뀜(지문 확인)</span></td>
       <td>재고 관리</td><td><span class="st done">끝남</span></td>
     </tr>
-    <tr class="is-now">
+    <tr class="is-done">
       <td><b>5</b></td>
-      <td><b>O/H 부품 템플릿</b> (<b>O/H 단가가 여기 산다</b>)<br>
+      <td><b>O/H 템플릿 표를 원본 모양으로</b> — 제품 모델 잇기 · 부품당 O/H 단가<br>
+        <span style="color:var(--green);font-size:13px">✅ 표 넷(0011·0012) · 개발 적용 · 커밋 <code>85563e7</code></span></td>
+      <td>재고 관리</td><td><span class="st done">끝남</span></td>
+    </tr>
+    <tr class="is-done">
+      <td><b>6</b></td>
+      <td><b>A/S ↔ 재고 관리 통로</b> — 인수번호 · 사람 명부 · 제품 모델<br>
+        <span style="color:var(--green);font-size:13px">✅ A/S 쪽 커밋 <code>89748c3</code> · 실제로 불러 200 확인(토큰 없이·틀린 토큰은 401)</span></td>
+      <td><b>A/S</b></td><td><span class="st done">끝남</span></td>
+    </tr>
+    <tr class="is-done">
+      <td><b>7</b></td>
+      <td><b>승인 절차(결재선) 설정 화면</b> — 설정 안 네 번째<br>
         <span style="font-size:13px">
-        <b style="color:var(--green)">5a ✅ 표 둘 + 개발 DB 적용</b> ·
-        <b>5b ⬜ 화면 — 만들기 · 고치기 · 부품 담기</b></span></td>
-      <td>재고 관리</td><td><span class="st now">하는 중</span></td>
+        <b style="color:var(--green)">7a ✅ 표 둘 + 순수 함수 이식</b> ·
+        <b style="color:var(--green)">7b ✅ 화면 + 저장 + A/S 명부</b></span><br>
+        <span style="color:var(--green);font-size:13px">✅ 눈 확인 완료 · 커밋 <code>33ebbaa</code> · <code>3c4a798</code></span></td>
+      <td>재고 관리</td><td><span class="st done">끝남</span></td>
+    </tr>
+    <tr class="is-now">
+      <td><b>8</b></td>
+      <td><b>O/H 부품 템플릿 화면 이식</b> (원본 788줄)<br>
+        <span style="font-size:13px">만들기 · 고치기 · 부품 담기 · 모델 잇기 · 부품당 O/H 단가</span></td>
+      <td>재고 관리</td><td><span class="st now">다음</span></td>
     </tr>
     <tr>
-      <td>6</td><td>(4·5 가 끝나면 비는 자리)<br>
-        <span style="font-size:13px">「부품 요청 관리 · 승인 화면」은 <b>조각 4 가 대신했습니다</b> —
-        재고 관리의 반출 신청을 늘리기로 해서 새로 만들 화면이 없어졌습니다.</span></td>
-      <td>—</td><td><span class="st done">없어짐</span></td>
-    </tr>
-    <tr>
-      <td>7</td><td>A/S → 재고 관리 통로 (부품 검색 · 요청 만들기)</td>
-      <td>A/S</td><td><span class="st todo">남음</span></td>
-    </tr>
-    <tr>
-      <td>8</td>
-      <td>수리 건 상세 부품 요청 화면 — 고객사 품명 칸 · 추천(잔량·소유)</td>
-      <td>A/S · 묶음</td><td><span class="st todo">남음</span></td>
-    </tr>
-    <tr>
-      <td>9</td><td>사용 부품 · 견적서 검색에 고객사 품명</td>
-      <td>A/S · 묶음</td><td><span class="st todo">남음</span></td>
+      <td>9</td>
+      <td><b>부품 요청 관리 화면 이식</b> (원본 620줄)<br>
+        <span style="font-size:13px">상태 필터 · 표/카드 · 줄마다 요청·불출·남음·가용 · 거절 · 보류 · 부분 불출 종료</span></td>
+      <td>재고 관리</td><td><span class="st todo">남음</span></td>
     </tr>
     <tr>
       <td>10</td>
+      <td><b>승인 요청건(결재) 화면 이식</b> (원본 641줄 + 결재선 그림 230줄)<br>
+        <span style="font-size:13px">내가 결재할 건 · 실행할 건 · 진행 중인 신청 · 결재 이력</span></td>
+      <td>재고 관리</td><td><span class="st todo">남음</span></td>
+    </tr>
+    <tr>
+      <td>11</td>
+      <td>수리 건 상세 부품 요청 화면 — 고객사 품명 칸 · 추천(잔량·소유)<br>
+        <span style="font-size:13px">사용 부품 · 견적서 검색에 고객사 품명도 함께</span></td>
+      <td>A/S · 묶음</td><td><span class="st todo">남음</span></td>
+    </tr>
+    <tr>
+      <td>12</td>
       <td><b>A/S 에서 재고 기능 걷어내기</b> (표 16개 · 화면)<br>
-        <span style="color:var(--red);font-size:13px">🔴 파괴적 · 맨 마지막 · 7~9 가 도는 것을 보고</span></td>
+        <span style="color:var(--red);font-size:13px">🔴 파괴적 · 맨 마지막 · 8~11 이 도는 것을 보고</span></td>
       <td>A/S</td><td><span class="st block">맨 끝</span></td>
     </tr>
   </table>
+
+  <div class="note amber">
+    <b>🔴 조각 번호가 2026-10-14 에 다시 짜였습니다.</b> 처음에는 「부품 요청 관리 · 승인 요청건」이
+    조각 4 로 대신된다고 적었는데 <b>틀렸습니다</b> — 원본에는 <b>2단계 결재선</b>이 있고 재고 관리에는
+    그 기능이 아예 없었습니다. 사용자가 화면 사진을 보내 바로잡았고, 그때부터 방침이
+    <b>「원래 있던 화면을 그대로 옮긴다」</b>로 분명해졌습니다. 옮길 것은 화면 조각 <b>12개 3,261줄</b>입니다.
+  </div>
 
   <div class="note amber">
     <b>1~3 은 재고 관리 안에서 완결됩니다.</b> 뒤를 어떻게 정하든 버려지지 않습니다.
