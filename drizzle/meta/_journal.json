@@ -92,6 +92,13 @@
       "when": 1791990940529,
       "tag": "0012_bored_earthquake",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1791993687220,
+      "tag": "0013_hesitant_rhino",
+      "breakpoints": true
     }
   ]
 }
