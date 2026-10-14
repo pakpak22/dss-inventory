@@ -58,6 +58,13 @@ const MAX_QUANTITY = 2_147_483_647;
 export type OhTemplateItemInput = {
   /** 재고 마스터 연결. **null 이 정상이다** — 마스터에 없는 품목이 실제로 있다. */
   partId: string | null;
+  /**
+   * 견적서에 찍히는 품명.
+   * 🔴 **이어진 줄(`partId` 가 있는 줄)에서는 이 값이 쓰이지 않는다** — 저장 쪽이 그 부품의
+   * 고객사 품명을 DB 에서 다시 읽어 덮는다(`mutations.ts` 3번). 화면이 보낸 글자를 그대로 믿으면
+   * 견적서에 적히는 이름을 화면이 정하게 되고, 정본은 `parts.customer_name` 이다.
+   * 연결이 없는 자유 입력 줄에서는 이 글자가 그대로 저장된다.
+   */
   partNameText: string;
   quantity: number;
 };
@@ -116,22 +123,29 @@ export function validateOhTemplateFields(raw: Record<string, unknown>): Validate
         }
         const row = entry as Record<string, unknown>;
 
+        let partId: string | null = null;
+        if (row.partId !== null && row.partId !== undefined && row.partId !== "") {
+          if (!isValidOhTemplateId(row.partId)) {
+            fieldErrors[at("partId")] = `${line}번째 부품의 재고 연결을 확인할 수 없습니다.`;
+          } else partId = row.partId as string;
+        }
+
         const partNameText = typeof row.partNameText === "string" ? row.partNameText.trim() : "";
-        if (partNameText === "") fieldErrors[at("partNameText")] = `${line}번째 부품의 품명을 입력하십시오.`;
-        else if (partNameText.length > MAX_PART_NAME) {
+        // 🔴 **이어진 줄의 빈 품명은 거절하지 않는다**(2026-10-15, 조각 9b). 그 줄의 품명은 사람이
+        //    치는 글자가 아니라 그 부품의 **고객사 품명**이고, 저장 쪽이 DB 에서 다시 읽어 채운다
+        //    (`mutations.ts` 3번). 고객사 품명이 비어 있으면 품명도 빈 글자인 것이 **정해진 답**이다
+        //    — 우리 품명으로 대신 채우지 않는다. 여기서 막으면 「먼저 고객사 품명을 정하라」는 안내가
+        //    오류로 바뀌어, 사람은 템플릿을 아예 저장할 수 없게 된다.
+        //    연결이 없는 자유 입력 줄은 그 글자가 전부이므로 그대로 필수다.
+        if (partId === null && partNameText === "") {
+          fieldErrors[at("partNameText")] = `${line}번째 부품의 품명을 입력하거나 재고에서 부품을 고르십시오.`;
+        } else if (partNameText.length > MAX_PART_NAME) {
           fieldErrors[at("partNameText")] = `${line}번째 부품의 품명은 ${MAX_PART_NAME}자를 넘을 수 없습니다.`;
         }
 
         const quantity = typeof row.quantity === "number" ? row.quantity : Number(row.quantity);
         if (!Number.isInteger(quantity) || quantity <= 0 || quantity > MAX_QUANTITY) {
           fieldErrors[at("quantity")] = `${line}번째 부품의 수량은 1 이상의 정수여야 합니다.`;
-        }
-
-        let partId: string | null = null;
-        if (row.partId !== null && row.partId !== undefined && row.partId !== "") {
-          if (!isValidOhTemplateId(row.partId)) {
-            fieldErrors[at("partId")] = `${line}번째 부품의 재고 연결을 확인할 수 없습니다.`;
-          } else partId = row.partId as string;
         }
 
         items.push({ partId, partNameText, quantity });

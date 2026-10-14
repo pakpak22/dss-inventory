@@ -11,7 +11,6 @@ import {
 import { parts } from "@/db/schema/parts";
 import { auditValues } from "@/lib/audit";
 import type { OhPriceEntry, OhTemplateFields } from "./input";
-import { resolvePartLinkId } from "./name-match";
 
 /**
  * ============================================================================
@@ -26,13 +25,27 @@ import { resolvePartLinkId } from "./name-match";
  * 말이다. 차례는 **저장하는 쪽이 1부터** 매긴다(배열 자리 + 1) — 화면이 보낸 번호를 믿지 않는다.
  * **양식의 부품 순서가 그대로 뜻을 갖는다**(휴즈 22개가 셋째 줄인 데는 이유가 있다).
  *
- * ── 🔴 품명이 어긋나면 재고 연결을 푼다 ─────────────────────────────────
- * 연결을 만드는 유일한 몸짓이 **이름 일치**다 — 품명 칸은 `<input list>` 라 「골랐다」는 사건이
- * 없고 글자만 온다. 만들 때와 지킬 때가 다른 잣대를 쓰면 사람은 지금 무엇이 연결돼 있는지 화면만
- * 보고 알 수 없고, 어긋난 값이 **견적서로 나간다**(`part_name_text` 는 문서에 찍히고 `part_id` 는
- * 창고에서 꺼내는 값이다). 판정은 `name-match.ts` 의 `resolvePartLinkId` 하나가 쥐고 있고, 화면도
- * 같은 함수를 쓴다. 🔵 이 판정 덕에 원본의 `checkParts`(그 id 가 있는가)가 필요 없어졌다 —
- * 결과로 나오는 id 는 언제나 방금 읽은 살아 있는 부품 중 하나다.
+ * ── 🔴 이어진 줄의 품명은 **서버가 정한다**(2026-10-15, 조각 9b) ────────
+ * 2026-10-15 까지는 화면의 품명 칸이 `<input list>` 라 「골랐다」는 사건이 없고 글자만 왔다.
+ * 그래서 연결을 만드는 유일한 몸짓이 **이름 일치**였고, 이 자리에서 `resolvePartLinkId` 가
+ * 글자로 연결을 다시 매겼다(어긋나면 풀었다). **이제 진짜 고르개가 있다** — 연결은 고를 때
+ * 맺히고, 그 줄의 품명은 사람이 치는 글자가 아니라 **그 부품의 고객사 품명**
+ * (`parts.customer_name`)이다. 그래서 다시 매길 것이 없어 그 함수를 지웠다.
+ *
+ * 대신 이 자리에서 하는 일이 둘이다:
+ *  1. **화면이 보낸 `part_id` 를 믿지 않는다.** 지금 살아 있는(안 지워진) 부품인지 확인하고,
+ *     아니면 그 줄을 짚어 **거절한다**. 조용히 `null` 로 풀면 이어 두었던 줄이 자유 입력 줄로
+ *     바뀌어 버리는데, 그것은 사람이 시키지 않은 변화다.
+ *  2. **`part_name_text` 를 그 부품의 고객사 품명으로 채운다.** 화면이 보낸 글자를 쓰지 않는다 —
+ *     견적서에 찍히는 이름의 정본은 `parts.customer_name` 이고, 화면이 들고 있던 값은 그 사이
+ *     바뀌었을 수 있다. 🔴 **고객사 품명이 비어 있으면 품명도 빈 글자다**(2026-10-15 사용자 결정).
+ *     우리 품명으로 대신 채우지 않는다 — O/H 단가가 없을 때 일반 단가로 대신 채우지 않는 것과
+ *     같은 규칙이고, 채우면 고객사에 **우리 내부 이름이 찍혀 나간다.**
+ *
+ * 🔵 자유 입력 줄(`part_id` 가 `null`)은 그대로다 — 재고 마스터에 없는 이름이 실제로 있고,
+ * 그 줄의 품명은 사람이 적은 글자 그것뿐이다.
+ * 🔵 화면은 같은 잣대를 `link-state.ts` 의 `describeOhPartLink` 로 본다(고객사 품명이 비었으면
+ * 빨간 딱지, 지워진 부품이면 연결 풀기). 한쪽만 고치면 저장 결과가 화면과 달라진다.
  *
  * ── 모델 연결은 저장과 따로 움직인다 ────────────────────────────────────
  * 부품 목록을 고치는 일과 모델을 잇는 일은 사람에게 다른 행동이고, 한 번의 저장으로 묶으면
@@ -262,7 +275,7 @@ export type SaveOhTemplateParams = {
 /**
  * 머리(이름·비고)와 부품 줄 전체를 한 번에 저장한다. 🔵 원본은 `createOhTemplate` 과
  * `updateOhTemplate` 둘로 나뉘어 있는데, 여기서는 **한 함수**다 — 두 길이 공유하는 것(이름 중복
- * 검사 · 재고 연결 다시 매기기 · 줄 갈아 끼우기 · 단가 · 감사)이 거의 전부라, 나눠 두면 한쪽만
+ * 검사 · 재고 연결·품명 정하기 · 줄 갈아 끼우기 · 단가 · 감사)이 거의 전부라, 나눠 두면 한쪽만
  * 고쳐지는 자리가 그만큼 는다. 가르는 것은 `id` 하나다.
  */
 export async function saveOhTemplate(params: SaveOhTemplateParams): Promise<SaveOhTemplateResult> {
@@ -300,17 +313,27 @@ export async function saveOhTemplate(params: SaveOhTemplateParams): Promise<Save
         });
       }
 
-      // ── 3. 🔴 재고 연결을 **서버가 다시 매긴다**(머리말) ────────────────
-      //    화면이 보낸 partId 를 그대로 믿지 않는다. 품명이 정확히 일치하면 잇고, 어긋나면 null.
-      const options = await tx
-        .select({ id: parts.id, name: parts.name })
+      // ── 3. 🔴 이어진 줄의 연결과 품명을 **서버가 정한다**(머리말) ────────
+      //    화면이 보낸 partId 는 「살아 있는 부품인가」를 확인하고, 품명은 그 부품의 고객사
+      //    품명으로 채운다(비어 있으면 빈 글자 그대로). 자유 입력 줄은 보낸 글자 그대로.
+      const livePartRows = await tx
+        .select({ id: parts.id, no: parts.no, customerName: parts.customerName })
         .from(parts)
         .where(eq(parts.isDeleted, false));
-      const items = fields.items.map((item) => ({
-        partId: resolvePartLinkId(item.partNameText, item.partId, options),
-        partNameText: item.partNameText,
-        quantity: item.quantity,
-      }));
+      const livePartById = new Map(livePartRows.map((part) => [part.id, part]));
+      const items = fields.items.map((item, index) => {
+        if (item.partId === null) {
+          return { partId: null, partNameText: item.partNameText, quantity: item.quantity };
+        }
+        const part = livePartById.get(item.partId);
+        // 🔴 없거나 지워진 부품이면 그 줄을 짚어 거절한다. 조용히 풀지 않는다(머리말).
+        if (!part) {
+          reject("VALIDATION_ERROR", PART_NOT_FOUND_MESSAGE, {
+            [`items.${index}.partId`]: `${index + 1}번째 줄이 이어 둔 부품을 찾을 수 없습니다. 연결을 풀고 다시 고르십시오.`,
+          });
+        }
+        return { partId: part.id, partNameText: part.customerName, quantity: item.quantity };
+      });
 
       // ── 4. 머리 ────────────────────────────────────────────────────────
       let templateId: string;

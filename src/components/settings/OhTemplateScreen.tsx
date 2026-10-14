@@ -8,6 +8,7 @@ import {
   saveOhTemplateAction,
   unlinkProductModelAction,
 } from "@/app/actions/oh-templates";
+import { PartPicker } from "@/components/parts/PartPicker";
 import {
   MAX_OH_TEMPLATE_ITEMS,
   OH_PRICE_FIELD_ERROR_PREFIX,
@@ -16,10 +17,10 @@ import {
 import {
   describeOhPartLink,
   ohPartOptionLabel,
+  OH_NO_CUSTOMER_NAME_NOTICE,
   OH_PART_LINK_LABELS,
   type OhPartLinkOption,
 } from "@/lib/oh/link-state";
-import { isExactNormalizedMatch, rankSimilarNames, resolvePartLinkId } from "@/lib/oh/name-match";
 import {
   AS_PRODUCT_MODEL_MESSAGES,
   filterUnlinkedModels,
@@ -51,16 +52,22 @@ import type { OhTemplateView } from "@/lib/oh/view";
  * **왜 잠겼는지를 그 자리에 적는다** — 숫자만으로는 사람이 상한을 고장과 구별하지 못한다.
  * 실제로 `부품 (13 / 13)` 을 보고도 「부품 추가가 안 된다」는 고장 신고가 올라온 적이 있다.
  *
- * ── 🔴 재고 연결은 품명 칸에서 만든다 ───────────────────────────────────
- * 품명 칸은 `<input list>` + `<datalist>` 다. 다른 점은 **친 글자가 곧 저장되는 값**이라는
- * 것이다 — 고객사 칸은 고르기 위한 글자와 저장되는 값이 따로였지만, 여기서는 `partNameText`
- * 가 그대로 견적서에 찍힌다. 그래서 후보의 `value` 는 **언제나 품명 그대로**여야 하고, 규격
- * 같은 곁가지는 `<option>` 의 본문(브라우저가 부제로 보여 준다)에만 싣는다.
+ * ── 🔴 재고 연결은 **고르개**에서 만든다 (2026-10-15, 조각 9b) ───────────
+ * 2026-10-15 까지 품명 칸은 `<input list>` + `<datalist>` 였고, 「골랐다」는 사건이 없어
+ * **이름이 정확히 같은가**가 곧 연결 규칙이었다(글자를 고치면 연결이 풀렸다). 지금은 공용
+ * 고르개(`src/components/parts/PartPicker.tsx`)가 그 자리를 맡는다 — **연결은 고를 때 맺히고**,
+ * 손으로 글자를 고쳐서 풀리는 일은 없다.
  *
- * ── 🔴 품명을 고치면 재고 연결이 풀린다 ─────────────────────────────────
- * 그 까닭 넷은 `src/lib/oh/name-match.ts` 의 `resolvePartLinkId` 머리말에 있다. 여기서 되풀이
- * 하지 않는 까닭은, **화면과 저장 쪽이 같은 함수를 부르기 때문**이다 — 규칙이 적힌 곳이 하나여야
- * 「만들 때」와 「지킬 때」가 갈라지지 않는다. 화면이 다른 잣대를 쓰면 저장 결과가 화면과 달라진다.
+ * ── 🔴 이어진 줄의 품명은 **고객사 품명**이다 ───────────────────────────
+ * 그 줄의 `partNameText` 는 그 부품의 `parts.customer_name` 이고, 그래서 **이 화면에서 고칠 수
+ * 없다**(입력칸이 아니라 읽기만 하는 글자다). 고치려면 재고 현황의 그 부품으로 가야 한다 —
+ * `/?part=<No.>` 가 상세 창을 열고 거기 고객사 품명 칸이 있다.
+ * 🔴 **비어 있으면 빈 글자 그대로 저장된다** — 우리 품명으로 대신 채우지 않는다(2026-10-15
+ * 사용자 결정. O/H 단가가 없을 때 일반 단가로 대신 채우지 않는 것과 같은 규칙이다). 그래서
+ * 비어 있는 줄에는 빨간 딱지를 붙이고, **저장을 누르기 전에** 몇 줄이 그런지 한 번 더 말한다.
+ * 막지는 않는다 — 사람이 알고도 저장할 까닭이 있다(나중에 채우기로 하고 틀을 먼저 만든다).
+ * 🔵 재고에 없는 이름은 여전히 **자유 입력**이다. 양식에서 옮겨 온 이름 중에 마스터에 없는 것이
+ * 있고, 그 줄을 버리면 템플릿이 반쪽이 된다.
  *
  * ── 🔴 O/H 단가의 `null` 은 0 이 아니다 ─────────────────────────────────
  * 빈 칸은 「정하지 않음」이고 저장 쪽이 그 줄을 **지운다.** 0 은 「오버홀 때는 무상」이라는
@@ -88,9 +95,6 @@ const BADGE_AMBER = "rounded border border-amber-300 px-1 text-[11px] text-amber
 const BADGE_GREEN = "rounded border border-emerald-300 px-1 text-[11px] text-emerald-800";
 const BADGE_RED = "rounded border border-red-300 px-1 text-[11px] text-red-700";
 
-/** 품명 칸 후보를 몇 개까지 보일지. A/S 원본과 같은 수다. */
-const MAX_PART_SUGGESTIONS = 8;
-
 /** 부품 줄 네 칸의 폭. 머리글과 줄이 **같은 격자**를 써야 칸이 어긋나지 않는다. */
 const ITEM_GRID = "grid grid-cols-[1fr_4.5rem_7rem_2rem] gap-2";
 
@@ -98,6 +102,11 @@ type ItemRow = {
   /** React 의 줄 식별자. 저장된 줄은 그 id, 새로 더한 줄은 아래 seed 로 만든다. */
   key: string;
   partId: string | null;
+  /**
+   * 견적서에 찍히는 품명.
+   * 🔴 이어진 줄에서는 **고를 때 채워 넣은 고객사 품명**이고 사람이 고칠 수 없다(파일 머리말).
+   * 자유 입력 줄에서는 사람이 친 글자 그대로다.
+   */
   partNameText: string;
   /** 🔴 글자로 들고 있는다 — 숫자로 바꿔 두면 지우는 중간 상태(빈 칸)를 표현할 수 없다. */
   quantity: string;
@@ -251,6 +260,10 @@ export function OhTemplateScreen({
         <ul className="flex flex-col gap-3">
           {templates.map((template) => {
             const unlinkedCount = template.items.filter((item) => item.partId === null).length;
+            // 🔴 접어 둔 채로도 보여야 하는 사실이다 — 이 줄들은 견적서의 품명 칸이 비어 나간다.
+            const noCustomerNameCount = template.items.filter(
+              (item) => describeOhPartLink(item, partOptions).kind === "NO_CUSTOMER_NAME",
+            ).length;
             const isOpen = openId === template.id;
             return (
               <li key={template.id} className={CARD}>
@@ -261,6 +274,9 @@ export function OhTemplateScreen({
                     <p className="mt-0.5 text-xs text-zinc-500">
                       부품 {template.items.length}종
                       {unlinkedCount > 0 && ` · 재고 미연결 ${unlinkedCount}종`}
+                      {noCustomerNameCount > 0 && (
+                        <span className="text-red-700"> · 고객사 품명 없음 {noCustomerNameCount}종</span>
+                      )}
                       {` · 연결된 모델 ${template.models.length}개`}
                       {` · ${template.version}번째 판`}
                     </p>
@@ -297,7 +313,7 @@ export function OhTemplateScreen({
                     onClose={() => setOpenId(null)}
                   />
                 ) : (
-                  <ItemPreview template={template} />
+                  <ItemPreview template={template} partOptions={partOptions} />
                 )}
               </li>
             );
@@ -328,37 +344,58 @@ export function OhTemplateScreen({
   );
 }
 
-/** 접었을 때 보이는 부품 줄. 읽기만 한다 — 상태 딱지의 말은 편집 화면과 같다. */
-function ItemPreview({ template }: { template: OhTemplateView }) {
+/**
+ * 접었을 때 보이는 부품 줄. 읽기만 한다 — 상태 딱지의 말은 편집 화면과 같다.
+ *
+ * 🔴 여기 적히는 품명은 **저장된 글자**(`partNameText`)다. 지금 재고의 고객사 품명으로 바꿔
+ * 그리면 화면이 **견적서에 실제로 찍힐 글자를 숨기게 된다** — 어긋난 줄은 어긋난 채로 보이고,
+ * 그 사실을 딱지로 말한다(`describeOhPartLink`).
+ */
+function ItemPreview({ template, partOptions }: { template: OhTemplateView; partOptions: OhPartLinkOption[] }) {
   if (template.items.length === 0) {
     return <p className="mt-3 text-xs text-zinc-500">담긴 부품이 없습니다. [편집] 에서 추가하십시오.</p>;
   }
   return (
     <ol className="mt-3 flex flex-col gap-0.5 text-sm">
-      {template.items.map((item) => (
-        <li key={item.id} className="flex flex-wrap items-baseline gap-2">
-          <span className="w-5 text-right text-xs text-zinc-400">{item.displayOrder}</span>
-          <span className="text-zinc-800">{item.partNameText}</span>
-          <span className="text-xs text-zinc-500">×{item.quantity}</span>
-          {item.partId === null ? (
-            <span className={BADGE_AMBER}>{OH_PART_LINK_LABELS.UNLINKED}</span>
-          ) : (
-            <>
-              <span className="text-xs text-zinc-500">
-                No. {item.partNo ?? "?"} · O/H 단가 {priceText(item.ohPrice)}
-              </span>
-              {/* 🔴 이은 뒤 재고 쪽 품명이 바뀐 줄. 조용히 두면 견적서와 창고가 다른 것을 말한다.
-                  🔴 「같은 이름인가」는 **편집 화면과 같은 함수**로 판정한다 — 글자 비교로 재면
-                  공백·대소문자만 다른 줄이 여기서만 빨갛게 뜨고 편집 화면에서는 멀쩡해 보인다. */}
-              {item.partName !== null && !isExactNormalizedMatch(item.partName, item.partNameText) && (
-                <span className={BADGE_RED}>
-                  {OH_PART_LINK_LABELS.MISMATCHED} (지금 재고: {item.partName})
+      {template.items.map((item) => {
+        const link = describeOhPartLink(item, partOptions);
+        return (
+          <li key={item.id} className="flex flex-wrap items-baseline gap-2">
+            <span className="w-5 text-right text-xs text-zinc-400">{item.displayOrder}</span>
+            {/* 🔴 빈 품명은 「아무것도 없음」으로 보이면 안 된다 — 그 자리가 비어 나간다는 뜻이다. */}
+            {item.partNameText === "" ? (
+              <span className="text-xs text-zinc-400">(품명 비어 있음)</span>
+            ) : (
+              <span className="text-zinc-800">{item.partNameText}</span>
+            )}
+            <span className="text-xs text-zinc-500">×{item.quantity}</span>
+            {item.partId === null ? (
+              <span className={BADGE_AMBER}>{OH_PART_LINK_LABELS.UNLINKED}</span>
+            ) : (
+              <>
+                <span className="text-xs text-zinc-500">
+                  No. {item.partNo ?? "?"} · {item.partName ?? "?"} · O/H 단가 {priceText(item.ohPrice)}
                 </span>
-              )}
-            </>
-          )}
-        </li>
-      ))}
+                {/* 🔴 고객사 품명이 없는 줄. 그대로 견적서에 나가면 품명 칸이 빈다. */}
+                {link.kind === "NO_CUSTOMER_NAME" && (
+                  <span className={BADGE_RED}>
+                    {OH_PART_LINK_LABELS.NO_CUSTOMER_NAME} — 견적서 품명 칸이 비어 나갑니다
+                  </span>
+                )}
+                {/* 🔴 이은 뒤 재고 쪽 고객사 품명이 바뀐 줄. 조용히 두면 견적서와 창고가 다른 것을
+                    말한다. 「같은 이름인가」는 **편집 화면과 같은 함수**로 판정한다 — 글자 비교로
+                    재면 공백·대소문자만 다른 줄이 여기서만 빨갛게 뜬다. */}
+                {link.kind === "MISMATCHED" && (
+                  <span className={BADGE_RED}>
+                    {OH_PART_LINK_LABELS.MISMATCHED} (지금 고객사 품명: {link.part.customerName})
+                  </span>
+                )}
+                {link.kind === "MISSING" && <span className={BADGE_RED}>{OH_PART_LINK_LABELS.MISSING}</span>}
+              </>
+            )}
+          </li>
+        );
+      })}
     </ol>
   );
 }
@@ -505,29 +542,40 @@ function TemplateEditor({
 
   const knownPrices = useMemo(() => knownPriceParts(template), [template]);
 
-  /**
-   * 줄마다의 품명 후보. 줄이 여럿이라 훅을 줄 안에서 부를 수 없어 한 번에 만든다.
-   * 🔴 후보의 `value` 는 **언제나 품명 그대로**다 — 고르면 그 글자가 곧 저장되는 `partNameText`
-   * 이고 견적서에 찍힌다(파일 머리말).
-   */
-  const suggestionsByKey = useMemo(() => {
-    const map = new Map<string, OhPartLinkOption[]>();
-    for (const row of items) {
-      map.set(row.key, rankSimilarNames(row.partNameText, partOptions).slice(0, MAX_PART_SUGGESTIONS));
-    }
-    return map;
-  }, [items, partOptions]);
+  /** 지금 고르개를 펼쳐 둔 줄. 한 번에 하나만 펼친다 — 줄마다 펼쳐 두면 화면이 목록이 된다. */
+  const [pickerKey, setPickerKey] = useState<string | null>(null);
+  /** 🔴 「고객사 품명이 없는 줄이 N개입니다」를 저장 전에 묻는 중인가(아래 dialog). */
+  const [confirming, setConfirming] = useState(false);
+  const confirmRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const el = confirmRef.current;
+    if (!el) return;
+    if (confirming && !el.open) el.showModal();
+    else if (!confirming && el.open) el.close();
+  }, [confirming]);
 
-  /** 🔴 품명을 고칠 때마다 연결을 다시 정한다 — 서버가 저장할 때 쓰는 그 함수다. */
+  /** 자유 입력 줄의 품명. 🔵 이어진 줄에는 이 칸이 없다(품명이 고객사 품명이다). */
   function changePartName(key: string, text: string) {
-    setItems((previous) =>
-      previous.map((row) =>
-        row.key === key ? { ...row, partNameText: text, partId: resolvePartLinkId(text, row.partId, partOptions) } : row,
-      ),
-    );
+    setItems((previous) => previous.map((row) => (row.key === key ? { ...row, partNameText: text } : row)));
   }
 
-  /** 잘못 이어 둔 줄을 되돌린다. **품명은 건드리지 않는다** — 적어 둔 글자는 사람 것이다. */
+  /**
+   * 🔴 고르개에서 골랐다 — **연결과 품명이 함께 채워진다.** 품명은 그 부품의 고객사 품명이고,
+   * 비어 있으면 **빈 글자 그대로** 넣는다(우리 품명으로 대신 채우지 않는다, 파일 머리말).
+   * 저장할 때 서버가 DB 에서 같은 값을 다시 읽어 확정한다.
+   */
+  function pickPart(key: string, option: OhPartLinkOption) {
+    setItems((previous) =>
+      previous.map((row) => (row.key === key ? { ...row, partId: option.id, partNameText: option.customerName } : row)),
+    );
+    setPickerKey(null);
+  }
+
+  /**
+   * 잘못 이어 둔 줄을 되돌린다. **품명은 건드리지 않는다** — 적어 둔 글자는 사람 것이다.
+   * 🔵 고객사 품명이 비어 있던 줄은 품명도 빈 채로 자유 입력 줄이 된다. 그 줄은 품명을 적지
+   * 않으면 저장할 때 빠진다(빈 줄은 보내지 않는다, 아래 `sendItems`).
+   */
   function unlinkPart(key: string) {
     setItems((previous) => previous.map((row) => (row.key === key ? { ...row, partId: null } : row)));
   }
@@ -547,7 +595,9 @@ function TemplateEditor({
 
   // 🔴 서버에 보낼 줄은 **빈 줄을 뺀 것**이라 자리 번호가 화면과 다르다. 오류를 그 줄에 붙이려면
   //    같은 셈을 여기서 해 둬야 한다 — 화면 자리로 찾으면 빈 줄 하나에 오류가 통째로 밀린다.
-  const sendItems = items.filter((row) => row.partNameText.trim() !== "");
+  // 🔴 **이어 둔 줄은 품명이 비어도 보낸다**(2026-10-15): 고객사 품명이 아직 없는 줄이고,
+  //    여기서 걸러 버리면 사람이 담아 둔 부품이 저장할 때 **조용히 사라진다.**
+  const sendItems = items.filter((row) => row.partId !== null || row.partNameText.trim() !== "");
   const sendIndexByKey = new Map(sendItems.map((row, index) => [row.key, index]));
 
   async function save() {
@@ -604,6 +654,20 @@ function TemplateEditor({
   }
 
   const unlinkedInDraft = sendItems.filter((row) => row.partId === null).length;
+  /** 🔴 이어는 두었는데 고객사 품명이 없는 줄. 저장 전에 한 번 묻는 까닭이다(파일 머리말). */
+  const noCustomerNameInDraft = sendItems.filter(
+    (row) => describeOhPartLink(row, partOptions).kind === "NO_CUSTOMER_NAME",
+  ).length;
+
+  /** 저장 단추. 고객사 품명이 없는 줄이 있으면 **묻고 나서** 저장한다(막지는 않는다). */
+  function askThenSave() {
+    if (busy) return;
+    if (noCustomerNameInDraft > 0) {
+      setConfirming(true);
+      return;
+    }
+    void save();
+  }
 
   return (
     <div className="mt-3 border-t border-zinc-100 pt-3">
@@ -668,7 +732,6 @@ function TemplateEditor({
 
         {items.map((row, index) => {
           const link = describeOhPartLink(row, partOptions);
-          const listId = `oh-part-suggestions-${template?.id ?? "new"}-${row.key}`;
           const sendIndex = sendIndexByKey.get(row.key);
           const nameError = sendIndex === undefined ? undefined : fieldErrors[`items.${sendIndex}.partNameText`];
           const partIdError = sendIndex === undefined ? undefined : fieldErrors[`items.${sendIndex}.partId`];
@@ -681,31 +744,58 @@ function TemplateEditor({
           return (
             <div key={row.key} className={ITEM_GRID}>
               <div>
-                <input
-                  value={row.partNameText}
-                  onChange={(e) => changePartName(row.key, e.target.value)}
-                  list={listId}
-                  autoComplete="off"
-                  placeholder={`${index + 1}번째 부품 품명`}
-                  aria-label={`${index + 1}번째 부품 품명`}
-                  className={INPUT}
-                  disabled={busy}
-                />
-                <datalist id={listId}>
-                  {(suggestionsByKey.get(row.key) ?? []).map((option) => (
-                    // 🔴 value 는 품명 그대로, 곁가지는 본문으로만(파일 머리말).
-                    <option key={option.id} value={option.name}>
-                      {ohPartOptionLabel(option)}
-                    </option>
-                  ))}
-                </datalist>
+                {/* ── 이어진 줄: 품명은 **고객사 품명**이고 여기서 고칠 수 없다(파일 머리말) ──
+                    🔴 입력칸으로 그리면 사람은 고칠 수 있다고 믿는다. 읽는 글자로 그린다. */}
+                {row.partId === null ? (
+                  <input
+                    value={row.partNameText}
+                    onChange={(e) => changePartName(row.key, e.target.value)}
+                    autoComplete="off"
+                    placeholder={`${index + 1}번째 부품 품명`}
+                    aria-label={`${index + 1}번째 부품 품명`}
+                    className={INPUT}
+                    disabled={busy}
+                  />
+                ) : row.partNameText === "" ? (
+                  // 🔴 고객사 품명이 없는 줄. 빈 자리로 두면 아무도 모른 채 견적서가 비어 나간다.
+                  <p className="rounded-md border border-red-300 bg-red-50 px-2 py-1 text-[11px] text-red-700">
+                    {OH_NO_CUSTOMER_NAME_NOTICE}
+                  </p>
+                ) : (
+                  <p className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-sm text-zinc-900">
+                    {row.partNameText}
+                  </p>
+                )}
 
                 {/* 이 줄이 지금 재고와 이어져 있는가. 말은 목록 화면과 맞춘다 — 새 용어를 만들지 않는다. */}
                 <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px]">
-                  {link.kind === "LINKED" && (
+                  {(link.kind === "LINKED" || link.kind === "NO_CUSTOMER_NAME" || link.kind === "MISMATCHED") && (
                     <>
-                      <span className={BADGE_GREEN}>{OH_PART_LINK_LABELS.LINKED}</span>
+                      <span className={link.kind === "LINKED" ? BADGE_GREEN : BADGE_RED}>
+                        {OH_PART_LINK_LABELS[link.kind]}
+                      </span>
                       <span className="text-zinc-500">{ohPartOptionLabel(link.part)}</span>
+                      {/* 🔵 고치러 가는 길. **새 탭으로 연다** — 이 화면에는 아직 저장하지 않은
+                          편집 내용이 있고, 떠났다 돌아오면 그것이 사라진다. */}
+                      {link.kind === "NO_CUSTOMER_NAME" && (
+                        <a
+                          href={`/?part=${link.part.no}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-red-700 underline underline-offset-2"
+                        >
+                          고객사 품명 정하러 가기
+                        </a>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setPickerKey(pickerKey === row.key ? null : row.key)}
+                        disabled={busy}
+                        aria-label={`${index + 1}번째 부품 다시 고르기`}
+                        className="text-zinc-500 underline underline-offset-2 hover:text-zinc-900 disabled:opacity-50"
+                      >
+                        다른 부품
+                      </button>
                       <button
                         type="button"
                         onClick={() => unlinkPart(row.key)}
@@ -718,27 +808,38 @@ function TemplateEditor({
                     </>
                   )}
 
-                  {link.kind === "UNLINKED" && (
-                    <>
-                      <span className={BADGE_AMBER}>{OH_PART_LINK_LABELS.UNLINKED}</span>
-                      <span className="text-zinc-500">부품 요청에는 담기지 않습니다.</span>
-                    </>
+                  {/* 🔴 전에 적혀 있던 글자가 남아 있는데 지금 고객사 품명은 비었다. 저장하면
+                      그 글자가 사라지므로, 지금 보이는 것이 저장될 값이 아님을 말해 준다. */}
+                  {link.kind === "NO_CUSTOMER_NAME" && row.partNameText !== "" && (
+                    <span className="text-zinc-500">
+                      적혀 있던 「{row.partNameText}」는 저장할 때 빈 글자가 됩니다.
+                    </span>
                   )}
 
-                  {/* 🔴 DB 에서 온 어긋남이다 — 이 화면은 이 상태를 만들지 않는다(품명을 고치면
-                      연결이 먼저 풀린다). 조용히 두면 견적서와 창고가 다른 것을 말한다. */}
+                  {/* 🔴 DB 에서 온 어긋남이다 — 이은 뒤 재고 쪽 고객사 품명이 바뀌었다. 저장하면
+                      지금 값으로 맞춰진다(저장 쪽이 DB 에서 다시 읽는다). */}
                   {link.kind === "MISMATCHED" && (
+                    <span className="text-zinc-500">
+                      지금 고객사 품명은 「{link.part.customerName}」입니다 — 저장하면 그 글자로 바뀝니다.
+                    </span>
+                  )}
+
+                  {(link.kind === "UNLINKED" || link.kind === "EMPTY") && (
                     <>
-                      <span className={BADGE_RED}>{OH_PART_LINK_LABELS.MISMATCHED}</span>
-                      <span className="text-zinc-500">연결: {ohPartOptionLabel(link.part)}</span>
+                      {link.kind === "UNLINKED" && (
+                        <>
+                          <span className={BADGE_AMBER}>{OH_PART_LINK_LABELS.UNLINKED}</span>
+                          <span className="text-zinc-500">부품 요청에는 담기지 않습니다.</span>
+                        </>
+                      )}
                       <button
                         type="button"
-                        onClick={() => unlinkPart(row.key)}
+                        onClick={() => setPickerKey(pickerKey === row.key ? null : row.key)}
                         disabled={busy}
-                        aria-label={`${index + 1}번째 부품 재고 연결 풀기`}
-                        className="text-zinc-500 underline underline-offset-2 hover:text-red-600 disabled:opacity-50"
+                        aria-label={`${index + 1}번째 부품 재고에서 고르기`}
+                        className="text-zinc-500 underline underline-offset-2 hover:text-zinc-900 disabled:opacity-50"
                       >
-                        연결 풀기
+                        {pickerKey === row.key ? "고르기 닫기" : "재고에서 고르기"}
                       </button>
                     </>
                   )}
@@ -746,7 +847,7 @@ function TemplateEditor({
                   {link.kind === "MISSING" && (
                     <>
                       <span className={BADGE_RED}>{OH_PART_LINK_LABELS.MISSING}</span>
-                      <span className="text-zinc-500">지워진 부품으로 보입니다.</span>
+                      <span className="text-zinc-500">지워진 부품으로 보입니다. 저장하면 거절됩니다.</span>
                       <button
                         type="button"
                         onClick={() => unlinkPart(row.key)}
@@ -760,26 +861,17 @@ function TemplateEditor({
                   )}
                 </div>
 
-                {/* 품명이 같은 부품이 여럿이라 이름만으로는 정할 수 없다. 찍지 않고 사람에게 고르게 한다. */}
-                {link.kind === "UNLINKED" && link.ambiguous.length > 0 && (
-                  <select
-                    value=""
-                    onChange={(e) => {
-                      const picked = e.target.value;
-                      if (picked === "") return;
-                      setItems((previous) => previous.map((r) => (r.key === row.key ? { ...r, partId: picked } : r)));
-                    }}
-                    disabled={busy}
-                    aria-label={`${index + 1}번째 부품 재고 고르기`}
-                    className={`${INPUT} mt-1`}
-                  >
-                    <option value="">같은 품명이 {link.ambiguous.length}개입니다 — 어느 재고인지 고르십시오…</option>
-                    {link.ambiguous.map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {ohPartOptionLabel(option)}
-                      </option>
-                    ))}
-                  </select>
+                {/* 🔴 고르면 연결과 품명(= 고객사 품명)이 **함께** 채워진다. 공용 고르개라 수량 변경
+                    기록 화면과 같은 칸으로 찾는다(No.·품명·품명2·고객사 품명·도번·교산 품번). */}
+                {pickerKey === row.key && !busy && (
+                  <div className="mt-1 rounded-md border border-zinc-200 bg-zinc-50 p-2">
+                    <PartPicker
+                      parts={partOptions}
+                      exclude={new Set()}
+                      label={`${index + 1}번째 줄에 넣을 재고 부품 찾기`}
+                      onPick={(part) => pickPart(row.key, part)}
+                    />
+                  </div>
                 )}
 
                 {nameError && <p className={FIELD_ERROR}>{nameError}</p>}
@@ -847,7 +939,15 @@ function TemplateEditor({
       {unlinkedInDraft > 0 && (
         <p className="mt-2 text-[11px] text-amber-800">
           재고에 이어지지 않은 줄이 {unlinkedInDraft}개입니다. 그대로 저장할 수 있지만 그 줄은 부품 요청에 담기지
-          않습니다 — 재고에 있는 부품이라면 품명을 목록에서 골라 이어 주십시오.
+          않습니다 — 재고에 있는 부품이라면 [재고에서 고르기] 로 이어 주십시오.
+        </p>
+      )}
+
+      {/* 🔴 고객사 품명이 없는 줄도 **담을 때** 알린다. 저장을 누르면 한 번 더 묻는다(아래). */}
+      {noCustomerNameInDraft > 0 && (
+        <p className="mt-2 text-[11px] text-red-700">
+          고객사 품명이 없는 줄이 {noCustomerNameInDraft}개입니다. 그 줄은 견적서의 품명 칸이 비어 나갑니다 — 재고
+          현황에서 그 부품의 고객사 품명을 먼저 정하십시오.
         </p>
       )}
 
@@ -856,10 +956,47 @@ function TemplateEditor({
         <button type="button" className={BTN} onClick={onClose} disabled={busy}>
           닫기
         </button>
-        <button type="button" className={BTN_PRIMARY} onClick={() => void save()} disabled={busy}>
+        <button type="button" className={BTN_PRIMARY} onClick={askThenSave} disabled={busy}>
           {busy ? "저장 중" : template ? "저장" : "등록"}
         </button>
       </div>
+
+      {/*
+        🔴 저장 **전에** 한 번 말한다 — 막지는 않는다(파일 머리말). 사람이 알고도 저장할 까닭이
+        있다(부품은 먼저 담아 두고 고객사 품명은 나중에 정한다). 그래서 [이대로 저장] 이 있다.
+        🔵 팝업은 DOM 부모의 CSS 를 물려받는다 — 상자에서 글 흐름을 다시 세운다.
+      */}
+      <dialog
+        ref={confirmRef}
+        className="w-full max-w-md whitespace-normal break-words rounded-lg border border-zinc-200 bg-white p-4 text-left text-zinc-900 backdrop:bg-black/40"
+        onCancel={(e) => {
+          e.preventDefault();
+          setConfirming(false);
+        }}
+      >
+        <div className="flex flex-col gap-3">
+          <h3 className="text-base font-semibold">고객사 품명이 없는 줄이 {noCustomerNameInDraft}개입니다.</h3>
+          <p className="text-sm text-zinc-600">
+            이대로 저장하면 견적서의 품명 칸이 비어 나갑니다. 재고 현황에서 그 부품의 고객사 품명을 먼저 정할 수
+            있습니다.
+          </p>
+          <div className="flex justify-end gap-2">
+            <button type="button" className={BTN} onClick={() => setConfirming(false)}>
+              취소
+            </button>
+            <button
+              type="button"
+              className={BTN_PRIMARY}
+              onClick={() => {
+                setConfirming(false);
+                void save();
+              }}
+            >
+              이대로 저장
+            </button>
+          </div>
+        </div>
+      </dialog>
     </div>
   );
 }

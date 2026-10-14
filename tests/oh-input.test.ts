@@ -91,10 +91,19 @@ describe("머리 칸", () => {
 });
 
 describe("부품 줄", () => {
-  test("품명이 비면 그 줄을 짚어 거절한다", () => {
+  test("자유 입력 줄(연결 없음)의 품명이 비면 그 줄을 짚어 거절한다", () => {
     const r = validateOhTemplateFields({ name: "표준", items: [{ partNameText: "  ", quantity: 1 }] });
     assert.equal(r.ok, false);
     assert.ok(r.ok === false && r.fieldErrors["items.0.partNameText"]);
+  });
+
+  test("🔴 이어진 줄은 품명이 비어도 받는다 — 고객사 품명이 아직 없는 줄이다 (2026-10-15)", () => {
+    // 그 줄의 품명은 저장 쪽이 `parts.customer_name` 에서 채운다(비어 있으면 빈 글자 그대로).
+    // 여기서 막으면 「먼저 고객사 품명을 정하라」는 안내가 오류가 되어 템플릿을 저장할 수 없다.
+    const r = validateOhTemplateFields({ name: "표준", items: [{ partId: 부품id, partNameText: "", quantity: 1 }] });
+    assert.equal(r.ok, true);
+    assert.equal(r.ok && r.data.items[0].partId, 부품id);
+    assert.equal(r.ok && r.data.items[0].partNameText, "");
   });
 
   test("🔴 수량 0 은 거절한다 — 1 이상이어야 한다", () => {

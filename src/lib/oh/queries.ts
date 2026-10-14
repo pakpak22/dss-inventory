@@ -8,6 +8,7 @@ import {
   partOverhaulUnitPrices,
 } from "@/db/schema/oh-templates";
 import { parts } from "@/db/schema/parts";
+import type { OhPartLinkOption } from "./link-state";
 import type { OhTemplateItemView, OhTemplateModelView, OhTemplateView } from "./view";
 
 export type { OhTemplateItemView, OhTemplateModelView, OhTemplateView };
@@ -126,18 +127,31 @@ export async function listOhTemplates(): Promise<OhTemplateView[]> {
 }
 
 /**
- * 품명 칸(`<input list>`)이 고를 수 있는 재고 부품 전부. **지워진 부품은 뺀다.**
+ * 부품 고르개가 고를 수 있는 재고 부품 전부. **지워진 부품은 뺀다.**
  *
- * 🔵 `{ id, name, name2 }` 만 넘긴다 — 화면 조각은 "use client" 라 넘긴 값이 그대로 브라우저까지
- * 실려 간다. 수량·단가 따위를 실어 보낼 이유가 없다.
+ * 🔵 **찾는 칸 여섯만** 넘긴다(`PartQueryFields` + id) — 화면 조각은 "use client" 라 넘긴 값이
+ * 그대로 브라우저까지 실려 간다. 수량·단가 따위를 실어 보낼 이유가 없다. 2026-10-15(조각 9b)에
+ * **고객사 품명·도번·교산 품번**이 늘었다: 공용 고르개(`src/components/parts/PartPicker.tsx`)가
+ * 그 여섯으로 찾으므로, 여기서 빼면 **그 화면에서만 조용히 안 찾아진다.**
  *
- * `name2`(품명2)를 함께 주는 까닭: 이 저장소의 `parts` 에는 **품명 유니크 제약이 없다**(같은
- * 이름을 따로 세는 부품이 실제로 16묶음 있다). 같은 이름이 둘 나왔을 때 사람이 어느 재고인지
- * 고르려면 단서가 하나는 있어야 한다.
+ * 🔴 고객사 품명은 보여 주기용이 아니라 **그 줄에 저장되는 값**이기도 하다 — 고르면
+ * `part_name_text` 가 그 글자가 된다(`mutations.ts` 3번이 DB 에서 다시 읽어 확정한다).
+ *
+ * `name2`(품명2)와 `no` 를 함께 주는 까닭: 이 저장소의 `parts` 에는 **품명 유니크 제약이
+ * 없다**(같은 이름을 따로 세는 부품이 실제로 16묶음 있다). 같은 이름이 둘 나왔을 때 사람이 어느
+ * 재고인지 고르려면 단서가 하나는 있어야 한다.
  */
-export async function listOhPartOptions(): Promise<{ id: string; no: number; name: string; name2: string }[]> {
+export async function listOhPartOptions(): Promise<OhPartLinkOption[]> {
   return db()
-    .select({ id: parts.id, no: parts.no, name: parts.name, name2: parts.name2 })
+    .select({
+      id: parts.id,
+      no: parts.no,
+      name: parts.name,
+      name2: parts.name2,
+      customerName: parts.customerName,
+      drawingNo: parts.drawingNo,
+      kyosanPartNo: parts.kyosanPartNo,
+    })
     .from(parts)
     .where(eq(parts.isDeleted, false))
     .orderBy(asc(parts.name), asc(parts.no));

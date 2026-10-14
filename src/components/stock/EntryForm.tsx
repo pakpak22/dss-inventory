@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { startTransition, useActionState, useEffect, useMemo, useRef, useState } from "react";
 import { lookupIntakeAction, saveEntryAction, type EntryFormState } from "@/app/actions/stock";
+import { PartPicker } from "@/components/parts/PartPicker";
 import { OWNER_LABEL, formatQuantity } from "@/lib/parts/codes";
 import type { PartRow } from "@/lib/parts/types";
 import { CHARGE_LABEL, CHARGE_TYPES, ENTRY_TYPE_LABEL, PURPOSES, PURPOSE_LABEL, RECORDABLE_TYPES, needsConfirmation, sheetNoText, type RecordableType } from "@/lib/stock/codes";
@@ -51,58 +52,6 @@ interface Line {
 
 function newLine(partId: string): Line {
   return { partId, quantity: "1", chargeType: "FREE", note: "", actualQuantity: "", showActual: false };
-}
-
-/** 부품 찾기: 품명·품명2·도번·교산 품번·No. 로 거른다. 많아도 20개만 보여 준다. */
-function PartPicker({ parts, exclude, onPick, label }: { parts: PartRow[]; exclude: Set<string>; onPick: (p: PartRow) => void; label: string }) {
-  const [q, setQ] = useState("");
-  const toks = q.toLowerCase().split(/\s+/).filter(Boolean);
-  const hits = useMemo(() => {
-    if (toks.length === 0) return [];
-    return parts
-      .filter((p) => !exclude.has(p.id))
-      .filter((p) => {
-        const hay = `${p.no} ${p.name} ${p.name2} ${p.drawingNo} ${p.kyosanPartNo}`.toLowerCase();
-        return toks.every((t) => hay.includes(t));
-      })
-      .slice(0, 20);
-  }, [parts, exclude, toks]);
-  return (
-    <div className="flex flex-col gap-2">
-      <label className={LABEL}>
-        {label}
-        <input type="search" className={INPUT} value={q} onChange={(e) => setQ(e.target.value)} placeholder="품명·도번·No. 로 찾기" autoComplete="off" />
-      </label>
-      {q && (
-        <ul className="max-h-64 overflow-y-auto rounded-md border border-zinc-200">
-          {hits.length === 0 ? (
-            <li className="px-3 py-2 text-sm text-zinc-500">맞는 부품이 없습니다.</li>
-          ) : (
-            hits.map((p) => (
-              <li key={p.id}>
-                <button
-                  type="button"
-                  className="flex w-full flex-col gap-0.5 border-b border-zinc-100 px-3 py-2 text-left hover:bg-zinc-50 last:border-0"
-                  onClick={() => {
-                    onPick(p);
-                    setQ("");
-                  }}
-                >
-                  <span className="text-sm font-medium text-zinc-900">
-                    <span className="text-zinc-500">No. {p.no}</span> {p.name}
-                    {p.name2 ? <span className="font-normal text-zinc-500"> · {p.name2}</span> : null}
-                  </span>
-                  <span className="text-xs text-zinc-500">
-                    {OWNER_LABEL[p.owner]} · 지금 {formatQuantity(p.quantity)}개{p.drawingNo ? ` · ${p.drawingNo}` : ""}
-                  </span>
-                </button>
-              </li>
-            ))
-          )}
-        </ul>
-      )}
-    </div>
-  );
 }
 
 export function EntryForm({ parts, initialType, initialPartNo, isAdmin, today, returnCandidates, returnPartNo }: EntryFormProps) {
