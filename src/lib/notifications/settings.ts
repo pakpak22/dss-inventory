@@ -87,7 +87,7 @@ const RECEIVES: Record<NotificationKind, (role: Role) => boolean> = {
 
 /** 종이 무엇을 언제 보여 주는가. 포털 화면이 종류 줄 밑에 그대로 그린다. */
 const DESCRIPTIONS: Record<NotificationKind, string> = {
-  [NOTIFICATION_KINDS.pending]: "확인을 기다리는 반출 신청이 있으면 건수를 종에 띄웁니다. 확인하거나 반려하면 사라집니다.",
+  [NOTIFICATION_KINDS.pending]: "확인을 기다리는 반출 신청이 있으면 건수를 종에 띄웁니다. 다 내주거나 반려하면 사라집니다. 일부만 내준 신청은 남은 수량이 있어 그대로 남습니다.",
   [NOTIFICATION_KINDS.rejected]: `자기가 낸 반출 신청이 반려되면 종에 띄웁니다. 반려된 지 ${REJECTED_VISIBLE_DAYS}일이 지나면 사라집니다. 확인된 신청은 수량이 바뀌어 화면에 바로 보이므로 알리지 않습니다.`,
 };
 

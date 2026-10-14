@@ -13,7 +13,7 @@ import { buildInventoryNotificationItems, NOTIFICATION_MAX_ITEMS, receivesPendin
  *
  * ── 🔴 스키마를 건드리지 않는다 ─────────────────────────────────────────
  * 새 표도 마이그레이션도 없다. 재료가 이미 `stock_requests` 에 다 있다:
- *   status            PENDING·CONFIRMING(대기) · REJECTED(반려)
+ *   status            PENDING·CONFIRMING·PARTIAL(대기 — stock/codes.ts 의 PENDING_REQUEST_STATUSES) · REJECTED(반려)
  *   requested_by      누가 냈는가 — 색인 stock_requests_requester_idx
  *   decided_at        언제 결정됐는가 — 「7일」을 여기에 긋는다
  *

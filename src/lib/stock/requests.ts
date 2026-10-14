@@ -6,7 +6,7 @@ import { parts } from "@/db/schema/parts";
 import { stockTransactions } from "@/db/schema/stock";
 import { stockRequestIssues, stockRequests, type RequestStatus } from "@/db/schema/stock-requests";
 import { auditValues } from "@/lib/audit";
-import { ENTRY_TYPE_LABEL, type EntryType } from "./codes";
+import { DECIDED_REQUEST_STATUSES, ENTRY_TYPE_LABEL, PENDING_REQUEST_STATUSES, type EntryType } from "./codes";
 import type { EntryInput } from "./form";
 import { buildIssueInput, type IssueQuantity } from "./issue";
 import { LedgerAbort, ledgerErrorMessage, recordEntryIn, type Actor, type RecordResult } from "./ledger";
@@ -25,7 +25,8 @@ import { LedgerAbort, ledgerErrorMessage, recordEntryIn, type Actor, type Record
  *     그래서 원장(`ledger.ts`)은 부분인지 전부인지 모르고, 그 파일은 한 글자도 바뀌지 않았다.
  *   - 🔴 회차마다 원장 건의 **「신청 연결」(`RecordOptions.requestId`)을 비운다** — `stock_entries_request_uq` 를
  *     피하는 자리다. 끊어진 자리는 회차 표(`stock_request_issues`)가 대신 잇는다 (그 표의 주석 1번).
- *   - 🔴 상태를 **세는** 쪽(대기 목록·배지·알림 종)은 조각 4c 에서 맞춘다. 여기서는 값만 바르게 넣는다.
+ *   - 🔵 상태를 **세는** 쪽(대기 목록·배지·알림 종)은 조각 4c 에서 맞췄다 — `PARTIAL` 은 **대기**로 센다.
+ *     가르는 글자는 `./codes` 의 `PENDING_REQUEST_STATUSES`·`DECIDED_REQUEST_STATUSES` 한 벌뿐이다.
  */
 export interface RequestLineView {
   partId: string;
@@ -316,22 +317,32 @@ function toRow(r: typeof stockRequests.$inferSelect, names: ReadonlyMap<string, 
   };
 }
 
-/** 확인 대기 목록(오래된 것이 위 — 먼저 올라온 것부터 처리). CONFIRMING 도 대기로 보인다(처리 중). */
+/**
+ * 확인 대기 목록(오래된 것이 위 — 먼저 올라온 것부터 처리). CONFIRMING 도 대기로 보인다(처리 중).
+ *
+ * 🔵 **일부만 나간 것(PARTIAL)도 여기 남는다** (2026-10-14, 조각 4c) — 아직 줄 것이 남았으니 담당자가 계속 봐야 한다.
+ *    차례는 **처음 신청한 시각**이라 회차를 거듭해도 자리가 바뀌지 않는다(오래 기다린 것이 계속 위).
+ */
 export async function listPendingRequests(): Promise<PendingRequestRow[]> {
   const rows = await db()
     .select()
     .from(stockRequests)
-    .where(inArray(stockRequests.status, ["PENDING", "CONFIRMING"]))
+    .where(inArray(stockRequests.status, [...PENDING_REQUEST_STATUSES]))
     .orderBy(asc(stockRequests.requestedAt));
   return attachNames(rows);
 }
 
-/** 최근 처리된 것(반려·취소·확인) — 신청한 사람이 결과를 볼 수 있게. */
+/**
+ * 최근 처리된 것(반려·취소·확인) — 신청한 사람이 결과를 볼 수 있게.
+ *
+ * 🔴 `PARTIAL` 은 여기 **없다.** 아직 끝나지 않아 위의 대기 목록에 있다 — 양쪽에 넣으면 같은 신청이 두 번 보인다.
+ *    `decidedAt` 역순으로 세우는데 PARTIAL 은 그 칸이 비어 있기도 하다(confirmRequest: decided* 는 끝났을 때만 적는다).
+ */
 export async function listRecentDecidedRequests(limit = 10): Promise<PendingRequestRow[]> {
   const rows = await db()
     .select()
     .from(stockRequests)
-    .where(inArray(stockRequests.status, ["CONFIRMED", "REJECTED", "CANCELLED"]))
+    .where(inArray(stockRequests.status, [...DECIDED_REQUEST_STATUSES]))
     .orderBy(desc(stockRequests.decidedAt))
     .limit(limit);
   return attachNames(rows);
@@ -342,8 +353,9 @@ async function attachNames(rows: Array<typeof stockRequests.$inferSelect>): Prom
   return rows.map((r) => toRow(r, names));
 }
 
+/** 머리말의 「대기 N」 배지. 🔴 아래 `summarizePendingRequests()`(알림 종)와 **같은 묶음**을 본다 — 둘이 갈리면 「배지에는 있는데 종에는 없는」 신청이 생긴다. */
 export async function countPendingRequests(): Promise<number> {
-  const [r] = await db().select({ n: count() }).from(stockRequests).where(inArray(stockRequests.status, ["PENDING", "CONFIRMING"]));
+  const [r] = await db().select({ n: count() }).from(stockRequests).where(inArray(stockRequests.status, [...PENDING_REQUEST_STATUSES]));
   return r?.n ?? 0;
 }
 
@@ -355,15 +367,17 @@ export async function countPendingRequests(): Promise<number> {
 /**
  * 확인 대기 요약 — 건수와 **가장 오래 기다린 신청의 시각**.
  *
- * `countPendingRequests()` 와 세는 범위가 같다(PENDING + CONFIRMING). 둘을 합치지
- * 않은 까닭: 머리말의 「대기 N」 배지는 숫자 하나만 쓰고 모든 화면에 딸려 오므로,
- * 거기에 집계 한 칸을 더 얹지 않는다. 종은 줄에 적을 날짜가 필요해 따로 묻는다.
+ * 🔴 `countPendingRequests()` 와 세는 범위가 **같다** — 둘 다 `PENDING_REQUEST_STATUSES` 를
+ * 본다(일부 나감 PARTIAL 포함). 목록을 손으로 두 벌 적으면 언젠가 갈려서 「배지에는
+ * 있는데 종에는 없는」 신청이 생긴다. 그런데도 질의를 둘로 둔 까닭: 머리말의 「대기 N」
+ * 배지는 숫자 하나만 쓰고 모든 화면에 딸려 오므로, 거기에 집계 한 칸을 더 얹지 않는다.
+ * 종은 줄에 적을 날짜가 필요해 따로 묻는다.
  */
 export async function summarizePendingRequests(): Promise<{ count: number; oldestAt: Date | null }> {
   const [r] = await db()
     .select({ n: count(), oldest: min(stockRequests.requestedAt) })
     .from(stockRequests)
-    .where(inArray(stockRequests.status, ["PENDING", "CONFIRMING"]));
+    .where(inArray(stockRequests.status, [...PENDING_REQUEST_STATUSES]));
   // 드라이버가 timestamptz 를 Date 로 주지만, 집계는 글자로 올 수도 있어 둘 다 받는다.
   const oldest = (r?.oldest ?? null) as Date | string | null;
   return {
