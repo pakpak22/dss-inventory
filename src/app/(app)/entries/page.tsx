@@ -235,7 +235,8 @@ export default async function EntriesPage({ searchParams }: { searchParams: Prom
               <input name="actor" defaultValue={f.actor} className={FINPUT} placeholder="예: 정영빈" />
             </label>
             <label className={FLABEL}>
-              내용 (사유·빌려준 곳·고객명·사용처·비고)
+              {/* 「고객명」 → 「고객사 이름」: 부품 찾기에 「고객사 품명」이 생겨 둘이 나란히 보인다. 다른 것이니 라벨을 갈라 둔다. */}
+              내용 (사유·빌려준 곳·고객사 이름·사용처·비고)
               <input name="text" defaultValue={f.text} className={FINPUT} placeholder="예: 상해수리소, 불량, 실사…" />
             </label>
           </div>

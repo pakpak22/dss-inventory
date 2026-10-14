@@ -10,8 +10,12 @@ import type { PartRow } from "./types";
  * 기본값과 같은 것은 주소에 쓰지 않는다 — 아무것도 안 고른 첫 화면의 주소는 `/` 그대로다.
  */
 
-/** 찾을 곳. 예시 화면과 같은 다섯 칸. 키는 주소에 들어가므로 짧게. */
+/**
+ * 찾을 곳. 표에 보이는 글자 칸들. 키는 주소에 들어가므로 짧게 — **이미 쓰는 글자와 겹치면 안 된다**
+ * (겹치면 주소에 담긴 옛 설정이 엉뚱한 칸으로 읽힌다). 차례는 표의 칸 차례와 맞춘다.
+ */
 export const SEARCH_FIELDS = [
+  { key: "c", field: "customerName", label: "고객사 품명" },
   { key: "a", field: "name", label: "품명" },
   { key: "b", field: "name2", label: "품명2" },
   { key: "p", field: "kyosanPartNo", label: "교산 품번" },
@@ -26,6 +30,7 @@ export const ALL_FIELD_KEYS: readonly SearchFieldKey[] = SEARCH_FIELDS.map((f) =
 /** 정렬할 수 있는 칸. 머리글을 누르면 바뀐다. */
 export const SORT_KEYS = [
   "no",
+  "customerName",
   "name",
   "name2",
   "kyosanPartNo",

@@ -76,6 +76,8 @@ const COLUMNS: ReadonlyArray<{
   numeric?: boolean;
 }> = [
   { key: "no", label: "No.", numeric: true },
+  // 🔴 여기를 고치면 아래 `<tbody>` 도 같이 고쳐야 한다 — 본문은 이 배열을 안 쓰고 손으로 쓴 고정 순서다.
+  { key: "customerName", label: "고객사 품명" },
   { key: "name", label: "품명" },
   { key: "name2", label: "품명2" },
   { key: "kyosanPartNo", label: "교산 품번" },
@@ -670,6 +672,18 @@ export function PartsList({
                       </td>
                       <td className="tabular px-2.5 py-1.5 text-right text-zinc-500">
                         {p.no}
+                      </td>
+                      {/* 고객사 품명 — 머리글은 위 COLUMNS 배열에 있다. 둘의 차례가 어긋나면 값이 한 칸씩 밀린다.
+                          한 줄로 둔다(두 줄로 접혀 보기 나빴다). 아주 긴 이름이 와도 표가 가로로 터지지 않게
+                          안쪽 칸에 상한을 두고 넘치면 … 로 줄인다 — 비고 칸이 쓰는 방식과 같고, 전체는 제목(title)과 상세 창에서 보인다. */}
+                      <td className="px-2.5 py-1.5" title={p.customerName}>
+                        <span className="block max-w-56 truncate">
+                          {p.customerName ? (
+                            <Marked text={p.customerName} toks={tk("c")} />
+                          ) : (
+                            <span className="text-zinc-400">-</span>
+                          )}
+                        </span>
                       </td>
                       <td className="px-2.5 py-1.5 font-medium text-zinc-900">
                         <Marked text={p.name} toks={tk("a")} />

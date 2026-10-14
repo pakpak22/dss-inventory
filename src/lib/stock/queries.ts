@@ -150,6 +150,9 @@ export async function listEntries(f: EntryListFilter): Promise<{ rows: EntryRow[
     if (f.partFields.includes("b")) ors.push(sql`p.name2 ilike ${pat}`);
     if (f.partFields.includes("d")) ors.push(sql`p.drawing_no ilike ${pat}`);
     if (f.partFields.includes("p")) ors.push(sql`p.kyosan_part_no ilike ${pat}`);
+    // 🔴 이 `customer_name` 은 **부품**의 「고객사 품명」(parts.customer_name)이다.
+    // 위 「내용 찾기」의 `stockEntries.customerName` — 그 건의 **고객사 이름**(stock_entries.customer_name) — 과 **다른 칸**이다.
+    if (f.partFields.includes("c")) ors.push(sql`p.customer_name ilike ${pat}`);
     if (ors.length === 0) ors.push(sql`false`);
     conds.push(sql`exists (select 1 from stock_transactions t join parts p on p.id = t.part_id where t.entry_id = ${stockEntries.id} and (${sql.join(ors, sql` or `)}))`);
   }

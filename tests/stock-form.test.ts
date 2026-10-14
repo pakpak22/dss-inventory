@@ -153,7 +153,7 @@ describe("parseEntryForm — 다른 종류", () => {
 describe("parseEntryListFilter", () => {
   it("주소 값을 거르기로. 이상한 값은 버린다", () => {
     const f = parseEntryListFilter({ type: "USE", from: "2026-01-01", to: "bad", part: "12", actor: " 정영빈 ", intake: "d26", unverified: "1", page: "3" });
-    assert.deepEqual(f, { type: "USE", from: "2026-01-01", to: null, partText: "12", partFields: ["n", "a", "b", "d", "p"], actor: "정영빈", text: "", intakeNumber: "D26", unverifiedOnly: true, page: 3 });
+    assert.deepEqual(f, { type: "USE", from: "2026-01-01", to: null, partText: "12", partFields: ["n", "a", "b", "d", "p", "c"], actor: "정영빈", text: "", intakeNumber: "D26", unverifiedOnly: true, page: 3 });
     // 내용 찾기 (2026-10-07): 앞뒤 공백 떼고 100자까지
     assert.equal(parseEntryListFilter({ text: "  상해수리소 " }).text, "상해수리소");
     assert.equal(parseEntryListFilter({ text: "x".repeat(150) }).text.length, 100);
@@ -161,7 +161,9 @@ describe("parseEntryListFilter", () => {
     const t = parseEntryListFilter({ part: " WRDEMO002A ", pf: "d,a" });
     assert.equal(t.partText, "WRDEMO002A");
     assert.deepEqual(t.partFields, ["a", "d"]);
-    assert.deepEqual(parseEntryListFilter({ pf: "zzz" }).partFields, ["n", "a", "b", "d", "p"]);
+    assert.deepEqual(parseEntryListFilter({ pf: "zzz" }).partFields, ["n", "a", "b", "d", "p", "c"]);
+    // 고객사 품명 칸 (2026-10-14): 키 `c`. 부품의 고객사 품명이지 그 건의 고객사 이름이 아니다.
+    assert.deepEqual(parseEntryListFilter({ pf: "c" }).partFields, ["c"]);
     const g = parseEntryListFilter({ type: "HACK", page: "-1" });
     assert.equal(g.type, null);
     assert.equal(g.page, 1);

@@ -50,6 +50,7 @@ export default async function PrintPartsPage({ searchParams }: { searchParams: P
           <thead>
             <tr>
               <th className={`${TH} text-right`}>No.</th>
+              <th className={TH}>고객사 품명</th>
               <th className={TH}>품명</th>
               <th className={TH}>품명2</th>
               <th className={TH}>교산 품번</th>
@@ -68,6 +69,7 @@ export default async function PrintPartsPage({ searchParams }: { searchParams: P
             {rows.map((p) => (
               <tr key={p.id} className="break-inside-avoid">
                 <td className={`${TD} tabular text-right`}>{p.no}</td>
+                <td className={TD}>{p.customerName || "-"}</td>
                 <td className={`${TD} font-medium`}>{p.name}</td>
                 <td className={TD}>{p.name2 || "-"}</td>
                 <td className={`${TD} font-mono`}>{p.kyosanPartNo || "-"}</td>
@@ -84,7 +86,7 @@ export default async function PrintPartsPage({ searchParams }: { searchParams: P
             ))}
             {rows.length === 0 ? (
               <tr>
-                <td className={`${TD} text-center text-zinc-500`} colSpan={13}>
+                <td className={`${TD} text-center text-zinc-500`} colSpan={14}>
                   이 조건에 맞는 부품이 없습니다.
                 </td>
               </tr>
