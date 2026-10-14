@@ -3,8 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireRole } from "@/lib/auth/session";
-import { parsePartForm, readPartFormValues, type PartFieldErrors, type PartFormValues } from "@/lib/parts/form";
-import { createPart, deletePart, findDuplicateParts, updatePart, type DuplicatePart } from "@/lib/parts/mutations";
+import { parseCustomerName, parsePartForm, readPartFormValues, type PartFieldErrors, type PartFormValues } from "@/lib/parts/form";
+import { createPart, deletePart, findDuplicateParts, updateCustomerName, updatePart, type DuplicatePart } from "@/lib/parts/mutations";
 import { listPartItems } from "@/lib/parts/queries";
 
 /**
@@ -54,6 +54,53 @@ export async function savePartAction(_prev: PartFormState, formData: FormData): 
 
   revalidatePath("/");
   redirect(`/?part=${no}`);
+}
+
+/* ───────────── 고객사 품명만 고치는 전용 길 (STAFF 이상) ───────────── */
+
+export interface CustomerNameState {
+  error: string | null;
+  /**
+   * 저장이 끝난 **횟수**. 0 이면 아직 저장 전. 화면은 이 값이 바뀌는 것으로 새 저장을 알아챈다.
+   *
+   * 왜 boolean 이 아닌가: 같은 칸을 잇달아 두 번 저장하면 값이 안 바뀌어 **둘째 저장을 못 알아챈다**
+   * (칸이 안 닫히고 서버 자료도 다시 안 읽는다).
+   * 왜 시각(`Date.now()`)이 아닌가: 여기는 **서버 시계**라 브라우저 시계와 어긋날 수 있고,
+   * 같은 밀리초에 두 번이면 또 겹친다. 앞 상태에서 1 을 더하면 반드시 달라진다.
+   * 🔴 오류로 돌아갈 때는 이 값을 **그대로** 넘긴다 — 올리면 화면이 「저장됐다」로 보고 칸을 닫는다.
+   */
+  saveCount: number;
+}
+
+/**
+ * 고객사 품명 하나만 저장한다 (2026-10-14 사용자 결정 (다)).
+ *
+ * 🔴 여기만 `requireRole("STAFF")` 다. 부품의 다른 칸은 위 `savePartAction` 의 `requireRole("ADMIN")` 이
+ *    그대로 막는다 — 기존 가드는 **내리지 않았다.**
+ * 🔵 `requireRole` 은 「그 역할 **이상**」이다(`roleAtLeast`, RANK VIEWER 0 < STAFF 1 < ADMIN 2).
+ *    그래서 STAFF 도 ADMIN 도 통과하고 VIEWER 만 막힌다 — 「정확히 STAFF」가 아니다.
+ *
+ * 성공해도 redirect 하지 않는다: 상세 창이 열린 채로 그 자리에서 고치는 길이라, 돌아가면 창이 닫힌다.
+ */
+export async function saveCustomerNameAction(prev: CustomerNameState, formData: FormData): Promise<CustomerNameState> {
+  const session = await requireRole("STAFF");
+  const id = String(formData.get("id") ?? "").trim();
+  if (!id) return { error: "고칠 부품이 정해지지 않았습니다.", saveCount: prev.saveCount };
+
+  const parsed = parseCustomerName(formData);
+  if (!parsed.ok) return { error: parsed.errors, saveCount: prev.saveCount };
+
+  let result;
+  try {
+    result = await updateCustomerName(id, parsed.value, { id: session.user.id, name: session.user.name });
+  } catch (e) {
+    console.error("[parts] 고객사 품명 저장 실패:", e instanceof Error ? e.message : e);
+    return { error: "저장하지 못했습니다. 잠시 뒤 다시 시도하십시오.", saveCount: prev.saveCount };
+  }
+  if (!result.ok) return { error: "고칠 부품이 없습니다. 이미 지워졌을 수 있습니다.", saveCount: prev.saveCount };
+
+  revalidatePath("/");
+  return { error: null, saveCount: prev.saveCount + 1 };
 }
 
 export interface DeletePartState {

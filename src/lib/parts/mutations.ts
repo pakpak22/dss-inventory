@@ -104,6 +104,7 @@ export async function updatePart(id: string, input: PartInput, actor: Actor): Pr
   const beforeInput: PartInput = {
     name: before.name,
     name2: before.name2,
+    customerName: before.customerName,
     kyosanPartNo: before.kyosanPartNo,
     drawingNo: before.drawingNo,
     supplyPrice: before.supplyPrice,
@@ -141,6 +142,50 @@ export async function updatePart(id: string, input: PartInput, actor: Actor): Pr
     );
   });
   return { ok: true, no: before.no, changes };
+}
+
+export type UpdateCustomerNameResult = { ok: true; no: number; changed: boolean } | { ok: false; code: "not_found" };
+
+/**
+ * 고객사 품명 **하나만** 고친다 (조각 1, 2026-10-14 사용자 결정 (다)).
+ *
+ * 왜 `updatePart` 를 안 쓰고 길을 따로 내는가: 부품의 다른 칸(품명·단가 등)은 **ADMIN 전용**이고
+ * 이 칸만 **STAFF 이상**이다. 🔴 `updatePart` 의 가드를 STAFF 로 내리면 품명·단가까지 함께 열린다.
+ * 그래서 가드가 다른 저장 길을 따로 두고, 여기서는 **이 칸 말고는 아무것도 건드리지 않는다.**
+ *
+ * 🔵 이력은 기존 부품 수정과 **같은 길**을 탄다 — `PART_UPDATE` + `detail.changes`.
+ *    `/audit` 의 `linesOf` 가 그대로 풀어 `PART_FIELD_LABEL` 로 「고객사 품명」이라고 그린다.
+ *    (`supplyCurrency` 는 안 넣는다. 공급가가 안 바뀌니 쓸 데가 없고, 그쪽은 `?? "JPY"` 로 받는다.)
+ *
+ * 🔵 사람이 직접 고칠 때는 **이미 값이 있어도 덮어쓴다.** 「덮어쓰지 않는다」(결정 ②)는 나중에
+ *    A/S 에서 값이 들어올 때의 규칙(조각 5~8)이다 — 여기에 걸면 사람이 제 오타를 못 고친다.
+ *
+ * 🔵 `markWorkbookDirty` 를 **부르지 않는다**: 엑셀 한 벌에 고객사 품명 칸이 없어 다시 쓸 것이 없다.
+ *    나중에 엑셀에 넣게 되면 여기도 같이 고쳐야 한다.
+ */
+export async function updateCustomerName(id: string, customerName: string, actor: Actor): Promise<UpdateCustomerNameResult> {
+  const [before] = await db()
+    .select({ id: parts.id, no: parts.no, customerName: parts.customerName })
+    .from(parts)
+    .where(and(eq(parts.id, id), eq(parts.isDeleted, false)))
+    .limit(1);
+  if (!before) return { ok: false, code: "not_found" };
+  if (before.customerName === customerName) return { ok: true, no: before.no, changed: false };
+
+  const now = new Date();
+  await db().transaction(async (tx) => {
+    await tx.update(parts).set({ customerName, updatedBy: actor.id, updatedAt: now }).where(eq(parts.id, id));
+    await tx.insert(auditLogs).values(
+      auditValues({
+        action: "PART_UPDATE",
+        actorId: actor.id,
+        actorName: actor.name,
+        target: `parts:No.${before.no}`,
+        detail: { changes: { customerName: { before: before.customerName, after: customerName } } },
+      }),
+    );
+  });
+  return { ok: true, no: before.no, changed: true };
 }
 
 export type DeletePartResult = { ok: true; no: number } | { ok: false; code: "not_found" | "has_quantity" | "has_records" };

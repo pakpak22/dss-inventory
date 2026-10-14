@@ -9,6 +9,8 @@ export interface PartRow {
   no: number;
   name: string;
   name2: string;
+  /** 고객사에 나가는 서류(견적서)에 쓸 품명. 우리 품명과 다르다. 없으면 빈 문자열 (2026-10-14 결정). */
+  customerName: string;
   kyosanPartNo: string;
   drawingNo: string;
   supplyPrice: number | null;

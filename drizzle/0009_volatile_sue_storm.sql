@@ -1,0 +1,1 @@
+ALTER TABLE "parts" ADD COLUMN "customer_name" text DEFAULT '' NOT NULL;

@@ -31,6 +31,12 @@ export const parts = pgTable(
       .default(sql`nextval('parts_no_seq')`),
     name: text("name").notNull(),
     name2: text("name2").notNull().default(""),
+    /**
+     * 고객사 품명 — 고객사에 나가는 서류(견적서)에 쓸 이름. 우리 품명(`name`)과 다르다 (2026-10-14 사용자 결정).
+     * 한 부품에 하나라 따로 표를 두지 않고 칸 하나로 둔다. 없으면 **빈 문자열**(위 머리말의 관례).
+     * 🔵 엑셀 한 벌·내려받기는 부품과 **별개 타입**에 칸을 손으로 옮겨 적으므로 이 칸은 저절로 나가지 않는다.
+     */
+    customerName: text("customer_name").notNull().default(""),
     kyosanPartNo: text("kyosan_part_no").notNull().default(""),
     drawingNo: text("drawing_no").notNull().default(""),
     supplyPrice: bigint("supply_price", { mode: "number" }),

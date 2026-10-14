@@ -5,10 +5,28 @@ import type { CellValue } from "./full-workbook";
 import type { StockExportRow } from "./stock-workbook";
 
 /**
+ * 부품에서 **엑셀이 쓰는 12칸만** 뽑은 것. 🔴 `PartRow` 를 통째로 받지 않으려고 둔 타입이다 — 되돌리지 마라.
+ *
+ * 왜: 부품에 칸이 늘어도 엑셀로 새지 않게 하려는 것이다. 돌려주는 타입(`StockExportRow`)은 원래부터
+ * 별개였지만 **받는 타입이 `PartRow` 였던 탓에** 부품에 칸 하나만 더해도 (a) 여기가 조용히 따라 넓어지고
+ * (b) 손으로 같은 모양을 만드는 `workbook-data.ts` 의 부품 읽기가 타입에서 깨졌다
+ * (2026-10-14 부품에 「고객사 품명」 칸을 더하다 실제로 깨졌다).
+ * 좁혀 두면 「엑셀은 이 12칸만 받는다」가 타입으로 못 박혀 둘 다 일어나지 않는다.
+ *
+ * 🔴 이 파일에 엑셀로 안 나가는 칸의 **이름을 적지도 마라** — 유출 검사가 grep 이라 주석도 걸린다.
+ * 🔵 엑셀에 칸을 **정말로 더해야 하면** 이 목록 + `StockExportRow` + `fillPartsSheet` 의 열 문자 +
+ *    비교 코드의 `columns` + 가져오기 머리글 + 양식 `.xlsx` 를 한꺼번에 고쳐야 한다.
+ */
+type PartExportSource = Pick<
+  PartRow,
+  "no" | "name" | "name2" | "kyosanPartNo" | "drawingNo" | "quantity" | "supplyPrice" | "supplyCurrency" | "quotePrice" | "note" | "itemName" | "category" | "owner"
+>;
+
+/**
  * DB 줄 → 엑셀 칸 값 (순수 함수). 어느 시트에 어떤 글자로 쓰는지는 전부 여기 — 엑셀 모양이 바뀌면 여기 한 곳.
  * 엑셀 관용구는 사용처 기입란의 옛 줄을 따른다: 없는 글자는 `-`, 비고만 빈칸, 한 건의 둘째 줄부터는 No. 칸이 비어 있다.
  */
-export function toStockExportRow(p: PartRow): StockExportRow {
+export function toStockExportRow(p: PartExportSource): StockExportRow {
   return {
     no: p.no,
     name: p.name,

@@ -22,6 +22,7 @@ function row(over: Partial<PartRow> & { no: number }): PartRow {
     id: `id-${over.no}`,
     name: `품명 ${over.no}`,
     name2: "",
+    customerName: "",
     kyosanPartNo: "",
     drawingNo: "",
     supplyPrice: null,

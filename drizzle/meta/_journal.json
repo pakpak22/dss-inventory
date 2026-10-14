@@ -64,6 +64,13 @@
       "when": 1791772807476,
       "tag": "0008_crazy_firelord",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791957231151,
+      "tag": "0009_volatile_sue_storm",
+      "breakpoints": true
     }
   ]
 }

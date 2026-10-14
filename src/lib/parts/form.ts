@@ -6,11 +6,17 @@ import { CATEGORIES, CURRENCIES, OWNERS, type Category, type Currency, type Owne
  *
  * 규칙 (DESIGN 2-3절):
  *  - 품명 필수. No. 는 프로그램이 매긴다(폼에 없다). 수량은 여기서 못 고친다(폼에 없다).
- *  - 품명2·교산 품번·도번·비고는 비면 빈 문자열. 공급가·견적가는 비면 null, 적으면 0 이상의 정수.
+ *  - 품명2·고객사 품명·교산 품번·도번·비고는 비면 빈 문자열. 공급가·견적가는 비면 null, 적으면 0 이상의 정수.
  */
 export interface PartInput {
   name: string;
   name2: string;
+  /**
+   * 고객사 품명 — 고객사에 나가는 서류(견적서)에 쓸 이름. 우리 품명(`name`)과 다르다 (2026-10-14 결정).
+   * 🔴 「이미 값이 있으면 덮어쓰지 않는다」는 규칙은 **A/S 에서 값이 들어올 때**를 위한 것이고
+   *    사람이 이 폼에서 직접 고치는 길에는 걸지 않는다 — 걸면 사람이 오타를 못 고친다.
+   */
+  customerName: string;
   kyosanPartNo: string;
   drawingNo: string;
   supplyPrice: number | null;
@@ -70,6 +76,8 @@ export function parsePartForm(fd: FormLike, itemIds: ReadonlySet<string>): Parse
 
   const name2 = textOrEmpty(fd, "name2");
   if (name2.length > TEXT_MAX) errors.name2 = `품명2는 ${TEXT_MAX}자 이하여야 합니다.`;
+  const customerName = textOrEmpty(fd, "customerName");
+  if (customerName.length > TEXT_MAX) errors.customerName = `고객사 품명은 ${TEXT_MAX}자 이하여야 합니다.`;
   const kyosanPartNo = textOrEmpty(fd, "kyosanPartNo");
   if (kyosanPartNo.length > TEXT_MAX) errors.kyosanPartNo = `교산 품번은 ${TEXT_MAX}자 이하여야 합니다.`;
   const drawingNo = textOrEmpty(fd, "drawingNo");
@@ -105,6 +113,7 @@ export function parsePartForm(fd: FormLike, itemIds: ReadonlySet<string>): Parse
     value: {
       name,
       name2,
+      customerName,
       kyosanPartNo,
       drawingNo,
       supplyPrice: supply.ok ? supply.value : null,
@@ -118,8 +127,20 @@ export function parsePartForm(fd: FormLike, itemIds: ReadonlySet<string>): Parse
   };
 }
 
+/**
+ * 고객사 품명 **하나만** 고치는 전용 길의 검사 (2026-10-14 사용자 결정 (다): 이 칸만 STAFF 이상).
+ * 폼 전체 검사와 **같은 규칙**을 쓴다 — 앞뒤 공백 정리, 엑셀 습관대로 친 `-` 는 빈 값, 200자 이하.
+ * 🔴 규칙을 여기에 베껴 적지 않고 `textOrEmpty`·`TEXT_MAX` 를 그대로 쓴다. 두 길이 다르게 받으면
+ *    같은 칸인데 어디서 고쳤느냐에 따라 값이 달라진다.
+ */
+export function parseCustomerName(fd: FormLike): ParseResult<string, string> {
+  const v = textOrEmpty(fd, "customerName");
+  if (v.length > TEXT_MAX) return { ok: false, errors: `고객사 품명은 ${TEXT_MAX}자 이하여야 합니다.` };
+  return { ok: true, value: v };
+}
+
 /** 폼이 되돌아올 때 입력값을 다시 채우려고, 문자열 그대로 꺼낸다. */
-export const PART_FORM_FIELDS = ["name", "name2", "kyosanPartNo", "drawingNo", "supplyPrice", "supplyCurrency", "quotePrice", "note", "itemId", "category", "owner"] as const;
+export const PART_FORM_FIELDS = ["name", "name2", "customerName", "kyosanPartNo", "drawingNo", "supplyPrice", "supplyCurrency", "quotePrice", "note", "itemId", "category", "owner"] as const;
 export type PartFormValues = Record<(typeof PART_FORM_FIELDS)[number], string>;
 
 export function readPartFormValues(fd: FormLike): PartFormValues {
@@ -132,6 +153,7 @@ export function readPartFormValues(fd: FormLike): PartFormValues {
 export function partToFormValues(p: {
   name: string;
   name2: string;
+  customerName: string;
   kyosanPartNo: string;
   drawingNo: string;
   supplyPrice: number | null;
@@ -145,6 +167,7 @@ export function partToFormValues(p: {
   return {
     name: p.name,
     name2: p.name2,
+    customerName: p.customerName,
     kyosanPartNo: p.kyosanPartNo,
     drawingNo: p.drawingNo,
     supplyPrice: p.supplyPrice === null ? "" : String(p.supplyPrice),

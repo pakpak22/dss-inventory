@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { diffPartInput, parsePartForm, parsePartItemForm, partToFormValues, readPartFormValues, type PartInput } from "../src/lib/parts/form";
+import { diffPartInput, parseCustomerName, parsePartForm, parsePartItemForm, partToFormValues, readPartFormValues, type PartInput } from "../src/lib/parts/form";
 
 const ITEM = "11111111-1111-1111-1111-111111111111";
 const ITEMS = new Set([ITEM]);
@@ -14,6 +14,7 @@ function fd(obj: Record<string, string>): FormData {
 const GOOD = {
   name: " AMP-DEH-DV2H(13M) ",
   name2: "",
+  customerName: " 증폭기 조립품 ",
   kyosanPartNo: "C090722733",
   drawingNo: "WR10136AA148B",
   supplyPrice: "54,000",
@@ -30,6 +31,7 @@ describe("parsePartForm", () => {
     const r = parsePartForm(fd(GOOD), ITEMS);
     assert.ok(r.ok);
     assert.equal(r.value.name, "AMP-DEH-DV2H(13M)");
+    assert.equal(r.value.customerName, "증폭기 조립품");
     assert.equal(r.value.supplyPrice, 54000);
     assert.equal(r.value.quotePrice, 990000);
     assert.equal(r.value.note, "2024.04.07 재고 100EA시 주문 필요\n둘째 줄");
@@ -45,10 +47,11 @@ describe("parsePartForm", () => {
     assert.equal(r.value.quotePrice, 0);
   });
 
-  it("엑셀 습관대로 친 '-' 는 빈 값으로 받는다 (품명2·교산 품번·도번·비고)", () => {
-    const r = parsePartForm(fd({ ...GOOD, name2: "-", kyosanPartNo: " - ", drawingNo: "—", note: "-" }), ITEMS);
+  it("엑셀 습관대로 친 '-' 는 빈 값으로 받는다 (품명2·고객사 품명·교산 품번·도번·비고)", () => {
+    const r = parsePartForm(fd({ ...GOOD, name2: "-", customerName: "-", kyosanPartNo: " - ", drawingNo: "—", note: "-" }), ITEMS);
     assert.ok(r.ok);
     assert.equal(r.value.name2, "");
+    assert.equal(r.value.customerName, "");
     assert.equal(r.value.kyosanPartNo, "");
     assert.equal(r.value.drawingNo, "");
     assert.equal(r.value.note, "");
@@ -88,9 +91,10 @@ describe("parsePartForm", () => {
   });
 
   it("너무 긴 글자는 오류", () => {
-    const r = parsePartForm(fd({ ...GOOD, name2: "x".repeat(201), note: "y".repeat(4001) }), ITEMS);
+    const r = parsePartForm(fd({ ...GOOD, name2: "x".repeat(201), customerName: "z".repeat(201), note: "y".repeat(4001) }), ITEMS);
     assert.ok(!r.ok);
     assert.ok(r.errors.name2);
+    assert.ok(r.errors.customerName);
     assert.ok(r.errors.note);
   });
 });
@@ -102,6 +106,7 @@ describe("폼 값 왕복", () => {
     const back = partToFormValues({
       name: "A",
       name2: "",
+      customerName: "고객사 품명 A",
       kyosanPartNo: "",
       drawingNo: "",
       supplyPrice: null,
@@ -113,8 +118,37 @@ describe("폼 값 왕복", () => {
       owner: "KYOSAN",
     });
     assert.equal(back.supplyPrice, "");
+    assert.equal(back.customerName, "고객사 품명 A");
     assert.equal(back.quotePrice, "1200");
     assert.equal(back.supplyCurrency, "KRW");
+  });
+});
+
+describe("parseCustomerName (고객사 품명만 고치는 전용 길)", () => {
+  it("폼 전체 검사와 같은 규칙: 앞뒤 공백 정리, '-' 는 빈 값", () => {
+    const a = parseCustomerName(fd({ customerName: "  증폭기 조립품  " }));
+    assert.ok(a.ok);
+    assert.equal(a.value, "증폭기 조립품");
+
+    const b = parseCustomerName(fd({ customerName: " - " }));
+    assert.ok(b.ok);
+    assert.equal(b.value, "");
+  });
+
+  it("칸을 비우면 빈 값으로 지울 수 있다 (사람이 직접 고칠 때는 덮어쓴다)", () => {
+    const r = parseCustomerName(fd({ customerName: "" }));
+    assert.ok(r.ok);
+    assert.equal(r.value, "");
+    // 아예 안 보내도 빈 값
+    const none = parseCustomerName(fd({}));
+    assert.ok(none.ok);
+    assert.equal(none.value, "");
+  });
+
+  it("200자를 넘으면 한국어 오류", () => {
+    const r = parseCustomerName(fd({ customerName: "가".repeat(201) }));
+    assert.ok(!r.ok);
+    assert.match(r.errors, /고객사 품명/);
   });
 });
 
@@ -122,6 +156,7 @@ describe("diffPartInput", () => {
   const base: PartInput = {
     name: "A",
     name2: "",
+    customerName: "",
     kyosanPartNo: "",
     drawingNo: "D1",
     supplyPrice: 100,

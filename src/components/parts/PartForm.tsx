@@ -83,6 +83,11 @@ export function PartForm({ items, initial, partId, partNo, quantity }: PartFormP
             <Err msg={err.name2} />
           </label>
           <label className={LABEL}>
+            고객사 품명
+            <input name="customerName" className={`${INPUT} ${err.customerName ? INPUT_ERR : ""}`} value={v.customerName} onChange={set("customerName")} maxLength={200} placeholder="없으면 비움" />
+            <Err msg={err.customerName} />
+          </label>
+          <label className={LABEL}>
             교산 품번
             <input name="kyosanPartNo" className={`${INPUT} font-mono ${err.kyosanPartNo ? INPUT_ERR : ""}`} value={v.kyosanPartNo} onChange={set("kyosanPartNo")} maxLength={200} />
             <Err msg={err.kyosanPartNo} />
@@ -93,6 +98,7 @@ export function PartForm({ items, initial, partId, partNo, quantity }: PartFormP
             <Err msg={err.drawingNo} />
           </label>
         </div>
+        <p className="mt-2 text-xs text-zinc-500">고객사 품명은 고객사에 나가는 서류(견적서)에 쓰는 이름입니다. 우리 품명과 달라도 됩니다.</p>
       </section>
 
       <section className="rounded-lg border border-zinc-200 bg-white p-4">

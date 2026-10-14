@@ -19,7 +19,7 @@ export default async function NewPartPage() {
         partId={null}
         partNo={null}
         quantity={null}
-        initial={{ name: "", name2: "", kyosanPartNo: "", drawingNo: "", supplyPrice: "", supplyCurrency: "JPY", quotePrice: "", note: "", itemId: "", category: "RFG", owner: "DSS" }}
+        initial={{ name: "", name2: "", customerName: "", kyosanPartNo: "", drawingNo: "", supplyPrice: "", supplyCurrency: "JPY", quotePrice: "", note: "", itemId: "", category: "RFG", owner: "DSS" }}
       />
     </div>
   );

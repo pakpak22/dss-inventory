@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
+import { startTransition, useActionState, useEffect, useRef, useState } from "react";
+import { saveCustomerNameAction, type CustomerNameState } from "@/app/actions/parts";
 import { CATEGORY_LABEL, OWNER_LABEL, formatMoney, formatQuantity } from "@/lib/parts/codes";
 import type { LegacyHistoryLine, PartYearlyRow, ProductUse } from "@/lib/legacy/queries";
 import type { PartRow } from "@/lib/parts/types";
@@ -154,6 +156,14 @@ export function PartDetailDialog({ part, missingNo, canEdit, canRecord, detail, 
               <dt className="text-xs text-zinc-500">견적가</dt>
               <dd className="tabular">{formatMoney(part.quotePrice, "KRW")}</dd>
             </div>
+            {/* 고객사에 나가는 서류(견적서)에 쓰는 이름. 우리 품명과 다르다 — 길 수 있어 두 칸을 쓴다. */}
+            <div className="col-span-2 flex flex-col gap-0.5 sm:col-span-3 lg:col-span-2">
+              <dt className="text-xs text-zinc-500">고객사 품명</dt>
+              <dd>
+                {/* key: 다른 부품으로 갈아타면 고치던 중이던 상태·입력값을 버린다 */}
+                <CustomerNameField key={part.id} partId={part.id} value={part.customerName} canEdit={canRecord} />
+              </dd>
+            </div>
           </dl>
 
           <section className="flex flex-col gap-2">
@@ -244,6 +254,113 @@ export function PartDetailDialog({ part, missingNo, canEdit, canRecord, detail, 
         </div>
       )}
     </dialog>
+  );
+}
+
+/* ───────────── 고객사 품명 — 이 칸만 STAFF 이상이 그 자리에서 고친다 ───────────── */
+
+const SMALL_BTN = "rounded-md border border-zinc-300 px-2 py-0.5 text-xs text-zinc-700 hover:bg-zinc-100 disabled:opacity-50";
+const EMPTY_CUSTOMER_NAME_STATE: CustomerNameState = { error: null, saveCount: 0 };
+
+/**
+ * 고객사 품명만 고치는 자리 (2026-10-14 사용자 결정 (다)).
+ *
+ * 왜 [수정] 화면으로 안 보내는가: 그 화면은 **ADMIN 전용**이고 이 칸만 **STAFF 이상**이다.
+ * 부품 수정 전체의 가드를 내리면 품명·단가까지 열리므로, 이 칸만 고치는 길을 여기 따로 뒀다.
+ *
+ * 🔴 보이기 판정에 `canRecord`(= `roleAtLeast(role, "STAFF")`, `(app)/page.tsx`)를 **그대로 쓴다.**
+ *    문턱이 똑같고, 새 prop 을 내리려면 `PartsList` 를 고쳐야 하는데 그 파일은 조각 2 의 것이다.
+ *    🔴 이것은 **화면에 보일지**만 정한다 — 진짜 차단은 서버 액션의 `requireRole("STAFF")` 다 (CLAUDE.md 8-4절).
+ */
+function CustomerNameField({ partId, value, canEdit }: { partId: string; value: string; canEdit: boolean }) {
+  const router = useRouter();
+  const [state, formAction, pending] = useActionState<CustomerNameState, FormData>(saveCustomerNameAction, EMPTY_CUSTOMER_NAME_STATE);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+
+  // 저장이 끝나면 고치던 칸을 닫는다. 새 저장을 알아채는 열쇠는 saveCount (EntryForm.tsx 와 같은 꼴 —
+  // 효과 안에서 setState 하지 않고 **렌더 중에 상태를 맞춘다**. 효과로 하면 렌더가 한 번 더 돈다).
+  const [seenSaveCount, setSeenSaveCount] = useState(0);
+  if (state.saveCount !== seenSaveCount) {
+    setSeenSaveCount(state.saveCount);
+    setEditing(false);
+  }
+
+  // 🔴 함정: 그 자리에 남으면 **자료를 다시 읽어야** 방금 저장한 값이 보인다. 안 읽으면 상세·목록에 옛 값이 남는다
+  //    (조각 4 에서 같은 함정을 밟았다 — CLAUDE.md 「저장 뒤 그 자리에 남기」).
+  useEffect(() => {
+    if (seenSaveCount !== 0) router.refresh();
+  }, [seenSaveCount, router]);
+
+  // 🔴 <form action={formAction}> 로 보내면 React 19 가 끝난 뒤 폼을 초기화한다. 제출을 직접 다루면 초기화가 없다
+  //    (PartForm.tsx 에 적어 둔 같은 함정). 오류로 되돌아왔을 때 치던 글자가 사라지면 안 된다.
+  function onSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const data = new FormData(e.currentTarget);
+    startTransition(() => formAction(data));
+  }
+
+  if (!editing) {
+    return (
+      <span className="flex flex-wrap items-center gap-1.5">
+        <span>{value || <span className="text-zinc-400">-</span>}</span>
+        {canEdit ? (
+          <button
+            type="button"
+            className={SMALL_BTN}
+            onClick={() => {
+              setDraft(value);
+              setEditing(true);
+            }}
+            title="고객사에 나가는 서류(견적서)에 쓰는 이름입니다. 기록·관리자가 고칠 수 있습니다."
+          >
+            고치기
+          </button>
+        ) : null}
+        {state.error ? (
+          <span role="alert" className="text-xs text-red-600">
+            {state.error}
+          </span>
+        ) : null}
+      </span>
+    );
+  }
+
+  return (
+    <form onSubmit={onSubmit} className="flex flex-col gap-1">
+      <input type="hidden" name="id" value={partId} />
+      <span className="flex flex-wrap items-center gap-1.5">
+        <input
+          name="customerName"
+          aria-label="고객사 품명"
+          className="min-w-0 flex-1 rounded-md border border-zinc-200 bg-white px-2 py-1 text-sm text-zinc-900"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          maxLength={200}
+          placeholder="없으면 비움"
+          autoFocus
+        />
+        <button type="submit" className={SMALL_BTN} disabled={pending}>
+          {pending ? "저장 중" : "저장"}
+        </button>
+        <button
+          type="button"
+          className={SMALL_BTN}
+          disabled={pending}
+          onClick={() => {
+            setDraft(value);
+            setEditing(false);
+          }}
+        >
+          취소
+        </button>
+      </span>
+      {state.error ? (
+        <span role="alert" className="text-xs text-red-600">
+          {state.error}
+        </span>
+      ) : null}
+    </form>
   );
 }
 

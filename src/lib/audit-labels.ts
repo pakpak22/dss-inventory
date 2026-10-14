@@ -37,6 +37,7 @@ export function isAuditAction(v: unknown): v is AuditAction {
 export const PART_FIELD_LABEL: Record<string, string> = {
   name: "품명",
   name2: "품명2",
+  customerName: "고객사 품명",
   kyosanPartNo: "교산 품번",
   drawingNo: "도번",
   supplyPrice: "공급가",
