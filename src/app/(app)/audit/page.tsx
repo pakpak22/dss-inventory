@@ -125,6 +125,22 @@ function linesOf(row: AuditRow, entryNos: Map<string, string>): Line[] {
       { text: `원장에 적은 기록 ${count.toLocaleString("ko-KR")}건${nos.length > 0 ? `: ${nos.join(", ")}` : ""} · 자동 반영하지 않은 줄 ${skipped.toLocaleString("ko-KR")}줄` },
     ];
   }
+  // 승인 절차(결재선) — 🔴 판 자체가 이력이라 전용 이력 표가 없다. 그러니 이 줄만 읽고도
+  // 「누가 누구를 몇 번째에 세웠나」가 보여야 한다(2026-10-12 사용자 지적: JSON 그대로는 안 된다).
+  if (row.action === "APPROVAL_ROUTE_SAVED") {
+    const names = (v: unknown) => {
+      if (!Array.isArray(v) || v.length === 0) return "(없음 — 절차를 쓰지 않음)";
+      return (v as Array<{ stepOrder?: unknown; approverName?: unknown }>)
+        .map((s) => `${String(s.stepOrder ?? "")}. ${String(s.approverName ?? "")}`)
+        .join(" ▶ ");
+    };
+    // 용도는 「대상」 칸이 한글로 말한다(describeTarget) — 여기서 코드를 또 내보내지 않는다.
+    const prev = typeof d.previousVersion === "number" ? `${d.previousVersion}번째 판` : "첫 판";
+    return [
+      { text: `${prev} → ${String(d.version ?? "")}번째 판` },
+      { field: "승인 단계", before: names(d.previousSteps), after: names(d.steps) },
+    ];
+  }
   if (row.action === "WORKBOOK_IMPORT") {
     const legacy = (d.legacy ?? {}) as Record<string, unknown>;
     const n = (v: unknown) => (typeof v === "number" ? v.toLocaleString("ko-KR") : String(v ?? 0));

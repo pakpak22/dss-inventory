@@ -32,7 +32,9 @@ export type AuditAction =
   | "WORKBOOK_IMPORT"
   | "WORKBOOK_PARKED"
   | "WORKBOOK_RESUMED"
-  | "WORKBOOK_EXCEL_APPLIED";
+  | "WORKBOOK_EXCEL_APPLIED"
+  /** 승인 절차(결재선)에 판을 하나 얹었다 (조각 ③b). 판 자체가 이력이라 전용 이력 표를 두지 않는다. */
+  | "APPROVAL_ROUTE_SAVED";
 
 export interface AuditInput {
   action: AuditAction;

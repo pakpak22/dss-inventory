@@ -7,6 +7,7 @@ const ITEMS = [
   { key: "items", href: "/settings/items", label: "항목 관리" },
   { key: "transition", href: "/settings/transition", label: "전환일" },
   { key: "workbook", href: "/settings/workbook", label: "엑셀 상태" },
+  { key: "approval", href: "/settings/approval-routes", label: "승인 절차" },
 ] as const;
 
 export function SettingsNav({ current }: { current: (typeof ITEMS)[number]["key"] }) {

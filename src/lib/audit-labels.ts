@@ -1,3 +1,4 @@
+import { APPROVAL_ROUTE_SCOPE_LABELS, isApprovalRouteScope } from "./approval/route";
 import type { AuditAction } from "./audit";
 import { isEntryType, sheetNoText } from "./stock/codes";
 
@@ -31,6 +32,7 @@ export const AUDIT_ACTION_LABEL: Record<AuditAction, string> = {
   WORKBOOK_PARKED: "현황판 엑셀 멈춤(엑셀 수기입)",
   WORKBOOK_RESUMED: "현황판 엑셀 다시 쓰기 시작",
   WORKBOOK_EXCEL_APPLIED: "엑셀 기준 적용(수기입 파일 → 원장)",
+  APPROVAL_ROUTE_SAVED: "승인 절차 변경",
 };
 
 export const AUDIT_ACTIONS = Object.keys(AUDIT_ACTION_LABEL) as AuditAction[];
@@ -67,6 +69,11 @@ export function describeTarget(target: string | null): string {
   if (kind === "part_items") return `항목 ${rest ?? ""}`.trim();
   if (kind === "requests") return "확인 대기 신청";
   if (kind === "workbook") return "현황판 엑셀";
+  // "approval_routes:PART_ISSUE" → "승인 절차 · 부품 불출". 용도 이름표가 적힌 곳은 approval/route.ts 하나다.
+  if (kind === "approval_routes") {
+    const label = isApprovalRouteScope(rest) ? APPROVAL_ROUTE_SCOPE_LABELS[rest] : rest;
+    return label ? `승인 절차 · ${label}` : "승인 절차";
+  }
   // "entries:USE-2026-84" → "기록 사용 US-2026-84"
   if (kind === "entries" && rest) {
     const m = /^([A-Z]+)-(\d+)-(\d+)$/.exec(rest);
