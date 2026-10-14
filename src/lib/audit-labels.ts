@@ -33,6 +33,11 @@ export const AUDIT_ACTION_LABEL: Record<AuditAction, string> = {
   WORKBOOK_RESUMED: "현황판 엑셀 다시 쓰기 시작",
   WORKBOOK_EXCEL_APPLIED: "엑셀 기준 적용(수기입 파일 → 원장)",
   APPROVAL_ROUTE_SAVED: "승인 절차 변경",
+  OH_TEMPLATE_SAVED: "O/H 템플릿 저장",
+  OH_TEMPLATE_DELETED: "O/H 템플릿 삭제",
+  OH_TEMPLATE_MODEL_LINKED: "O/H 템플릿 모델 연결",
+  OH_TEMPLATE_MODEL_UNLINKED: "O/H 템플릿 모델 연결 해제",
+  OH_PRICE_SET: "O/H 단가 변경",
 };
 
 export const AUDIT_ACTIONS = Object.keys(AUDIT_ACTION_LABEL) as AuditAction[];
@@ -69,6 +74,8 @@ export function describeTarget(target: string | null): string {
   if (kind === "part_items") return `항목 ${rest ?? ""}`.trim();
   if (kind === "requests") return "확인 대기 신청";
   if (kind === "workbook") return "현황판 엑셀";
+  // "oh_templates:301" → "O/H 템플릿 301". 기종 코드가 사람이 읽는 이름이다.
+  if (kind === "oh_templates") return `O/H 템플릿 ${rest ?? ""}`.trim();
   // "approval_routes:PART_ISSUE" → "승인 절차 · 부품 불출". 용도 이름표가 적힌 곳은 approval/route.ts 하나다.
   if (kind === "approval_routes") {
     const label = isApprovalRouteScope(rest) ? APPROVAL_ROUTE_SCOPE_LABELS[rest] : rest;

@@ -55,7 +55,14 @@ function textOrEmpty(fd: FormLike, name: string): string {
   return DASH_ONLY.test(v) ? "" : v;
 }
 
-function price(raw: string): { ok: true; value: number | null } | { ok: false } {
+/**
+ * 금액 칸 한 벌의 규칙. 🔴 **빈 칸과 0 은 다르다** — 빈 칸은 `null`(모름·정하지 않음)이고 `0` 은 값이다.
+ *
+ * 🔵 내보내는 까닭(2026-10-15, 조각 8a): O/H 단가(`src/lib/oh/input.ts`)가 **같은 함수를 부른다.**
+ * 금액 규칙을 두 벌로 적으면 한쪽만 고쳐지는 날 견적가와 O/H 단가가 서로 다른 값을 받아들인다 —
+ * 둘 다 같은 견적서로 흘러가므로 어긋나도 눈에 띄지 않는다.
+ */
+export function parsePriceText(raw: string): { ok: true; value: number | null } | { ok: false } {
   if (raw === "") return { ok: true, value: null };
   const cleaned = raw.replace(/[,\s¥₩]/g, "");
   if (!/^\d+$/.test(cleaned)) return { ok: false };
@@ -83,13 +90,13 @@ export function parsePartForm(fd: FormLike, itemIds: ReadonlySet<string>): Parse
   const drawingNo = textOrEmpty(fd, "drawingNo");
   if (drawingNo.length > TEXT_MAX) errors.drawingNo = `도번은 ${TEXT_MAX}자 이하여야 합니다.`;
 
-  const supply = price(text(fd, "supplyPrice"));
+  const supply = parsePriceText(text(fd, "supplyPrice"));
   if (!supply.ok) errors.supplyPrice = "공급가는 0 이상의 정수로 입력하십시오.";
   const currencyRaw = text(fd, "supplyCurrency") || "JPY";
   const supplyCurrency = (CURRENCIES as readonly string[]).includes(currencyRaw) ? (currencyRaw as Currency) : null;
   if (!supplyCurrency) errors.supplyCurrency = "공급가 통화를 고르십시오.";
 
-  const quote = price(text(fd, "quotePrice"));
+  const quote = parsePriceText(text(fd, "quotePrice"));
   if (!quote.ok) errors.quotePrice = "견적가는 0 이상의 정수로 입력하십시오.";
 
   const note = textOrEmpty(fd, "note");

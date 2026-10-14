@@ -34,7 +34,20 @@ export type AuditAction =
   | "WORKBOOK_RESUMED"
   | "WORKBOOK_EXCEL_APPLIED"
   /** 승인 절차(결재선)에 판을 하나 얹었다 (조각 ③b). 판 자체가 이력이라 전용 이력 표를 두지 않는다. */
-  | "APPROVAL_ROUTE_SAVED";
+  | "APPROVAL_ROUTE_SAVED"
+  /**
+   * O/H 부품 템플릿 (조각 8a). 🔵 **마이그레이션이 필요 없다** — `audit_logs.action` 은 글자 칸이다.
+   * 🔴 여기와 `audit-labels.ts` **둘 다**에 적어야 한다(한쪽만 더하면 타입 검사가 잡아 준다).
+   *
+   * 저장은 등록·수정을 가르지 않는다 — 부품 줄을 통째로 갈아 끼우는 한 가지 일이고, 「처음인가」는
+   * detail 의 `created` 와 판 번호가 말해 준다.
+   */
+  | "OH_TEMPLATE_SAVED"
+  | "OH_TEMPLATE_DELETED"
+  | "OH_TEMPLATE_MODEL_LINKED"
+  | "OH_TEMPLATE_MODEL_UNLINKED"
+  /** 부품당 O/H 단가. 🔴 대상이 **부품**이라 부품 상세의 [변경 이력]에서 함께 보인다. */
+  | "OH_PRICE_SET";
 
 export interface AuditInput {
   action: AuditAction;

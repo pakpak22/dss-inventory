@@ -150,6 +150,54 @@ function linesOf(row: AuditRow, entryNos: Map<string, string>): Line[] {
       { text: `과거 기록: 확인 ${n(legacy.confirmed)} · 묶음 판정 ${n(legacy.groupDecided)} · 소유 불일치 ${n(legacy.ownerMismatch)} · 못 붙임 ${n(legacy.unmatched)}` },
     ];
   }
+  // O/H 부품 템플릿 (조각 8a) — 🔴 줄을 통째로 갈아 끼우는 저장이라, **이 줄만 읽고도 그때 무엇이
+  // 들어 있었는지** 보여야 한다. 지난 줄을 되찾을 다른 자리가 없다.
+  if (row.action === "OH_TEMPLATE_SAVED") {
+    const items = Array.isArray(d.items) ? (d.items as Array<{ displayOrder?: unknown; partNameText?: unknown; quantity?: unknown; linked?: unknown }>) : [];
+    const head = d.created
+      ? "새 템플릿"
+      : `${typeof d.previousVersion === "number" ? `${d.previousVersion}번째 판` : "이전 판"} → ${String(d.version ?? "")}번째 판`;
+    const lines: Line[] = [{ text: `${head} · 기종 ${String(d.code ?? "")} · ${String(d.name ?? "")}` }];
+    const previous = (d.previous ?? null) as { code?: unknown; name?: unknown } | null;
+    // 머리 칸이 바뀐 것만 앞·뒤로 보여 준다. 안 바뀐 칸까지 줄을 만들면 부품 목록이 묻힌다.
+    if (previous && String(previous.code ?? "") !== String(d.code ?? "")) {
+      lines.push({ field: "기종 코드", before: String(previous.code ?? ""), after: String(d.code ?? "") });
+    }
+    if (previous && String(previous.name ?? "") !== String(d.name ?? "")) {
+      lines.push({ field: "이름", before: String(previous.name ?? ""), after: String(d.name ?? "") });
+    }
+    lines.push({
+      text:
+        items.length === 0
+          ? "부품 0줄 (비어 있음)"
+          : `부품 ${items.length}줄: ${items
+              .map((i) => `${String(i.displayOrder ?? "")}. ${String(i.partNameText ?? "")} ${String(i.quantity ?? "")}개${i.linked ? "" : " (재고 미연결)"}`)
+              .join(" · ")}`,
+    });
+    return lines;
+  }
+  if (row.action === "OH_TEMPLATE_DELETED") {
+    return [
+      {
+        text: (
+          <>
+            기종 {String(d.code ?? "")} · {String(d.name ?? "")} <span className="text-zinc-500">사유</span> {String(d.reason ?? "")}
+          </>
+        ),
+      },
+    ];
+  }
+  if (row.action === "OH_TEMPLATE_MODEL_LINKED" || row.action === "OH_TEMPLATE_MODEL_UNLINKED") {
+    // 🔴 이름은 **그때 적어 둔 사본**이다. A/S 에서 이름이 바뀌어도 이 줄은 따라 바뀌지 않는다.
+    const linked = row.action === "OH_TEMPLATE_MODEL_LINKED";
+    return [{ text: `제품 모델 「${String(d.productModelName ?? "")}」 ${linked ? "연결" : "연결 해제"}` }];
+  }
+  if (row.action === "OH_PRICE_SET") {
+    // 🔴 「정하지 않음」과 「0원」을 **다르게** 적는다. 둘을 같은 글자로 보이면 나중에 「왜 견적서에
+    // 0원으로 나갔나」를 이력에서 가릴 수 없다(행이 없는 것과 0을 저장한 것은 다른 뜻이다).
+    const won = (v: unknown) => (typeof v === "number" ? `₩${v.toLocaleString("ko-KR")}` : "(정하지 않음)");
+    return [{ field: `O/H 단가 ${String(d.partName ?? "")}`, before: won(d.before), after: won(d.after) }];
+  }
   // 모르는 모양은 JSON 그대로 (숨기면 원인을 못 찾는다)
   return [{ text: <code className="font-mono text-xs break-all text-zinc-500">{JSON.stringify(d)}</code> }];
 }
