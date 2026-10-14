@@ -85,6 +85,13 @@
       "when": 1791988507662,
       "tag": "0011_nice_daimon_hellstrom",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1791990940529,
+      "tag": "0012_bored_earthquake",
+      "breakpoints": true
     }
   ]
 }
