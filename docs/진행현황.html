@@ -65,15 +65,30 @@
 <div class="card">
   <h2>지금 어디까지</h2>
 
-  <div class="legend">조각 10개 — 끝남 0 · 하는 중 1 · 남음 9</div>
+  <div class="legend">조각 10개 — <b>끝남 1</b> · 남음 9</div>
   <div class="bar">
-    <span class="now" style="flex:1">1</span>
+    <span class="done" style="flex:1">1</span>
     <span class="todo" style="flex:9">남은 9조각</span>
   </div>
 
+  <div class="note green">
+    <b>조각 1 끝남 (2026-10-14)</b> — 고객사 품명 칸 · 입력 폼 · 상세 창에서 그 자리 고치기 ·
+    변경 이력.<br>
+    개발 DB 에 적용 완료(마이그레이션 10) · 부품 83개 전부 빈 값으로 시작 ·
+    시험 276개 통과 · <b>엑셀 유출 0</b>.
+    <br>🔴 <b>운영에는 아직 안 나갔습니다</b> — 조각 2·3 과 함께 배포합니다.
+  </div>
+
   <div class="note blue">
-    <b>지금 하는 것 — 조각 1</b><br>
-    재고 관리에 <b>고객사 품명</b> 칸을 더하고 입력·상세·변경 이력에 싣습니다.
+    <b>다음 — 조각 2</b><br>
+    재고 현황 표에 열을 더하고(품명 왼쪽) 검색에 포함합니다.
+  </div>
+
+  <div class="note amber">
+    <b>조각 1 에서 알게 된 것</b> — 엑셀 변환 함수가 부품 타입을 <b>통째로 받고</b> 있었습니다.
+    값은 안 새지만 타입이 묶여 있어 칸을 더하자 바로 깨졌습니다.
+    받는 타입을 <b>열두 칸으로 좁혀</b> 고쳤고, 이제
+    「엑셀은 이 열두 칸만 받는다」가 <b>타입으로 못 박혀</b> 앞으로 칸이 늘어도 샐 길이 없습니다.
   </div>
 
   <div class="note green">
@@ -90,17 +105,17 @@
       <th style="width:42px">#</th><th>무엇</th>
       <th style="width:92px">어디</th><th style="width:78px">상태</th>
     </tr>
-    <tr class="is-now">
+    <tr class="is-done">
       <td><b>1</b></td>
       <td><b>고객사 품명</b> — 칸 추가 · 입력 폼 · 상세 창 · 변경 이력<br>
-        <span style="color:var(--red);font-size:13px">🔴 마이그레이션 0009 · 운영 배포 필요</span></td>
-      <td>재고 관리</td><td><span class="st now">하는 중</span></td>
+        <span style="color:var(--green);font-size:13px">✅ 개발 적용 완료(0009) · 권한은 (다) — 이 칸만 STAFF 이상</span></td>
+      <td>재고 관리</td><td><span class="st done">끝남</span></td>
     </tr>
-    <tr>
-      <td>2</td>
+    <tr class="is-now">
+      <td><b>2</b></td>
       <td>재고 현황 표에 <b>열 추가</b>(품명 왼쪽) + 검색에 포함<br>
-        <span style="color:var(--muted);font-size:13px">머리글과 본문을 <b>둘 다</b> 고쳐야 함 · 인쇄 화면도 따로</span></td>
-      <td>재고 관리</td><td><span class="st todo">남음</span></td>
+        <span style="color:var(--red);font-size:13px">🔴 머리글과 본문을 <b>둘 다</b> 고쳐야 함(본문은 배열을 안 쓰고 손으로 쓴 고정 순서) · 인쇄 화면도 따로</span></td>
+      <td>재고 관리</td><td><span class="st now">다음</span></td>
     </tr>
     <tr>
       <td>3</td>
