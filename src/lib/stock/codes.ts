@@ -49,6 +49,41 @@ export const PENDING_REQUEST_STATUSES = ["PENDING", "CONFIRMING", "PARTIAL"] as 
 /** 더 볼 일이 없는 것 — 신청한 사람에게 결과로만 보인다. 🔴 `PARTIAL` 은 여기 **없다**(위 주석). */
 export const DECIDED_REQUEST_STATUSES = ["CONFIRMED", "REJECTED", "CANCELLED"] as const satisfies readonly RequestStatus[];
 
+/**
+ * 담당자가 **집을 수 있는** 상태 — 아직 아무것도 안 나간 것(PENDING)과 일부만 나간 것(PARTIAL) (2026-10-14, 조각 4d).
+ *
+ * 🔴 **세는 묶음(`PENDING_REQUEST_STATUSES`)과 다른 것이다.** 거기엔 `CONFIRMING`(다른 담당자가 **지금** 집고 있는 것)이
+ *    들어 있는데, 그 신청에 [확인] 단추를 그리면 눌러도 집기에서 거절당한다. 「대기로 센다」와 「지금 집을 수 있다」는
+ *    뜻이 다르다 — 그래서 묶음을 둘로 둔다.
+ * 🔴 **화면과 서버가 이 한 벌을 같이 본다**(`src/lib/stock/requests.ts` 의 `claimRequest`,
+ *    `src/app/(app)/entries/page.tsx` 의 단추 그리기). 조각 4c 까지는 화면이 `status === "PENDING"` 만 보고 그려서
+ *    일부 나간 신청이 대기 목록에 **보이는데 누를 수 없었다** — 「보이는데 못 누르는 줄」이 생기는 자리다.
+ */
+export const CLAIMABLE_REQUEST_STATUSES = ["PENDING", "PARTIAL"] as const satisfies readonly RequestStatus[];
+export type ClaimableRequestStatus = (typeof CLAIMABLE_REQUEST_STATUSES)[number];
+
+/** 🔵 좁히는 검사다 — 화면이 단추 묶음에 넘기는 상태가 **둘 중 하나임을 타입이 보증**한다(그래서 거기서 「반려냐 마감이냐」를 가를 수 있다). */
+export function isClaimableRequest(status: RequestStatus): status is ClaimableRequestStatus {
+  return (CLAIMABLE_REQUEST_STATUSES as readonly RequestStatus[]).includes(status);
+}
+
+/**
+ * 마감된 신청인가 — 「준 것은 그대로 두고 **남은 것만** 접은」 것 (2026-10-14 사용자 결정, 조각 4d).
+ *
+ * 🔵 **상태를 새로 만들지 않았다.** 마감된 신청은 더 볼 일이 없으므로 기존 `CONFIRMED` 로 닫고(`DECIDED_REQUEST_STATUSES`),
+ *    「다 나감」과 「마감」은 **세어서** 가린다 — 회차 표 주석 3번(「남은 수량은 세어서 안다, 요약 칸을 일부러 안 뒀다」)과
+ *    같은 방식이다. 상태값을 더하면 enum 마이그레이션이 또 필요하고, 적용 전까지 단추가 깨진다.
+ * 🔴 **이력에서 반려와 가르는 것은 상태가 아니라 감사 행위다** — `STOCK_REQUEST_CLOSED`(반출 마감) ≠
+ *    `STOCK_REQUEST_REJECTED`(반출 반려). 반려는 「하나도 안 준다」, 마감은 「준 것은 두고 나머지만 접는다」이다.
+ * 🔴 **「나간 것이 하나라도 있을 것」을 함께 본다.** 회차 표가 생기기 전(조각 4a 이전)에 확인된 신청은 회차 줄이
+ *    하나도 없어 `issued` 가 전부 0 이다 — 그 조건이 없으면 **옛 신청이 전부 마감으로 보인다.**
+ *    마감은 `PARTIAL` 에서만 할 수 있고 `PARTIAL` 은 한 줄이라도 나가야 되는 상태라, 이 조건이 그 둘을 가른다.
+ */
+export function isClosedRequest(status: RequestStatus, lines: readonly { quantity: number; issued: number }[]): boolean {
+  if (status !== "CONFIRMED") return false;
+  return lines.some((l) => l.issued > 0) && lines.some((l) => l.issued < l.quantity);
+}
+
 export const PURPOSE_LABEL: Record<Purpose, string> = {
   REPAIR: "수리",
   FIELD: "필드",

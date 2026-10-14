@@ -99,6 +99,14 @@ function linesOf(row: AuditRow, entryNos: Map<string, string>): Line[] {
     return [{ text: head }, ...lines];
   }
   if (row.action === "INTAKE_VERIFIED") return [{ text: `${String(d.intakeNumber ?? "")} → ${String(d.productModel ?? "")}` }];
+  // 반출 마감 — 🔴 반려와 **다르게** 읽혀야 한다(2026-10-14, 조각 4d). 준 것과 안 준 것을 숫자로 적는다.
+  if (row.action === "STOCK_REQUEST_CLOSED") {
+    const n = (v: unknown) => (typeof v === "number" ? v.toLocaleString("ko-KR") : String(v ?? 0));
+    return [
+      { text: `${String(d.summary ?? "")} (신청자 ${String(d.requestedBy ?? "")})` },
+      { text: `요청 ${n(d.requested)}개 중 ${n(d.issued)}개를 내주고, 남은 ${n(d.remaining)}개는 주지 않는 것으로 마감 · 사유: ${String(d.note ?? "")}` },
+    ];
+  }
   if (row.action === "PART_ITEM_CREATE") return [{ text: String(d.name ?? "") }];
   if (row.action === "PART_ITEM_REORDER") return [{ text: `${d.direction === "up" ? "위로" : "아래로"} (${String(d.swappedWith ?? "")} 와 자리 바꿈)` }];
   if (row.action === "LOGIN") return [{ text: `역할 ${String(d.role ?? "")}` }];

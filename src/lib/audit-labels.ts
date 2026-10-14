@@ -22,6 +22,9 @@ export const AUDIT_ACTION_LABEL: Record<AuditAction, string> = {
   // 일부 수량만 내주고 요청이 열린 채 남은 회차 (2026-10-14, 조각 4b). 「확인」과 나눈 까닭: 이력에서
   // 「다 나갔다」와 「아직 남았다」가 구별되지 않으면 나중에 무엇이 왜 남았는지 따질 수 없다.
   STOCK_REQUEST_PARTIAL: "반출 일부 불출",
+  // 🔴 **반려와 다른 행위다** (2026-10-14 사용자 결정, 조각 4d). 반려는 「하나도 안 준다」, 마감은 「준 것은 그대로 두고
+  // 남은 것만 접는다」이다. 이력에서 둘이 같은 글자로 보이면 나중에 「3개는 줬는데 왜 반려지?」가 된다.
+  STOCK_REQUEST_CLOSED: "반출 마감(남은 수량 그만 주기)",
   STOCK_REQUEST_REJECTED: "반출 반려",
   STOCK_REQUEST_CANCELLED: "반출 신청 취소",
   WORKBOOK_IMPORT: "현황판 엑셀 가져오기",

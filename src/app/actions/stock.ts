@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { roleAtLeast } from "@/lib/auth/role";
 import { requireRole } from "@/lib/auth/session";
 import { ADMIN_ONLY_TYPES, needsConfirmation, sheetNoText, todaySeoul } from "@/lib/stock/codes";
-import { cancelRequest, confirmRequest, createRequest, rejectRequest } from "@/lib/stock/requests";
+import { cancelRequest, closeRequest, confirmRequest, createRequest, rejectRequest } from "@/lib/stock/requests";
 import { parseEntryForm, type EntryFieldErrors } from "@/lib/stock/form";
 import { parseIssueQuantities } from "@/lib/stock/issue";
 import { LOOKUP_MESSAGES, lookupIntake, type IntakeInfo } from "@/lib/stock/intake-lookup";
@@ -123,7 +123,8 @@ export interface RequestActionState {
 
 /**
  * 신청 확인 = 불출. 🔵 줄별 「이번에 줄 수량」을 **받을 자리**가 있다 (2026-10-14, 조각 4b).
- * 화면은 조각 4d 라 지금은 아무것도 안 보내고, 안 보내면 **남은 수량 전부**라 기존 동작과 같다.
+ * 🔵 조각 4d 에서 화면이 그 자리를 쓴다 — 다만 **칸을 다 비우면 아무것도 안 보낸다.**
+ *    안 보내면 `quantities` 가 `null` 이라 **남은 수량 전부**이고, 그것이 조각 4b 까지의 동작 그대로다.
  */
 export async function confirmRequestAction(_prev: RequestActionState, formData: FormData): Promise<RequestActionState> {
   const session = await requireRole("ADMIN", "/entries");
@@ -147,7 +148,34 @@ export async function confirmRequestAction(_prev: RequestActionState, formData: 
   revalidatePath("/entries");
   revalidatePath("/", "layout");
   const flag = r.result.intakeUnverified ? "&unverified=1" : "";
-  redirect(`/entries?saved=${sheetNoText(r.result.type, r.result.sheetYear, r.result.sheetNo)}&type=${r.result.type}${flag}`);
+  // 🔵 아직 남은 수량이 있으면 화면이 「신청은 확인 대기에 그대로 남아 있다」를 말해 준다 (조각 4d).
+  const left = r.done ? "" : `&remaining=${r.remaining}`;
+  redirect(`/entries?saved=${sheetNoText(r.result.type, r.result.sheetYear, r.result.sheetNo)}&type=${r.result.type}${flag}${left}`);
+}
+
+/**
+ * 마감 = 「남은 것 그만 주기」 (2026-10-14 사용자 결정, 조각 4d). 🔴 **반려가 아니다** — 이미 나간 수량은 그대로 두고
+ * 남은 수량만 접는다. 그래서 사유를 꼭 받는다(반려와 같은 관례).
+ */
+export async function closeRequestAction(_prev: RequestActionState, formData: FormData): Promise<RequestActionState> {
+  const session = await requireRole("ADMIN", "/entries");
+  const id = String(formData.get("requestId") ?? "");
+  const note = String(formData.get("note") ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!id) return { error: "신청이 정해지지 않았습니다." };
+  if (note.length < 2) return { error: "마감 사유를 적으십시오." };
+  let r;
+  try {
+    r = await closeRequest(id, note, { id: session.user.id, name: session.user.name });
+  } catch (e) {
+    console.error("[stock] 마감 실패:", e instanceof Error ? e.message : e);
+    return { error: "마감하지 못했습니다. 잠시 뒤 다시 시도하십시오." };
+  }
+  if (!r.ok) return { error: r.message ?? "마감하지 못했습니다." };
+  revalidatePath("/entries");
+  revalidatePath("/", "layout");
+  redirect("/entries?closed=1");
 }
 
 export async function rejectRequestAction(_prev: RequestActionState, formData: FormData): Promise<RequestActionState> {

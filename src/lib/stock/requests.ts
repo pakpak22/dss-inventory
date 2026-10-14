@@ -6,7 +6,7 @@ import { parts } from "@/db/schema/parts";
 import { stockTransactions } from "@/db/schema/stock";
 import { stockRequestIssues, stockRequests, type RequestStatus } from "@/db/schema/stock-requests";
 import { auditValues } from "@/lib/audit";
-import { DECIDED_REQUEST_STATUSES, ENTRY_TYPE_LABEL, PENDING_REQUEST_STATUSES, type EntryType } from "./codes";
+import { CLAIMABLE_REQUEST_STATUSES, DECIDED_REQUEST_STATUSES, ENTRY_TYPE_LABEL, PENDING_REQUEST_STATUSES, isClosedRequest, type EntryType } from "./codes";
 import type { EntryInput } from "./form";
 import { buildIssueInput, type IssueQuantity } from "./issue";
 import { LedgerAbort, ledgerErrorMessage, recordEntryIn, type Actor, type RecordResult } from "./ledger";
@@ -27,12 +27,20 @@ import { LedgerAbort, ledgerErrorMessage, recordEntryIn, type Actor, type Record
  *     피하는 자리다. 끊어진 자리는 회차 표(`stock_request_issues`)가 대신 잇는다 (그 표의 주석 1번).
  *   - 🔵 상태를 **세는** 쪽(대기 목록·배지·알림 종)은 조각 4c 에서 맞췄다 — `PARTIAL` 은 **대기**로 센다.
  *     가르는 글자는 `./codes` 의 `PENDING_REQUEST_STATUSES`·`DECIDED_REQUEST_STATUSES` 한 벌뿐이다.
+ *   - 🔵 **마감 (2026-10-14, 조각 4d)**: 일부 나간 신청의 **남은 것만** 접는 `closeRequest`. 🔴 반려가 아니다 —
+ *     아래 그 함수의 주석.
  */
 export interface RequestLineView {
   partId: string;
   partNo: number | null;
   partName: string;
+  /** 신청한 수량 */
   quantity: number;
+  /**
+   * 이 신청에서 그 부품이 **이미 나간 수량** (2026-10-14, 조각 4d). 회차 표에 달린 원장 줄을 세어서 온다.
+   * 🔵 화면이 「요청 8 중 5 나감 · 3 남음」을 그리고, [확인] 상자의 「이번에 줄 수량」 기본값(= 남은 수량)이 여기서 나온다.
+   */
+  issued: number;
 }
 
 export interface PendingRequestRow {
@@ -47,6 +55,11 @@ export interface PendingRequestRow {
   reason: string;
   note: string;
   lines: RequestLineView[];
+  /**
+   * 마감된 신청인가 — 「준 것은 두고 남은 것만 접은」 것 (2026-10-14, 조각 4d).
+   * 🔵 상태값이 아니라 **세어서** 안다. 가르는 규칙이 적힌 곳은 `./codes` 의 `isClosedRequest` 하나뿐이다.
+   */
+  closed: boolean;
   requestedBy: string;
   requestedByName: string;
   requestedAt: string;
@@ -126,9 +139,6 @@ export interface ConfirmOptions {
   note?: string;
 }
 
-/** 집을 수 있는 상태 — 아직 아무것도 안 나간 것(PENDING)과 일부만 나간 것(PARTIAL). */
-const CLAIMABLE_STATUSES = ["PENDING", "PARTIAL"] as const satisfies readonly RequestStatus[];
-
 /**
  * 집기 — 한 사람만 들어가게 CONFIRMING 으로 먼저 바꾼다.
  *
@@ -137,7 +147,8 @@ const CLAIMABLE_STATUSES = ["PENDING", "PARTIAL"] as const satisfies readonly Re
  *    첫 번째 시도가 거의 언제나 맞는다(PENDING).
  */
 async function claimRequest(id: string): Promise<{ row: typeof stockRequests.$inferSelect; previousStatus: RequestStatus } | null> {
-  for (const previousStatus of CLAIMABLE_STATUSES) {
+  // 🔵 집을 수 있는 상태의 한 벌은 `./codes` 에 있다 — 화면의 [확인] 단추도 **같은 것**을 본다(조각 4d).
+  for (const previousStatus of CLAIMABLE_REQUEST_STATUSES) {
     const [row] = await db()
       .update(stockRequests)
       .set({ status: "CONFIRMING" })
@@ -157,13 +168,31 @@ async function claimRequest(id: string): Promise<{ row: typeof stockRequests.$in
  *    모자라게 주는 쪽(보수적)이라 재고가 어긋나지는 않는다. 화면에 어떻게 보일지는 조각 4c·4d 에서 정한다.
  */
 async function issuedQuantities(requestId: string): Promise<Map<string, number>> {
+  return (await issuedQuantitiesOf([requestId])).get(requestId) ?? new Map();
+}
+
+/**
+ * 여러 신청의 「이미 나간 수량」을 **한 번에** (2026-10-14, 조각 4d — 목록이 줄마다 「요청 8 중 5 나감」을 그린다).
+ *
+ * 🔴 신청마다 한 번씩 물으면 대기 10건이 질의 10번이 된다. 화면은 목록을 통째로 그리므로 신청 묶음으로 한 번만 묻는다
+ *    (회차 표 주석 3번의 「느려지면 그때 요약 칸」 — 그 전에 할 수 있는 것이 이것이다).
+ */
+async function issuedQuantitiesOf(requestIds: readonly string[]): Promise<Map<string, Map<string, number>>> {
+  const ids = [...new Set(requestIds)];
+  const out = new Map<string, Map<string, number>>();
+  if (ids.length === 0) return out;
   const rows = await db()
-    .select({ partId: stockTransactions.partId, out: sql<number>`coalesce(sum(-${stockTransactions.delta}), 0)`.mapWith(Number) })
+    .select({ requestId: stockRequestIssues.requestId, partId: stockTransactions.partId, out: sql<number>`coalesce(sum(-${stockTransactions.delta}), 0)`.mapWith(Number) })
     .from(stockRequestIssues)
     .innerJoin(stockTransactions, eq(stockTransactions.entryId, stockRequestIssues.entryId))
-    .where(eq(stockRequestIssues.requestId, requestId))
-    .groupBy(stockTransactions.partId);
-  return new Map(rows.map((r) => [r.partId, r.out]));
+    .where(inArray(stockRequestIssues.requestId, ids))
+    .groupBy(stockRequestIssues.requestId, stockTransactions.partId);
+  for (const r of rows) {
+    const m = out.get(r.requestId) ?? new Map<string, number>();
+    m.set(r.partId, r.out);
+    out.set(r.requestId, m);
+  }
+  return out;
 }
 
 /**
@@ -277,6 +306,44 @@ export async function rejectRequest(id: string, note: string, admin: Actor): Pro
   return { ok: true };
 }
 
+/**
+ * 마감 — **남은 것은 그만 주기** (2026-10-14 사용자 결정, 조각 4d).
+ *
+ * 🔴 **반려와 다르다.** 반려는 「하나도 안 준다」라서 아직 아무것도 안 나간 신청(PENDING)만 받고,
+ *    마감은 「준 것은 그대로 두고 **나머지만** 접는다」라서 **일부 나간 신청(PARTIAL)만** 받는다.
+ *    이미 나간 회차와 그 원장 건은 **하나도 건드리지 않는다** — 수량은 1 개도 움직이지 않는다.
+ * 🔴 상태는 `CONFIRMED`(더 볼 일 없음)로 닫는다. 「다 나감」과 「마감」을 가르는 자리는 `./codes` 의 `isClosedRequest`
+ *    하나뿐이고, **이력에서는 감사 행위**(`STOCK_REQUEST_CLOSED` = 「반출 마감」)가 반려와 가른다 — 나중에
+ *    「3개는 줬는데 왜 반려지?」가 되지 않게.
+ * 🔵 모양은 `rejectRequest` 를 그대로 따른다: 상태를 조건으로 건 UPDATE 한 번(두 담당자가 동시에 눌러도 한 번만),
+ *    그다음 감사 로그. 감사 로그가 실패해도 마감 자체는 되돌리지 않는다(반려와 같은 관례).
+ */
+export async function closeRequest(id: string, note: string, admin: Actor): Promise<{ ok: boolean; message?: string }> {
+  const now = new Date();
+  const [row] = await db()
+    .update(stockRequests)
+    .set({ status: "CONFIRMED", decidedBy: admin.id, decidedByName: admin.name, decidedAt: now, decisionNote: note })
+    .where(and(eq(stockRequests.id, id), eq(stockRequests.status, "PARTIAL")))
+    .returning({ summary: stockRequests.summary, requestedByName: stockRequests.requestedByName, payload: stockRequests.payload });
+  if (!row) return { ok: false, message: "마감할 수 없는 신청입니다. 일부라도 내준 신청만 마감할 수 있습니다. 화면을 새로 고치고 다시 보십시오." };
+
+  // 이력에 숫자를 남긴다 — 「요청 8 중 5 나감, 3 남음을 마감」이 나중에 읽혀야 한다. 회차 줄은 마감으로 바뀌지 않으므로 지금 세도 같다.
+  const issued = await issuedQuantities(id);
+  const lines = linesOf(row.payload as unknown as EntryInput);
+  const requested = lines.reduce((a, l) => a + l.quantity, 0);
+  const out = lines.reduce((a, l) => a + Math.min(l.quantity, issued.get(l.partId) ?? 0), 0);
+  await db().insert(auditLogs).values(
+    auditValues({
+      action: "STOCK_REQUEST_CLOSED",
+      actorId: admin.id,
+      actorName: admin.name,
+      target: `requests:${id}`,
+      detail: { summary: row.summary, requestedBy: row.requestedByName, requested, issued: out, remaining: requested - out, note },
+    }),
+  );
+  return { ok: true };
+}
+
 /** 신청한 사람 본인이 아직 PENDING 인 것만 거둔다. */
 export async function cancelRequest(id: string, actor: Actor): Promise<{ ok: boolean; message?: string }> {
   const now = new Date();
@@ -290,11 +357,11 @@ export async function cancelRequest(id: string, actor: Actor): Promise<{ ok: boo
   return { ok: true };
 }
 
-function toRow(r: typeof stockRequests.$inferSelect, names: ReadonlyMap<string, { no: number; name: string }>): PendingRequestRow {
+function toRow(r: typeof stockRequests.$inferSelect, names: ReadonlyMap<string, { no: number; name: string }>, issued: ReadonlyMap<string, number>): PendingRequestRow {
   const input = r.payload as unknown as EntryInput;
   const lines = linesOf(input).map((l) => {
     const p = names.get(l.partId);
-    return { partId: l.partId, partNo: p?.no ?? null, partName: p?.name ?? "(지워진 부품)", quantity: l.quantity };
+    return { partId: l.partId, partNo: p?.no ?? null, partName: p?.name ?? "(지워진 부품)", quantity: l.quantity, issued: issued.get(l.partId) ?? 0 };
   });
   return {
     id: r.id,
@@ -308,6 +375,7 @@ function toRow(r: typeof stockRequests.$inferSelect, names: ReadonlyMap<string, 
     reason: "reason" in input ? input.reason : "",
     note: input.note,
     lines,
+    closed: isClosedRequest(r.status, lines),
     requestedBy: r.requestedBy,
     requestedByName: r.requestedByName,
     requestedAt: r.requestedAt.toISOString(),
@@ -335,6 +403,7 @@ export async function listPendingRequests(): Promise<PendingRequestRow[]> {
 /**
  * 최근 처리된 것(반려·취소·확인) — 신청한 사람이 결과를 볼 수 있게.
  *
+ * 🔵 **마감된 신청도 여기 온다** — 상태가 `CONFIRMED` 라서다(조각 4d). 화면은 `closed` 칸으로 「마감」이라 적는다.
  * 🔴 `PARTIAL` 은 여기 **없다.** 아직 끝나지 않아 위의 대기 목록에 있다 — 양쪽에 넣으면 같은 신청이 두 번 보인다.
  *    `decidedAt` 역순으로 세우는데 PARTIAL 은 그 칸이 비어 있기도 하다(confirmRequest: decided* 는 끝났을 때만 적는다).
  */
@@ -349,8 +418,9 @@ export async function listRecentDecidedRequests(limit = 10): Promise<PendingRequ
 }
 
 async function attachNames(rows: Array<typeof stockRequests.$inferSelect>): Promise<PendingRequestRow[]> {
-  const names = await partNamesOf(rows.flatMap((r) => linesOf(r.payload as unknown as EntryInput).map((l) => l.partId)));
-  return rows.map((r) => toRow(r, names));
+  // 🔵 이름과 「이미 나간 수량」을 각각 **한 번씩**만 묻는다(신청 수와 무관하게 질의 둘).
+  const [names, issued] = await Promise.all([partNamesOf(rows.flatMap((r) => linesOf(r.payload as unknown as EntryInput).map((l) => l.partId))), issuedQuantitiesOf(rows.map((r) => r.id))]);
+  return rows.map((r) => toRow(r, names, issued.get(r.id) ?? new Map()));
 }
 
 /** 머리말의 「대기 N」 배지. 🔴 아래 `summarizePendingRequests()`(알림 종)와 **같은 묶음**을 본다 — 둘이 갈리면 「배지에는 있는데 종에는 없는」 신청이 생긴다. */

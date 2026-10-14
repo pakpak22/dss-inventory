@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { REQUEST_STATUSES } from "../src/db/schema/stock-requests";
-import { CONFIRMATION_TYPES, DECIDED_REQUEST_STATUSES, ENTRY_TYPES, PENDING_REQUEST_STATUSES, needsConfirmation } from "../src/lib/stock/codes";
+import { CLAIMABLE_REQUEST_STATUSES, CONFIRMATION_TYPES, DECIDED_REQUEST_STATUSES, ENTRY_TYPES, PENDING_REQUEST_STATUSES, isClaimableRequest, isClosedRequest, needsConfirmation } from "../src/lib/stock/codes";
 
 describe("담당자 확인 단계 (2026-10-06)", () => {
   it("반출 계열(사용·대여·폐기)만 확인을 거친다", () => {
@@ -44,5 +44,65 @@ describe("반출 신청을 세는 쪽 — 어느 상태를 대기로 보나 (202
     const counted = [...PENDING_REQUEST_STATUSES, ...DECIDED_REQUEST_STATUSES];
     assert.deepEqual(counted.slice().sort(), [...REQUEST_STATUSES].sort(), "상태를 더했으면 둘 중 한 묶음에도 넣어야 한다");
     assert.equal(new Set(counted).size, counted.length, "한 상태가 양쪽에 들어가면 같은 신청이 두 목록에 보인다");
+  });
+});
+
+/**
+ * 화면이 [확인] 단추를 그리는 자리 (2026-10-14, 조각 4d).
+ *
+ * 🔴 조각 4c 까지는 화면이 `status === "PENDING"` 만 보고 그려서 **일부 나간 신청이 보이는데 누를 수 없었다.**
+ *    세는 묶음을 그대로 쓰면 이번엔 거꾸로 「처리 중」에도 단추가 생겨 눌러도 거절당한다 — 그래서 묶음이 따로 있다.
+ */
+describe("집을 수 있는 상태 — [확인] 단추를 어디에 그리나 (2026-10-14, 조각 4d)", () => {
+  it("일부 나간 것(PARTIAL)도 다시 집는다 — 「보이는데 못 누르는」 줄이 없게", () => {
+    assert.deepEqual([...CLAIMABLE_REQUEST_STATUSES].sort(), ["PARTIAL", "PENDING"]);
+    assert.equal(isClaimableRequest("PARTIAL"), true);
+    assert.equal(isClaimableRequest("PENDING"), true);
+  });
+
+  it("🔴 처리 중(CONFIRMING)에는 안 그린다 — 대기로는 세지만 지금 집을 수는 없다", () => {
+    assert.equal(isClaimableRequest("CONFIRMING"), false);
+    assert.ok(PENDING_REQUEST_STATUSES.includes("CONFIRMING"), "세는 묶음에는 들어 있다 — 두 묶음은 뜻이 다르다");
+  });
+
+  it("결정된 것에는 안 그린다", () => {
+    for (const s of DECIDED_REQUEST_STATUSES) assert.equal(isClaimableRequest(s), false, s);
+  });
+
+  it("집을 수 있는 것은 전부 대기로 센다 (대기 목록에 없으면 단추를 띄울 자리도 없다)", () => {
+    for (const s of CLAIMABLE_REQUEST_STATUSES) assert.ok((PENDING_REQUEST_STATUSES as readonly string[]).includes(s), s);
+  });
+});
+
+/**
+ * 마감 — 「준 것은 그대로 두고 남은 것만 접는다」 (2026-10-14 사용자 결정, 조각 4d).
+ *
+ * 🔴 상태값을 새로 만들지 않고 **세어서** 가린다. 그래서 이 시험이 그 규칙의 울타리다.
+ */
+describe("마감된 신청 가리기 — isClosedRequest (2026-10-14, 조각 4d)", () => {
+  const line = (quantity: number, issued: number) => ({ quantity, issued });
+
+  it("일부만 나간 채 닫힌 것이 마감이다", () => {
+    assert.equal(isClosedRequest("CONFIRMED", [line(8, 5)]), true);
+    assert.equal(isClosedRequest("CONFIRMED", [line(5, 5), line(3, 0)]), true, "한 줄은 다 나가고 한 줄은 하나도 안 나간 것도 마감");
+  });
+
+  it("다 나간 것은 마감이 아니다 — 그냥 확인이다", () => {
+    assert.equal(isClosedRequest("CONFIRMED", [line(8, 8), line(2, 2)]), false);
+  });
+
+  it("🔴 회차 표가 생기기 전(조각 4a 이전)에 확인된 신청은 마감이 아니다 — 나간 수량이 0 으로 보인다", () => {
+    assert.equal(isClosedRequest("CONFIRMED", [line(8, 0), line(2, 0)]), false, "이것까지 마감으로 세면 옛 신청이 전부 마감으로 보인다");
+  });
+
+  it("아직 안 끝난 것·반려·취소는 마감이 아니다", () => {
+    assert.equal(isClosedRequest("PARTIAL", [line(8, 5)]), false, "열려 있으면 아직 마감이 아니다");
+    assert.equal(isClosedRequest("PENDING", [line(8, 0)]), false);
+    assert.equal(isClosedRequest("REJECTED", [line(8, 0)]), false);
+    assert.equal(isClosedRequest("CANCELLED", [line(8, 0)]), false);
+  });
+
+  it("줄이 없는 신청(조정·소유 옮김)은 마감일 수 없다", () => {
+    assert.equal(isClosedRequest("CONFIRMED", []), false);
   });
 });
