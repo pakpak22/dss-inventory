@@ -307,6 +307,8 @@ export default async function EntriesPage({ searchParams }: { searchParams: Prom
                           <th className={TH}>날짜</th>
                           {sheet === "USE" ? <th className={TH}>인수번호</th> : null}
                           {sheet === "CHANGE" ? <th className={TH}>종류</th> : null}
+                          {/* 🔴 머리글을 고치면 아래 본문 <td> 도 같은 자리에 함께 고친다. 자리는 재고 현황 표와 같게 품명 왼쪽. */}
+                          <th className={TH}>고객사 품명</th>
                           <th className={TH}>품명</th>
                           <th className={TH}>품명2</th>
                           <th className={TH}>도번</th>
@@ -331,6 +333,10 @@ export default async function EntriesPage({ searchParams }: { searchParams: Prom
                             <td className={`${TD} tabular whitespace-nowrap`}>{e.occurredOn}</td>
                             {sheet === "USE" ? <td className={`${TD} font-mono whitespace-nowrap`}>{e.noRepairCase ? "-" : e.intakeNumber}</td> : null}
                             {sheet === "CHANGE" ? <td className={`${TD} whitespace-nowrap`}>{ENTRY_TYPE_LABEL[e.type]}</td> : null}
+                            {/* 고객사 품명 — 머리글과 짝. 비면 품명2·도번처럼 `-`. 아주 긴 이름이 와도 이미 넓은 이 표가 더 밀리지 않게 상한을 두고 넘치면 …(전체는 마우스로). */}
+                            <td className={TD} title={l.partCustomerName}>
+                              <span className="block max-w-48 truncate">{l.partCustomerName || "-"}</span>
+                            </td>
                             <td className={`${TD} font-medium whitespace-nowrap text-zinc-900`}>
                               <Link href={`/?part=${l.partNo}`} className="underline decoration-zinc-300">
                                 <span className="font-normal text-zinc-500">No. {l.partNo}</span> {l.partName}

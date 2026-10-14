@@ -11,6 +11,8 @@ export interface EntryLineRow {
   id: string;
   partId: string;
   partNo: number;
+  /** 부품의 「고객사 품명」(`parts.customer_name`). 🔴 아래 EntryRow 의 `customerName` — 그 건의 **고객사 이름**(`stock_entries.customer_name`) — 과 다른 것이다. */
+  partCustomerName: string;
   partName: string;
   partName2: string;
   partDrawingNo: string;
@@ -62,6 +64,7 @@ async function linesFor(entryIds: string[]): Promise<Map<string, EntryLineRow[]>
       entryId: stockTransactions.entryId,
       partId: stockTransactions.partId,
       partNo: parts.no,
+      partCustomerName: parts.customerName, // 부품의 고객사 품명. 그 건의 고객사 이름(stockEntries.customerName)과 다른 칸이다.
       partName: parts.name,
       partName2: parts.name2,
       partDrawingNo: parts.drawingNo,

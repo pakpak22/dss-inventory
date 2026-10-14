@@ -21,9 +21,13 @@ export function CorrectButton({ transactionId, label }: { transactionId: string;
       <button type="button" className={BTN_SMALL} onClick={() => setOpen(true)}>
         기록 취소
       </button>
+      {/* 🔴 이 팝업은 기록 내역 표의 `whitespace-nowrap text-right` 가 걸린 <td> **안에서** 태어난다.
+          모달이라 화면 맨 위에 떠 보여도 CSS 는 DOM 부모를 따라 물려받으므로, 그대로 두면 설명 글이
+          줄바꿈 없이 한 줄로 쭉 나가 팝업 밖으로 넘치고(가로 스크롤) 글자가 오른쪽으로 붙는다.
+          그래서 여기서 **끊어 준다** — 글 내용을 줄이지 않고 푸는 자리가 여기다. */}
       <dialog
         ref={ref}
-        className="w-full max-w-lg rounded-lg border border-zinc-200 bg-white p-4 text-zinc-900 backdrop:bg-black/40"
+        className="w-full max-w-lg rounded-lg border border-zinc-200 bg-white p-4 text-left whitespace-normal break-words text-zinc-900 backdrop:bg-black/40"
         onCancel={(e) => {
           e.preventDefault();
           setOpen(false);
