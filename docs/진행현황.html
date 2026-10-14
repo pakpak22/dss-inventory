@@ -65,23 +65,26 @@
 <div class="card">
   <h2>지금 어디까지</h2>
 
-  <div class="legend">조각 10개 — <b>끝남 1</b> · 남음 9</div>
+  <div class="legend">조각 10개 — <b>끝남 2</b> · 남음 8</div>
   <div class="bar">
-    <span class="done" style="flex:1">1</span>
-    <span class="todo" style="flex:9">남은 9조각</span>
+    <span class="done" style="flex:2">1 · 2</span>
+    <span class="todo" style="flex:8">남은 8조각</span>
   </div>
 
   <div class="note green">
-    <b>조각 1 끝남 (2026-10-14)</b> — 고객사 품명 칸 · 입력 폼 · 상세 창에서 그 자리 고치기 ·
-    변경 이력.<br>
-    개발 DB 에 적용 완료(마이그레이션 10) · 부품 83개 전부 빈 값으로 시작 ·
+    <b>조각 1·2 끝남 (2026-10-14)</b><br>
+    <b>1</b> — 고객사 품명 칸 · 입력 폼 · 상세 창에서 그 자리 고치기 · 변경 이력.
+    개발 DB 적용 완료(마이그레이션 10) · 부품 83개 전부 빈 값으로 시작.<br>
+    <b>2</b> — 재고 현황 표에 열(품명 왼쪽) · 찾을 곳 · 정렬 · 인쇄 표 ·
+    <b>기록 내역에서도 찾기</b>.<br>
     시험 276개 통과 · <b>엑셀 유출 0</b>.
-    <br>🔴 <b>운영에는 아직 안 나갔습니다</b> — 조각 2·3 과 함께 배포합니다.
+    <br>🔴 <b>운영에는 아직 안 나갔습니다</b> — 조각 3 과 함께 배포합니다.
   </div>
 
   <div class="note blue">
-    <b>다음 — 조각 2</b><br>
-    재고 현황 표에 열을 더하고(품명 왼쪽) 검색에 포함합니다.
+    <b>다음 — 조각 3</b><br>
+    부품 조회 API 에 고객사 품명을 싣고 <b>운영 토큰</b>을 발급합니다.
+    여기까지가 재고 관리 안에서 완결되는 묶음이고, <b>운영 배포는 이 셋을 한 번에</b> 합니다.
   </div>
 
   <div class="note amber">
@@ -89,6 +92,19 @@
     값은 안 새지만 타입이 묶여 있어 칸을 더하자 바로 깨졌습니다.
     받는 타입을 <b>열두 칸으로 좁혀</b> 고쳤고, 이제
     「엑셀은 이 열두 칸만 받는다」가 <b>타입으로 못 박혀</b> 앞으로 칸이 늘어도 샐 길이 없습니다.
+  </div>
+
+  <div class="note red">
+    <b>조각 2 에서 알게 된 것 — 이름이 겹칩니다</b><br>
+    기록 내역에 <b>이미 <code>customer_name</code> 이 있었습니다.</b> 전혀 다른 것입니다.
+    <table style="margin-top:8px">
+      <tr><th style="width:230px">출납 건의 <code>customer_name</code></th>
+          <td>그 건의 <b>고객사 이름</b> — A/S 에서 인수번호로 가져온 것</td></tr>
+      <tr><th>부품의 <code>customer_name</code></th>
+          <td><b>고객사 품명</b> — 이번에 더한 것</td></tr>
+    </table>
+    주석 둘 · 시험 한 줄로 갈라 두었고, 화면의 「고객명」을 <b>「고객사 이름」</b>으로 바꿔
+    사람 눈에도 갈리게 했습니다.
   </div>
 
   <div class="note green">
@@ -111,16 +127,17 @@
         <span style="color:var(--green);font-size:13px">✅ 개발 적용 완료(0009) · 권한은 (다) — 이 칸만 STAFF 이상</span></td>
       <td>재고 관리</td><td><span class="st done">끝남</span></td>
     </tr>
-    <tr class="is-now">
+    <tr class="is-done">
       <td><b>2</b></td>
-      <td>재고 현황 표에 <b>열 추가</b>(품명 왼쪽) + 검색에 포함<br>
-        <span style="color:var(--red);font-size:13px">🔴 머리글과 본문을 <b>둘 다</b> 고쳐야 함(본문은 배열을 안 쓰고 손으로 쓴 고정 순서) · 인쇄 화면도 따로</span></td>
-      <td>재고 관리</td><td><span class="st now">다음</span></td>
+      <td>재고 현황 표에 <b>열 추가</b>(품명 왼쪽) + 찾을 곳 · 정렬 · 인쇄 · <b>기록 내역 찾기</b><br>
+        <span style="color:var(--green);font-size:13px">✅ 머리글·본문 둘 다 · 한 줄 고정(224px 상한, 넘치면 … + 마우스로 전체)</span></td>
+      <td>재고 관리</td><td><span class="st done">끝남</span></td>
     </tr>
-    <tr>
-      <td>3</td>
-      <td>부품 조회 API 에 고객사 품명 싣기 + <b>운영 토큰 발급</b></td>
-      <td>재고 관리</td><td><span class="st todo">남음</span></td>
+    <tr class="is-now">
+      <td><b>3</b></td>
+      <td>부품 조회 API 에 고객사 품명 싣기 + <b>운영 토큰 발급</b><br>
+        <span style="color:var(--red);font-size:13px">🔴 API 시험이 키 14개를 통째로 맞춰 보므로 그 줄도 같이 고쳐야 함 · 토큰이 없으면 통로가 503</span></td>
+      <td>재고 관리</td><td><span class="st now">다음</span></td>
     </tr>
     <tr>
       <td>4</td>
