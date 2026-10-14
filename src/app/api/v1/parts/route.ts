@@ -33,6 +33,7 @@ export async function GET(request: NextRequest) {
       no: parts.no,
       name: parts.name,
       name2: parts.name2,
+      customerName: parts.customerName,
       kyosanPartNo: parts.kyosanPartNo,
       drawingNo: parts.drawingNo,
       supplyPrice: parts.supplyPrice,

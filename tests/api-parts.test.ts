@@ -6,6 +6,7 @@ const SRC: ApiPartSource = {
   no: 165,
   name: "AMP-DEH-DV2H(13M)",
   name2: "",
+  customerName: "증폭기 조립품",
   kyosanPartNo: "C090722733",
   drawingNo: "WR10136AA148B",
   quantity: 273,
@@ -21,9 +22,10 @@ const SRC: ApiPartSource = {
 };
 
 describe("API 부품 모양", () => {
-  it("현황판 12칸 + 코드와 한글을 함께, UUID 는 없다", () => {
+  it("현황판 12칸 + 고객사 품명 + 코드와 한글을 함께, UUID 는 없다", () => {
     const p = toApiPart(SRC);
-    assert.deepEqual(Object.keys(p).sort(), ["category", "drawingNo", "item", "kyosanPartNo", "name", "name2", "no", "note", "owner", "quantity", "quotePrice", "supplyCurrency", "supplyPrice", "updatedAt"].sort());
+    assert.deepEqual(Object.keys(p).sort(), ["category", "customerName", "drawingNo", "item", "kyosanPartNo", "name", "name2", "no", "note", "owner", "quantity", "quotePrice", "supplyCurrency", "supplyPrice", "updatedAt"].sort());
+    assert.equal(p.customerName, "증폭기 조립품");
     assert.deepEqual(p.owner, { code: "SERVICE_SPARE", label: "보수부재" });
     assert.deepEqual(p.category, { code: "RFG", label: "RFG" });
     assert.deepEqual(p.item, { code: "PCB", name: "PCB" });
@@ -32,8 +34,9 @@ describe("API 부품 모양", () => {
   });
 
   it("없는 값: 글자는 빈 문자열, 금액은 null (엑셀의 '-' 를 쓰지 않는다)", () => {
-    const p = toApiPart({ ...SRC, name2: "", supplyPrice: null });
+    const p = toApiPart({ ...SRC, name2: "", customerName: "", supplyPrice: null });
     assert.equal(p.name2, "");
+    assert.equal(p.customerName, "");
     assert.equal(p.supplyPrice, null);
   });
 });
@@ -64,5 +67,11 @@ describe("API 목록 조건", () => {
     assert.equal(matchesQuery(SRC, "amp vvc"), false);
     assert.equal(matchesQuery(SRC, "c0907"), true);
     assert.equal(matchesQuery(SRC, ""), true);
+  });
+
+  it("찾기는 고객사 품명으로도 된다 (우리 품명에 없는 낱말)", () => {
+    assert.equal(matchesQuery(SRC, "증폭기"), true);
+    assert.equal(matchesQuery(SRC, "amp 조립품"), true);
+    assert.equal(matchesQuery({ ...SRC, customerName: "" }, "증폭기"), false);
   });
 });

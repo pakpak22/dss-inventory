@@ -2,7 +2,7 @@ import type { Category, Currency, Owner } from "@/db/schema/codes";
 import { CATEGORY_LABEL, OWNER_LABEL, isCategory, isOwner } from "@/lib/parts/codes";
 
 /**
- * 바깥(A/S·PO)에 내주는 부품 한 줄의 모양 — **현황판 12칸 그대로** + 코드값과 한글을 함께.
+ * 바깥(A/S·PO)에 내주는 부품 한 줄의 모양 — **현황판 12칸 그대로** + 고객사 품명 + 코드값과 한글을 함께.
  *
  * 🔴 이 모양은 다른 시스템이 의존하는 약속이다. 칸을 **더하는 것**은 괜찮지만 이름을 바꾸거나 빼면 저쪽이 깨진다.
  *    바꿔야 하면 `v2` 를 새로 열고 담당자와 날짜를 정한다. 설명은 저장소의 API.md.
@@ -14,6 +14,11 @@ export interface ApiPart {
   no: number;
   name: string;
   name2: string;
+  /**
+   * 고객사에 나가는 서류(견적서 등)에 쓰는 이름. 우리 품명(`name`)과 다르다. 없으면 "".
+   * 🔴 엑셀 한 벌에는 안 나가는 칸이다 — 여기(API)와 화면에만 있다. 2026-10-14 에 더했다.
+   */
+  customerName: string;
   kyosanPartNo: string;
   drawingNo: string;
   quantity: number;
@@ -34,6 +39,7 @@ export interface ApiPartSource {
   no: number;
   name: string;
   name2: string;
+  customerName: string;
   kyosanPartNo: string;
   drawingNo: string;
   quantity: number;
@@ -53,6 +59,7 @@ export function toApiPart(p: ApiPartSource): ApiPart {
     no: p.no,
     name: p.name,
     name2: p.name2,
+    customerName: p.customerName,
     kyosanPartNo: p.kyosanPartNo,
     drawingNo: p.drawingNo,
     quantity: p.quantity,
@@ -95,10 +102,10 @@ export function parseApiPartsFilter(sp: URLSearchParams): ParseFilterResult {
   return { ok: true, filter: { owner: owner && isOwner(owner) ? owner : null, category: category && isCategory(category) ? category : null, item: item || null, q, since } };
 }
 
-/** 찾기: 품명·품명2·교산 품번·도번에 낱말이 모두 들어 있는 것 (화면 찾기와 같은 규칙) */
-export function matchesQuery(p: Pick<ApiPartSource, "name" | "name2" | "kyosanPartNo" | "drawingNo">, q: string): boolean {
+/** 찾기: 품명·품명2·고객사 품명·교산 품번·도번에 낱말이 모두 들어 있는 것 (화면 찾기와 같은 규칙) */
+export function matchesQuery(p: Pick<ApiPartSource, "name" | "name2" | "customerName" | "kyosanPartNo" | "drawingNo">, q: string): boolean {
   const toks = q.toLowerCase().split(/\s+/).filter(Boolean);
   if (toks.length === 0) return true;
-  const hay = `${p.name} ${p.name2} ${p.kyosanPartNo} ${p.drawingNo}`.toLowerCase();
+  const hay = `${p.name} ${p.name2} ${p.customerName} ${p.kyosanPartNo} ${p.drawingNo}`.toLowerCase();
   return toks.every((t) => hay.includes(t));
 }

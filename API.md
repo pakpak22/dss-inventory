@@ -24,7 +24,7 @@ Authorization: Bearer <INVENTORY_API_TOKEN>
 
 ## 2. 부품 목록 — `GET /api/v1/parts`
 
-현황판 「부품 재고 현황」 시트와 같은 12칸을 **No. 순**으로 전부 줍니다. 숨긴(삭제) 부품은 빠집니다. 부품이 수백 개라 쪽 나누기는 없습니다.
+현황판 「부품 재고 현황」 시트와 같은 12칸 + **고객사 품명**(`customerName`, 2026-10-14 에 더함)을 **No. 순**으로 전부 줍니다. 숨긴(삭제) 부품은 빠집니다. 부품이 수백 개라 쪽 나누기는 없습니다.
 
 쿼리(전부 선택):
 
@@ -33,7 +33,7 @@ Authorization: Bearer <INVENTORY_API_TOKEN>
 | `owner` | `DSS` · `KYOSAN` · `SERVICE_SPARE` | 소유 |
 | `category` | `RFG` · `MB` · `COMPATIBLE` | 분류 |
 | `item` | 항목 코드 (예: `PCB`, `SHEET_METAL`) | 항목. 목록은 3절 |
-| `q` | 글자 | 품명·품명2·교산 품번·도번에 낱말이 **모두** 들어 있는 것 (띄어쓰기로 여러 낱말) |
+| `q` | 글자 | 품명·품명2·**고객사 품명**·교산 품번·도번에 낱말이 **모두** 들어 있는 것 (띄어쓰기로 여러 낱말) |
 | `since` | ISO 8601 시각 (예: `2026-10-06T00:00:00Z`) | 그 뒤에 바뀐 부품만. 주기적으로 맞출 때 |
 
 모르는 값은 400 으로 돌려줍니다(조용히 전체를 주지 않습니다).
@@ -49,6 +49,7 @@ Authorization: Bearer <INVENTORY_API_TOKEN>
       "no": 165,
       "name": "AMP-DEH-DV2H(13M)",
       "name2": "",
+      "customerName": "증폭기 조립품",
       "kyosanPartNo": "C090722733",
       "drawingNo": "WR10136AA148B",
       "quantity": 273,
@@ -71,6 +72,7 @@ Authorization: Bearer <INVENTORY_API_TOKEN>
 |---|---|
 | `no` | 부품 No. **바깥에서 부품을 가리킬 때 쓰는 값.** 바뀌지 않고 다시 쓰이지 않습니다. UUID 는 내주지 않습니다 |
 | `name` · `name2` | 품명 · 품명2. 없으면 `""` (엑셀의 `-` 가 아닙니다) |
+| `customerName` | **고객사 품명** — 고객사에 나가는 서류(견적서 등)에 쓰는 이름입니다. 우리 품명(`name`)과 다릅니다. 없으면 `""`. 한 부품에 하나이고, 재고 쪽 화면에서 STAFF 이상이 고칩니다(고친 기록은 남습니다). 🔵 엑셀 한 벌에는 나가지 않는 칸이라 API 와 화면에만 있습니다. **2026-10-14 에 더했습니다**(칸을 더한 것이라 옛 호출은 그대로 돕니다) |
 | `kyosanPartNo` · `drawingNo` | 교산 품번 · 도번. 겹칠 수 있습니다. 없으면 `""` |
 | `quantity` | 현재 수량(개). 재고 쪽 원장의 합 |
 | `supplyPrice` · `supplyCurrency` | 공급가와 통화(`JPY` 엔 / `KRW` 원). 없으면 `null` |
