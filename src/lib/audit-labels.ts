@@ -74,7 +74,9 @@ export function describeTarget(target: string | null): string {
   if (kind === "part_items") return `항목 ${rest ?? ""}`.trim();
   if (kind === "requests") return "확인 대기 신청";
   if (kind === "workbook") return "현황판 엑셀";
-  // "oh_templates:301" → "O/H 템플릿 301". 기종 코드가 사람이 읽는 이름이다.
+  // "oh_templates:표준 O/H" → "O/H 템플릿 표준 O/H". 2026-10-15 에 기종 코드를 없앤 뒤로 대상
+  // 글자는 **템플릿 이름**이다. 🔵 그 전에 쌓인 줄에는 코드("oh_templates:301")가 남아 있는데,
+  // 감사 로그는 append-only 라 고쳐 넣지 않는다 — 둘 다 그대로 보여 준다.
   if (kind === "oh_templates") return `O/H 템플릿 ${rest ?? ""}`.trim();
   // "approval_routes:PART_ISSUE" → "승인 절차 · 부품 불출". 용도 이름표가 적힌 곳은 approval/route.ts 하나다.
   if (kind === "approval_routes") {

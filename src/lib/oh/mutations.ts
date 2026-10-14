@@ -79,9 +79,16 @@ function reject(code: OhTemplateResultCode, message: string, fieldErrors?: Recor
   throw new OhRejected({ ok: false, code, message, fieldErrors });
 }
 
-/** 살아 있는 템플릿 중 같은 코드가 있는가. 🔴 **지운 코드는 다시 쓸 수 있다**(부분 unique 와 같은 잣대). */
-async function codeTaken(tx: Tx, code: string, excludeId: string | null): Promise<boolean> {
-  const conditions = [eq(ohPartTemplates.code, code), eq(ohPartTemplates.isDeleted, false)];
+/**
+ * 살아 있는 템플릿 중 같은 **이름**이 있는가. 🔴 **지운 이름은 다시 쓸 수 있다**(부분 unique 와
+ * 같은 잣대).
+ *
+ * 🔵 2026-10-15 까지는 **기종 코드**로 보던 검사다. 코드를 없애면서 이름으로 옮겼다 — 이름이
+ * 템플릿을 가리키는 유일한 글자가 되었으므로, 같은 이름이 둘 서면 사람이 어느 것을 고칠지
+ * 알 수 없다(`src/db/schema/oh-templates.ts` 머리말).
+ */
+async function nameTaken(tx: Tx, name: string, excludeId: string | null): Promise<boolean> {
+  const conditions = [eq(ohPartTemplates.name, name), eq(ohPartTemplates.isDeleted, false)];
   if (excludeId) conditions.push(ne(ohPartTemplates.id, excludeId));
   const [row] = await tx.select({ id: ohPartTemplates.id }).from(ohPartTemplates).where(and(...conditions)).limit(1);
   return Boolean(row);
@@ -253,8 +260,8 @@ export type SaveOhTemplateParams = {
 };
 
 /**
- * 머리(코드·이름·비고)와 부품 줄 전체를 한 번에 저장한다. 🔵 원본은 `createOhTemplate` 과
- * `updateOhTemplate` 둘로 나뉘어 있는데, 여기서는 **한 함수**다 — 두 길이 공유하는 것(코드 중복
+ * 머리(이름·비고)와 부품 줄 전체를 한 번에 저장한다. 🔵 원본은 `createOhTemplate` 과
+ * `updateOhTemplate` 둘로 나뉘어 있는데, 여기서는 **한 함수**다 — 두 길이 공유하는 것(이름 중복
  * 검사 · 재고 연결 다시 매기기 · 줄 갈아 끼우기 · 단가 · 감사)이 거의 전부라, 나눠 두면 한쪽만
  * 고쳐지는 자리가 그만큼 는다. 가르는 것은 `id` 하나다.
  */
@@ -263,7 +270,7 @@ export async function saveOhTemplate(params: SaveOhTemplateParams): Promise<Save
   try {
     return await db().transaction(async (tx): Promise<SaveOhTemplateResult> => {
       // ── 1. 고치는 경우: 줄을 잡고 판 번호를 맞춰 본다 ──────────────────
-      let previous: { code: string; name: string; note: string | null; version: number } | null = null;
+      let previous: { name: string; note: string | null; version: number } | null = null;
       if (params.id !== null) {
         const [existing] = await tx
           .select({
@@ -271,7 +278,6 @@ export async function saveOhTemplate(params: SaveOhTemplateParams): Promise<Save
             version: ohPartTemplates.version,
             isDeleted: ohPartTemplates.isDeleted,
             // 감사의 이전 값. 어차피 이 줄을 잡으려고 읽으므로 질의를 새로 열지 않는다.
-            code: ohPartTemplates.code,
             name: ohPartTemplates.name,
             note: ohPartTemplates.note,
           })
@@ -284,13 +290,13 @@ export async function saveOhTemplate(params: SaveOhTemplateParams): Promise<Save
         // 🔴 낙관적 잠금. 이 검사가 없으면 나중에 저장한 사람이 앞사람 것을 **조용히** 덮고,
         //    덮인 쪽은 자기 저장이 성공했다고 믿으므로 아무도 알아차리지 못한다.
         if (existing.version !== params.expectedVersion) reject("CONFLICT", CONFLICT_MESSAGE);
-        previous = { code: existing.code, name: existing.name, note: existing.note, version: existing.version };
+        previous = { name: existing.name, note: existing.note, version: existing.version };
       }
 
-      // ── 2. 코드 중복 — **안 지워진 것만** 본다(부분 unique 와 같은 잣대) ─
-      if (await codeTaken(tx, fields.code, params.id)) {
-        reject("VALIDATION_ERROR", `기종 코드 ${fields.code} 를 쓰는 템플릿이 이미 있습니다.`, {
-          code: `기종 코드 ${fields.code} 를 쓰는 템플릿이 이미 있습니다.`,
+      // ── 2. 이름 중복 — **안 지워진 것만** 본다(부분 unique 와 같은 잣대) ─
+      if (await nameTaken(tx, fields.name, params.id)) {
+        reject("VALIDATION_ERROR", `「${fields.name}」 이라는 이름의 템플릿이 이미 있습니다.`, {
+          name: `「${fields.name}」 이라는 이름의 템플릿이 이미 있습니다.`,
         });
       }
 
@@ -313,7 +319,6 @@ export async function saveOhTemplate(params: SaveOhTemplateParams): Promise<Save
         const [created] = await tx
           .insert(ohPartTemplates)
           .values({
-            code: fields.code,
             name: fields.name,
             note: fields.note,
             createdBy: actor.id,
@@ -326,7 +331,6 @@ export async function saveOhTemplate(params: SaveOhTemplateParams): Promise<Save
         const [updated] = await tx
           .update(ohPartTemplates)
           .set({
-            code: fields.code,
             name: fields.name,
             note: fields.note,
             version: sql`${ohPartTemplates.version} + 1`,
@@ -355,15 +359,17 @@ export async function saveOhTemplate(params: SaveOhTemplateParams): Promise<Save
           action: "OH_TEMPLATE_SAVED",
           actorId: actor.id,
           actorName: actor.name,
-          target: `oh_templates:${fields.code}`,
+          // 🔵 대상 글자가 **이름**이다(2026-10-15 기종 코드를 없앰). 감사 로그는 고쳐 넣지 않는
+          //    append-only 라, 그 전에 쌓인 줄에는 `oh_templates:301` 처럼 코드가 남아 있다 —
+          //    `describeTarget` 이 둘 다 그대로 보여 준다.
+          target: `oh_templates:${fields.name}`,
           detail: {
             created: params.id === null,
             version,
             previousVersion: previous?.version ?? null,
-            code: fields.code,
             name: fields.name,
             note: fields.note,
-            previous: previous ? { code: previous.code, name: previous.name, note: previous.note } : null,
+            previous: previous ? { name: previous.name, note: previous.note } : null,
             itemCount: items.length,
             // 🔴 줄을 **글자로** 남긴다. id 만 적으면 로그가 스스로를 설명하지 못하고, 이 표는
             //    줄을 통째로 갈아 끼우므로 나중에 「그때 무엇이 들어 있었나」를 되찾을 길이 없다.
@@ -387,7 +393,8 @@ export async function saveOhTemplate(params: SaveOhTemplateParams): Promise<Save
 
 /* ───────────────────────── 지우기 ───────────────────────── */
 
-export type DeleteOhTemplateResult = { ok: true; code: string } | { ok: false; message: string };
+/** 🔵 성공하면 **지운 템플릿의 이름**을 돌려준다 — 부르는 쪽이 「무엇을 지웠다」고 말할 글자다. */
+export type DeleteOhTemplateResult = { ok: true; name: string } | { ok: false; message: string };
 
 /**
  * 소프트 삭제(4칸 고정, CLAUDE.md 11절). **사유를 받는다** — `src/lib/parts/mutations.ts` 의
@@ -402,7 +409,7 @@ export async function deleteOhTemplate(id: string, reason: string, actor: OhActo
   try {
     return await db().transaction(async (tx): Promise<DeleteOhTemplateResult> => {
       const [existing] = await tx
-        .select({ id: ohPartTemplates.id, code: ohPartTemplates.code, name: ohPartTemplates.name, isDeleted: ohPartTemplates.isDeleted })
+        .select({ id: ohPartTemplates.id, name: ohPartTemplates.name, isDeleted: ohPartTemplates.isDeleted })
         .from(ohPartTemplates)
         .where(eq(ohPartTemplates.id, id))
         .limit(1)
@@ -419,11 +426,11 @@ export async function deleteOhTemplate(id: string, reason: string, actor: OhActo
           action: "OH_TEMPLATE_DELETED",
           actorId: actor.id,
           actorName: actor.name,
-          target: `oh_templates:${existing.code}`,
-          detail: { code: existing.code, name: existing.name, reason },
+          target: `oh_templates:${existing.name}`,
+          detail: { name: existing.name, reason },
         }),
       );
-      return { ok: true, code: existing.code };
+      return { ok: true, name: existing.name };
     });
   } catch (err) {
     if (err instanceof OhRejected) return { ok: false, message: err.result.message };
@@ -457,14 +464,14 @@ export async function linkProductModel(
   try {
     return await db().transaction(async (tx): Promise<OhLinkResult> => {
       const [template] = await tx
-        .select({ id: ohPartTemplates.id, code: ohPartTemplates.code })
+        .select({ id: ohPartTemplates.id, name: ohPartTemplates.name })
         .from(ohPartTemplates)
         .where(and(eq(ohPartTemplates.id, templateId), eq(ohPartTemplates.isDeleted, false)))
         .limit(1);
       if (!template) reject("NOT_FOUND", NOT_FOUND_MESSAGE);
 
       const [clash] = await tx
-        .select({ templateId: ohPartTemplateModels.templateId, code: ohPartTemplates.code })
+        .select({ templateId: ohPartTemplateModels.templateId, name: ohPartTemplates.name })
         .from(ohPartTemplateModels)
         .innerJoin(ohPartTemplates, eq(ohPartTemplates.id, ohPartTemplateModels.templateId))
         .where(eq(ohPartTemplateModels.productModelId, productModelId))
@@ -473,7 +480,7 @@ export async function linkProductModel(
         if (clash.templateId === templateId) return { ok: true };
         reject(
           "VALIDATION_ERROR",
-          `${productModelName} 은(는) 이미 기종 ${clash.code} 템플릿에 연결되어 있습니다. 그쪽 연결을 먼저 푸십시오.`,
+          `${productModelName} 은(는) 이미 「${clash.name}」 템플릿에 연결되어 있습니다. 그쪽 연결을 먼저 푸십시오.`,
         );
       }
 
@@ -488,7 +495,7 @@ export async function linkProductModel(
           action: "OH_TEMPLATE_MODEL_LINKED",
           actorId: actor.id,
           actorName: actor.name,
-          target: `oh_templates:${template.code}`,
+          target: `oh_templates:${template.name}`,
           detail: { productModelId, productModelName },
         }),
       );
@@ -508,7 +515,7 @@ export async function unlinkProductModel(linkId: string, actor: OhActor): Promis
           id: ohPartTemplateModels.id,
           productModelId: ohPartTemplateModels.productModelId,
           productModelName: ohPartTemplateModels.productModelName,
-          code: ohPartTemplates.code,
+          name: ohPartTemplates.name,
         })
         .from(ohPartTemplateModels)
         .innerJoin(ohPartTemplates, eq(ohPartTemplates.id, ohPartTemplateModels.templateId))
@@ -522,7 +529,7 @@ export async function unlinkProductModel(linkId: string, actor: OhActor): Promis
           action: "OH_TEMPLATE_MODEL_UNLINKED",
           actorId: actor.id,
           actorName: actor.name,
-          target: `oh_templates:${link.code}`,
+          target: `oh_templates:${link.name}`,
           detail: { productModelId: link.productModelId, productModelName: link.productModelName },
         }),
       );

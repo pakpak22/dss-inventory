@@ -41,7 +41,14 @@ export function isValidExpectedVersion(value: unknown): value is number {
 /** 🔴 OH 견적서 양식의 OH 부품 칸(34~46행). 위 「13줄이 상한인 까닭」 참조. */
 export const MAX_OH_TEMPLATE_ITEMS = 13;
 
-const MAX_CODE = 40;
+/**
+ * 🔴 **기종 코드(`code`) 검증은 없앴다**(2026-10-15 사용자 결정, 조각 9a). 그 글자는 엑셀 양식의
+ * `K11` 에서만 뜻이 있던 흔적이고, 지금은 제품 모델을 직접 잇는다. 까닭 전부는
+ * `src/db/schema/oh-templates.ts` 머리말에.
+ *
+ * 🔵 **`name` 은 그대로 필수다.** 코드를 없앤 뒤로는 이름이 템플릿을 가리키는 유일한 글자라,
+ * 비어도 된다고 풀면 「이름 없는 템플릿」이 목록에 서고 아무도 그것을 집어 말할 수 없다.
+ */
 const MAX_NAME = 100;
 const MAX_PART_NAME = 200;
 const MAX_NOTE = 1000;
@@ -56,7 +63,6 @@ export type OhTemplateItemInput = {
 };
 
 export type OhTemplateFields = {
-  code: string;
   name: string;
   note: string | null;
   items: OhTemplateItemInput[];
@@ -83,7 +89,6 @@ export function validateOhTemplateFields(raw: Record<string, unknown>): Validate
     return trimmed;
   }
 
-  const code = required("code", "기종 코드", MAX_CODE);
   const name = required("name", "이름", MAX_NAME);
 
   let note: string | null = null;
@@ -135,7 +140,7 @@ export function validateOhTemplateFields(raw: Record<string, unknown>): Validate
   }
 
   if (Object.keys(fieldErrors).length > 0) return { ok: false, fieldErrors };
-  return { ok: true, data: { code, name, note, items } };
+  return { ok: true, data: { name, note, items } };
 }
 
 /* ───────────────────────── 부품별 O/H 단가 ───────────────────────── */

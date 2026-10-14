@@ -30,7 +30,8 @@ export type { OhTemplateItemView, OhTemplateModelView, OhTemplateView };
  */
 
 /**
- * 살아 있는 템플릿 전부. **코드 순** — 사람이 `15 · 20 · 301 · 302` 로 기억한다.
+ * 살아 있는 템플릿 전부. **이름 순** — 2026-10-15 에 기종 코드를 없앤 뒤로 사람이 목록에서
+ * 찾는 글자가 이름 하나뿐이다(그 전에는 코드 순이었다. 스키마 머리말 참조).
  *
  * 부품 줄 · 이어진 모델 · 그 부품의 O/H 단가를 함께 싣는다. 🔵 템플릿마다 따로 읽으면 N+1 이라
  * **질의 네 번**으로 걷어 온다(머리 → 줄·모델 → 단가). 템플릿은 많아야 열몇 장이고 줄은 13개가
@@ -41,13 +42,12 @@ export async function listOhTemplates(): Promise<OhTemplateView[]> {
     .select({
       id: ohPartTemplates.id,
       version: ohPartTemplates.version,
-      code: ohPartTemplates.code,
       name: ohPartTemplates.name,
       note: ohPartTemplates.note,
     })
     .from(ohPartTemplates)
     .where(eq(ohPartTemplates.isDeleted, false))
-    .orderBy(asc(ohPartTemplates.code));
+    .orderBy(asc(ohPartTemplates.name));
 
   if (rows.length === 0) return [];
   const ids = rows.map((row) => row.id);

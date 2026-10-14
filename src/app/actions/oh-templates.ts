@@ -130,7 +130,7 @@ export async function deleteOhTemplateAction(input: { id: string; reason: string
   try {
     const result = await deleteOhTemplate(input.id, reason, { id: session.user.id, name: session.user.name });
     if (!result.ok) return { ok: false, message: result.message };
-    return { ok: true, message: `기종 ${result.code} 템플릿을 삭제했습니다.` };
+    return { ok: true, message: `「${result.name}」 템플릿을 삭제했습니다.` };
   } catch (e) {
     console.error("[oh-templates] 삭제 실패:", e instanceof Error ? e.message : e);
     return { ok: false, message: UNEXPECTED };

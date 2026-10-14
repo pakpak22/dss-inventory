@@ -41,13 +41,13 @@ describe("🔴 부품 줄 수 상한 — 양식의 13줄", () => {
   });
 
   test("13줄은 통과한다", () => {
-    const r = validateOhTemplateFields({ code: "301", name: "표준", items: 줄(13) });
+    const r = validateOhTemplateFields({ name: "표준", items: 줄(13) });
     assert.equal(r.ok, true);
     assert.equal(r.ok && r.data.items.length, 13);
   });
 
   test("🔴 14줄째는 거절한다 — 넘치면 견적서에서 갈 곳이 없다", () => {
-    const r = validateOhTemplateFields({ code: "301", name: "표준", items: 줄(14) });
+    const r = validateOhTemplateFields({ name: "표준", items: 줄(14) });
     assert.equal(r.ok, false);
     assert.ok(r.ok === false && r.fieldErrors.items);
     // 거절 문구가 까닭(양식의 칸 수)을 말해 줘야 한다 — 「13개까지」만 적으면 왜인지 모른다.
@@ -56,60 +56,68 @@ describe("🔴 부품 줄 수 상한 — 양식의 13줄", () => {
 });
 
 describe("머리 칸", () => {
-  test("코드가 비면 거절한다", () => {
+  /**
+   * 🔴 **기종 코드는 2026-10-15 에 없앴다**(조각 9a). 양식의 `K11` 에서만 뜻이 있던 흔적이고,
+   * 지금은 제품 모델을 직접 잇는다. 이 두 시험이 지키는 것은 「되살아나지 않는다」와
+   * 「그 대신 이름이 필수다」 둘이다.
+   */
+  test("기종 코드를 보내도 무시한다 — 더 이상 필수가 아니고 돌려주지도 않는다", () => {
     const r = validateOhTemplateFields({ code: "  ", name: "표준", items: [] });
-    assert.equal(r.ok, false);
-    assert.ok(r.ok === false && r.fieldErrors.code);
+    assert.equal(r.ok, true, "코드가 비었다고 거절하면 안 된다 — 그 칸은 없어졌다");
+    assert.equal(r.ok && "code" in r.data, false, "없앤 칸이 되돌아오면 열쇠가 둘이 된다");
   });
 
-  test("이름이 비면 거절한다", () => {
-    const r = validateOhTemplateFields({ code: "301", name: "", items: [] });
+  test("코드 없이도 통과한다", () => {
+    assert.equal(validateOhTemplateFields({ name: "표준", items: [] }).ok, true);
+  });
+
+  test("이름이 비면 거절한다 — 템플릿을 가리키는 유일한 글자다", () => {
+    const r = validateOhTemplateFields({ name: "", items: [] });
     assert.equal(r.ok, false);
     assert.ok(r.ok === false && r.fieldErrors.name);
   });
 
   test("앞뒤 공백을 떼고 돌려준다. 빈 비고는 null 이다", () => {
-    const r = validateOhTemplateFields({ code: " 301 ", name: " 표준 ", note: "   ", items: [] });
+    const r = validateOhTemplateFields({ name: " 표준 ", note: "   ", items: [] });
     assert.equal(r.ok, true);
-    assert.equal(r.ok && r.data.code, "301");
     assert.equal(r.ok && r.data.name, "표준");
     assert.equal(r.ok && r.data.note, null);
   });
 
   test("부품 줄이 0개여도 저장할 수 있다 — 먼저 만들고 채우는 길이 있다", () => {
-    assert.equal(validateOhTemplateFields({ code: "301", name: "표준", items: [] }).ok, true);
-    assert.equal(validateOhTemplateFields({ code: "301", name: "표준" }).ok, true);
+    assert.equal(validateOhTemplateFields({ name: "표준", items: [] }).ok, true);
+    assert.equal(validateOhTemplateFields({ name: "표준" }).ok, true);
   });
 });
 
 describe("부품 줄", () => {
   test("품명이 비면 그 줄을 짚어 거절한다", () => {
-    const r = validateOhTemplateFields({ code: "301", name: "표준", items: [{ partNameText: "  ", quantity: 1 }] });
+    const r = validateOhTemplateFields({ name: "표준", items: [{ partNameText: "  ", quantity: 1 }] });
     assert.equal(r.ok, false);
     assert.ok(r.ok === false && r.fieldErrors["items.0.partNameText"]);
   });
 
   test("🔴 수량 0 은 거절한다 — 1 이상이어야 한다", () => {
-    const r = validateOhTemplateFields({ code: "301", name: "표준", items: [{ partNameText: "휴즈", quantity: 0 }] });
+    const r = validateOhTemplateFields({ name: "표준", items: [{ partNameText: "휴즈", quantity: 0 }] });
     assert.equal(r.ok, false);
     assert.ok(r.ok === false && r.fieldErrors["items.0.quantity"]);
   });
 
   test("음수·소수 수량도 거절한다", () => {
     for (const quantity of [-1, 1.5]) {
-      const r = validateOhTemplateFields({ code: "301", name: "표준", items: [{ partNameText: "휴즈", quantity }] });
+      const r = validateOhTemplateFields({ name: "표준", items: [{ partNameText: "휴즈", quantity }] });
       assert.equal(r.ok, false, String(quantity));
     }
   });
 
   test("재고 연결은 비어도 된다 — 마스터에 없는 이름이 실제로 있다", () => {
-    const r = validateOhTemplateFields({ code: "301", name: "표준", items: [{ partNameText: "유량계", quantity: 2 }] });
+    const r = validateOhTemplateFields({ name: "표준", items: [{ partNameText: "유량계", quantity: 2 }] });
     assert.equal(r.ok, true);
     assert.equal(r.ok && r.data.items[0].partId, null);
   });
 
   test("모양이 uuid 가 아닌 재고 연결은 거절한다", () => {
-    const r = validateOhTemplateFields({ code: "301", name: "표준", items: [{ partId: "아무거나", partNameText: "휴즈", quantity: 1 }] });
+    const r = validateOhTemplateFields({ name: "표준", items: [{ partId: "아무거나", partNameText: "휴즈", quantity: 1 }] });
     assert.equal(r.ok, false);
     assert.ok(r.ok === false && r.fieldErrors["items.0.partId"]);
   });

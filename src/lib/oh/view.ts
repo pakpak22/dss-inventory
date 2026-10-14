@@ -40,7 +40,7 @@ export type OhTemplateView = {
   id: string;
   /** 🔴 낙관적 잠금용 판 번호. 화면이 저장할 때 이 값을 그대로 돌려보낸다. */
   version: number;
-  code: string;
+  /** 🔴 템플릿을 가리키는 유일한 글자. 기종 코드는 2026-10-15 에 없앴다(스키마 머리말). */
   name: string;
   note: string | null;
   items: OhTemplateItemView[];

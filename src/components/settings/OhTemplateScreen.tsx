@@ -245,7 +245,7 @@ export function OhTemplateScreen({
 
       {templates.length === 0 ? (
         <p className="rounded-lg border border-zinc-200 bg-white p-8 text-center text-sm text-zinc-500">
-          아직 등록된 O/H 템플릿이 없습니다. 위 [새 템플릿] 으로 기종 하나를 만드십시오.
+          아직 등록된 O/H 템플릿이 없습니다. 위 [새 템플릿] 으로 하나를 만드십시오.
         </p>
       ) : (
         <ul className="flex flex-col gap-3">
@@ -256,10 +256,8 @@ export function OhTemplateScreen({
               <li key={template.id} className={CARD}>
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
                   <div>
-                    <p className="text-sm font-medium text-zinc-900">
-                      기종 {template.code}
-                      <span className="ml-2 font-normal text-zinc-500">{template.name}</span>
-                    </p>
+                    {/* 🔵 2026-10-15 에 기종 코드를 없앴다 — 머리글에 설 글자가 이름 하나다. */}
+                    <p className="text-sm font-medium text-zinc-900">{template.name}</p>
                     <p className="mt-0.5 text-xs text-zinc-500">
                       부품 {template.items.length}종
                       {unlinkedCount > 0 && ` · 재고 미연결 ${unlinkedCount}종`}
@@ -451,7 +449,7 @@ function ModelLinks({
             value={selected}
             onChange={(e) => setSelected(e.target.value)}
             disabled={busy}
-            aria-label={`기종 ${template.code} 에 이을 제품 모델`}
+            aria-label={`「${template.name}」 템플릿에 이을 제품 모델`}
             className="min-w-0 rounded-md border border-zinc-200 bg-white px-2 py-1 text-sm text-zinc-900 disabled:cursor-not-allowed disabled:bg-zinc-50"
           >
             <option value="">모델 고르기…</option>
@@ -484,7 +482,6 @@ function TemplateEditor({
   onSaved: (saved: string) => void;
   onClose: () => void;
 }) {
-  const [code, setCode] = useState(template?.code ?? "");
   const [name, setName] = useState(template?.name ?? "");
   const [note, setNote] = useState(template?.note ?? "");
   const [items, setItems] = useState<ItemRow[]>(() => toRows(template));
@@ -582,7 +579,6 @@ function TemplateEditor({
       expectedVersion: version,
       prices: priceEntries,
       fields: {
-        code,
         name,
         note,
         items: sendItems.map((row) => ({
@@ -611,18 +607,21 @@ function TemplateEditor({
 
   return (
     <div className="mt-3 border-t border-zinc-100 pt-3">
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="flex flex-col gap-1">
-          <span className={FIELD_LABEL}>기종 코드 *</span>
-          <input value={code} onChange={(e) => setCode(e.target.value)} className={INPUT} disabled={busy} placeholder="예: 301" />
-          {fieldErrors.code && <p className={FIELD_ERROR}>{fieldErrors.code}</p>}
-        </label>
-        <label className="flex flex-col gap-1">
-          <span className={FIELD_LABEL}>이름 *</span>
-          <input value={name} onChange={(e) => setName(e.target.value)} className={INPUT} disabled={busy} />
-          {fieldErrors.name && <p className={FIELD_ERROR}>{fieldErrors.name}</p>}
-        </label>
-      </div>
+      {/*
+        🔵 2026-10-15 에 기종 코드 칸을 걷어냈다 — 머리 칸이 이름 하나라 두 칸 격자를 쓰지 않는다.
+        이름이 이 템플릿을 가리키는 유일한 글자이고, 같은 이름이 이미 있으면 저장이 거절된다.
+      */}
+      <label className="flex flex-col gap-1">
+        <span className={FIELD_LABEL}>이름 *</span>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className={INPUT}
+          disabled={busy}
+          placeholder="예: 301 기종 표준 O/H"
+        />
+        {fieldErrors.name && <p className={FIELD_ERROR}>{fieldErrors.name}</p>}
+      </label>
       <label className="mt-3 flex flex-col gap-1">
         <span className={FIELD_LABEL}>비고</span>
         <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} className={INPUT} disabled={busy} />
@@ -926,7 +925,7 @@ function DeleteTemplateDialog({
       >
         <div className="flex flex-col gap-3">
           <h3 className="text-base font-semibold">
-            기종 {template.code} 템플릿을 지우겠습니까?
+            「{template.name}」 템플릿을 지우겠습니까?
           </h3>
           <p className="text-xs text-zinc-500">
             부품 {template.items.length}종과 연결된 제품 모델 {template.models.length}개가 함께 숨겨집니다. 목록에서

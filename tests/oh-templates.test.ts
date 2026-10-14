@@ -76,7 +76,7 @@ describe("🔴 낙관적 잠금 — version", () => {
 });
 
 describe("🔴 없어야 하는 칸 둘 — 되살리지 마라", () => {
-  it("sort_order 는 없다 — 원본 화면에 차례 바꾸기가 없고 코드 순으로 본다", () => {
+  it("sort_order 는 없다 — 원본 화면에 차례 바꾸기가 없고 이름 순으로 본다", () => {
     assert.equal(columnOf(templates, "sort_order"), undefined);
   });
 
@@ -114,8 +114,7 @@ describe("반드시 있어야 하는 칸", () => {
     assert.equal(columnOf(items, "template_id")?.notNull, true);
   });
 
-  it("code·name 은 notNull, note 는 빌 수 있다", () => {
-    assert.equal(columnOf(templates, "code")?.notNull, true);
+  it("name 은 notNull, note 는 빌 수 있다", () => {
     assert.equal(columnOf(templates, "name")?.notNull, true);
     assert.equal(columnOf(templates, "note")?.notNull, false);
   });
@@ -127,9 +126,22 @@ describe("반드시 있어야 하는 칸", () => {
   });
 });
 
-describe("기종 코드는 글자다", () => {
-  it("301A 같은 것이 생길 수 있어 숫자로 두지 않았다", () => {
-    assert.equal(columnOf(templates, "code")?.getSQLType(), "text");
+describe("🔴 기종 코드 칸은 없앴다 (2026-10-15, 조각 9a)", () => {
+  it("code 칸이 없다 — 양식의 K11 흔적이고, 지금은 제품 모델을 직접 잇는다", () => {
+    assert.equal(
+      columnOf(templates, "code"),
+      undefined,
+      "되살리면 템플릿을 가리키는 열쇠가 둘이 되어 어긋났을 때 어느 쪽이 진짜인지 답할 수 없다",
+    );
+  });
+
+  it("코드 부분 unique 도 사라졌다", () => {
+    const uq = templates.indexes.find((i) => i.config.name === "oh_part_templates_code_uq");
+    assert.equal(uq, undefined);
+  });
+
+  it("이름은 글자다", () => {
+    assert.equal(columnOf(templates, "name")?.getSQLType(), "text");
   });
 });
 
@@ -198,11 +210,11 @@ describe("O/H 단가 — 부품당 하나", () => {
 });
 
 describe("인덱스·제약", () => {
-  it("템플릿 코드는 지우지 않은 줄 안에서만 유일하다", () => {
-    const uq = templates.indexes.find((i) => i.config.name === "oh_part_templates_code_uq");
-    assert.ok(uq, "oh_part_templates_code_uq 가 없다");
+  it("템플릿 이름은 지우지 않은 줄 안에서만 유일하다", () => {
+    const uq = templates.indexes.find((i) => i.config.name === "oh_part_templates_name_uq");
+    assert.ok(uq, "oh_part_templates_name_uq 가 없으면 같은 이름이 둘 서고 사람이 어느 것을 고칠지 모른다");
     assert.equal(uq.config.unique, true);
-    assert.ok(uq.config.where, "부분 인덱스가 아니면 지운 코드를 다시 쓸 수 없다");
+    assert.ok(uq.config.where, "부분 인덱스가 아니면 지운 이름을 다시 쓸 수 없다");
   });
 
   it("한 템플릿 안에서 차례는 한 번만", () => {
