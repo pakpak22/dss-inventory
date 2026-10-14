@@ -65,11 +65,10 @@
 <div class="card">
   <h2>지금 어디까지</h2>
 
-  <div class="legend">조각 12개 — <b>끝남 7</b> · 하는 중 1 · 남음 4 · 🔴 <b>운영에는 아직 하나도 안 나갔습니다</b></div>
+  <div class="legend">조각 13개 — <b>끝남 9</b> · 남음 4 · 🔴 <b>운영에는 아직 하나도 안 나갔습니다</b></div>
   <div class="bar">
-    <span class="done" style="flex:7">1 ~ 7</span>
-    <span class="now" style="flex:1">8</span>
-    <span class="todo" style="flex:4">9 ~ 12</span>
+    <span class="done" style="flex:9">1 ~ 9</span>
+    <span class="todo" style="flex:4">10 ~ 13</span>
   </div>
 
   <div class="note green">
@@ -150,12 +149,36 @@
     멀쩡한 결재선이 깨진 것처럼 보입니다.
   </div>
 
+  <div class="note green">
+    <b>조각 8·9 끝남 — O/H 부품 템플릿 (2026-10-15) · 눈 확인 완료</b><br>
+    만들기 · 고치기 · 부품 담기 · 제품 모델 잇기 · 부품당 O/H 단가 · 지우기.
+    <b>13줄이 상한</b>입니다(OH 견적서 양식의 부품 칸이 34~46행 — 더 담아 조용히 자르면
+    <b>청구할 부품이 문서에서 사라집니다</b>).
+    <br>🔵 <b>기종 코드를 없앴습니다</b>(사용자 결정). 엑셀 양식 <code>K11</code> 의 흔적이고,
+    지금은 제품 모델을 직접 이으므로 열쇠가 둘이 될 까닭이 없습니다. 이제 <b>이름이 유일한 열쇠</b>라
+    같은 이름의 템플릿을 둘 만들 수 없습니다.
+    <br>🔵 <b>부품 고르개를 공용으로 뺐습니다</b> — 품명 · 품명2 · 교산 품번 · 도번 · No. ·
+    <b>고객사 품명</b> 여섯으로 찾습니다. 수량 변경 기록 화면과 같이 씁니다.
+    <br>🔴 <b>템플릿 줄의 품명은 고객사 품명입니다</b> — 그 글자가 그대로 견적서에 찍힙니다.
+    비어 있으면 <b>우리 품명으로 대신 채우지 않고 빈 글자</b>로 둡니다(O/H 단가와 같은 규칙).
+    화면이 빨간 딱지로 짚고 고치러 가는 길을 주지만 <b>저장을 막지는 않습니다.</b>
+  </div>
+
+  <div class="note amber">
+    <b>원본 규칙 하나를 걷어냈습니다 — 「품명을 고치면 재고 연결이 풀린다」</b><br>
+    그 규칙은 <b>고르개가 없어서</b> 있던 것입니다. 원본의 품명 칸은 글자만 들어오고
+    「골랐다」는 사건이 없어서, 연결을 만드는 유일한 몸짓이 <b>이름 일치</b>였습니다.
+    진짜 고르개가 생겨 그 까닭이 사라졌으므로 관련 함수를 지웠습니다 —
+    안 쓰는 함수를 남기면 다음 사람이 그것을 규칙으로 읽습니다.
+    <br>🔴 <b>이미 저장된 템플릿 줄은 옛 품명이 우리 품명이라 거의 다 딱지가 붙습니다.</b>
+    고장이 아니라 사실이고, 한 번 저장하면 지금 고객사 품명으로 맞춰집니다.
+  </div>
+
   <div class="note blue">
-    <b>다음 — 조각 8 (O/H 부품 템플릿 화면)</b><br>
-    원본 788줄을 그대로 옮깁니다. 만들기 · 고치기 · 부품 담기 · 제품 모델 잇기 · 부품당 O/H 단가.
-    🔵 원본 주석에 적힌 까닭들(<b>13줄이 상한인 까닭</b> = OH 견적서 양식이 34~46행,
-    <b>품명을 고치면 재고 연결이 풀리는 까닭</b>)을 함께 옮깁니다.
-    화면이 생기는 조각이라 <b>눈 확인</b>과 <code>npm run build</code> 가 완료 기준에 들어갑니다.
+    <b>다음 — 조각 10 (부품 요청 관리 화면)</b><br>
+    원본 620줄. 상태 거르기 · 표/카드 보기 · 줄마다 <b>요청 · 불출 · 남음 · 가용</b> ·
+    거절 · 보류 · 부분 불출 종료. 🔵 요청 → 확인 → 불출 흐름과 <b>부분 불출</b>은
+    조각 4 에서 이미 만들어져 있습니다 — 이 조각은 <b>그 위에 화면을 얹는 일</b>입니다.
   </div>
 
   <div class="note green">
@@ -200,7 +223,7 @@
 </div>
 
 <div class="card">
-  <h2>조각 열 개</h2>
+  <h2>조각 열세 개</h2>
   <table>
     <tr>
       <th style="width:42px">#</th><th>무엇</th>
@@ -256,34 +279,46 @@
         <span style="color:var(--green);font-size:13px">✅ 눈 확인 완료 · 커밋 <code>33ebbaa</code> · <code>3c4a798</code></span></td>
       <td>재고 관리</td><td><span class="st done">끝남</span></td>
     </tr>
-    <tr class="is-now">
+    <tr class="is-done">
       <td><b>8</b></td>
-      <td><b>O/H 부품 템플릿 화면 이식</b> (원본 788줄)<br>
-        <span style="font-size:13px">만들기 · 고치기 · 부품 담기 · 모델 잇기 · 부품당 O/H 단가</span></td>
+      <td><b>O/H 부품 템플릿 화면</b> (원본 788줄 + 서버 880줄)<br>
+        <span style="font-size:13px">
+        <b style="color:var(--green)">8a ✅ 검증·질의·변경·서버 액션</b> ·
+        <b style="color:var(--green)">8b ✅ 화면</b></span><br>
+        <span style="color:var(--green);font-size:13px">✅ 눈 확인 완료 · <code>b2d0456</code> · <code>39c9efc</code></span></td>
+      <td>재고 관리</td><td><span class="st done">끝남</span></td>
+    </tr>
+    <tr class="is-done">
+      <td><b>9</b></td>
+      <td><b>O/H 템플릿 손보기</b> (2026-10-15 사용자 요청 셋)<br>
+        <span style="font-size:13px">
+        <b style="color:var(--green)">9a ✅ 기종 코드 걷어내기</b>(0014) ·
+        <b style="color:var(--green)">9b ✅ 공용 고르개 + 고객사 품명</b></span><br>
+        <span style="color:var(--green);font-size:13px">✅ 눈 확인 완료 · <code>3879357</code> · <code>db19d3a</code></span></td>
+      <td>재고 관리</td><td><span class="st done">끝남</span></td>
+    </tr>
+    <tr class="is-now">
+      <td><b>10</b></td>
+      <td><b>부품 요청 관리 화면 이식</b> (원본 620줄)<br>
+        <span style="font-size:13px">상태 필터 · 표/카드 · 줄마다 요청·불출·남음·가용 · 거절 · 보류 · 부분 불출 종료</span></td>
       <td>재고 관리</td><td><span class="st now">다음</span></td>
     </tr>
     <tr>
-      <td>9</td>
-      <td><b>부품 요청 관리 화면 이식</b> (원본 620줄)<br>
-        <span style="font-size:13px">상태 필터 · 표/카드 · 줄마다 요청·불출·남음·가용 · 거절 · 보류 · 부분 불출 종료</span></td>
-      <td>재고 관리</td><td><span class="st todo">남음</span></td>
-    </tr>
-    <tr>
-      <td>10</td>
+      <td>11</td>
       <td><b>승인 요청건(결재) 화면 이식</b> (원본 641줄 + 결재선 그림 230줄)<br>
         <span style="font-size:13px">내가 결재할 건 · 실행할 건 · 진행 중인 신청 · 결재 이력</span></td>
       <td>재고 관리</td><td><span class="st todo">남음</span></td>
     </tr>
     <tr>
-      <td>11</td>
+      <td>12</td>
       <td>수리 건 상세 부품 요청 화면 — 고객사 품명 칸 · 추천(잔량·소유)<br>
         <span style="font-size:13px">사용 부품 · 견적서 검색에 고객사 품명도 함께</span></td>
       <td>A/S · 묶음</td><td><span class="st todo">남음</span></td>
     </tr>
     <tr>
-      <td>12</td>
+      <td>13</td>
       <td><b>A/S 에서 재고 기능 걷어내기</b> (표 16개 · 화면)<br>
-        <span style="color:var(--red);font-size:13px">🔴 파괴적 · 맨 마지막 · 8~11 이 도는 것을 보고</span></td>
+        <span style="color:var(--red);font-size:13px">🔴 파괴적 · 맨 마지막 · 10~12 가 도는 것을 보고</span></td>
       <td>A/S</td><td><span class="st block">맨 끝</span></td>
     </tr>
   </table>
