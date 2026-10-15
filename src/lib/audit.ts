@@ -36,6 +36,22 @@ export type AuditAction =
    */
   | "STOCK_REQUEST_HELD"
   | "STOCK_REQUEST_HOLD_RELEASED"
+  /**
+   * 부품 불출 결재 — 다섯 (2026-10-15, 조각 11a). 반출 신청 하나를 여러 사람에게 순서대로 결재받는 길이다.
+   *
+   * 🔴 **`APPROVED` 와 `EXECUTED` 를 가른 것이 여기에도 그대로 나타난다** — 「승인했다」와
+   *    「실제로 뺐다」는 다른 사건이고, 이력에서 둘이 같은 글자로 보이면 「승인만 났지 아직 안
+   *    나간 것」을 나중에 가려낼 수 없다.
+   * 🔵 반출 신청 쪽 `STOCK_REQUEST_*` 와 **일부러 다른 이름**이다. 저쪽은 「담당자가 확인했다」
+   *    한 번이고, 이쪽은 그 앞에 붙는 결재 사슬이다. 실행이 성공하면 **둘 다** 남는다 —
+   *    `STOCK_ISSUE_APPROVAL_EXECUTED`(결재건이 실행됐다)와 `confirmRequest` 가 쓰는
+   *    `STOCK_REQUEST_CONFIRMED`·`_PARTIAL`(신청이 나갔다). 겹쳐 보이지만 가리키는 것이 다르다.
+   */
+  | "STOCK_ISSUE_APPROVAL_REQUESTED"
+  | "STOCK_ISSUE_APPROVAL_APPROVED"
+  | "STOCK_ISSUE_APPROVAL_REJECTED"
+  | "STOCK_ISSUE_APPROVAL_EXECUTED"
+  | "STOCK_ISSUE_APPROVAL_CANCELLED"
   | "WORKBOOK_IMPORT"
   | "WORKBOOK_PARKED"
   | "WORKBOOK_RESUMED"

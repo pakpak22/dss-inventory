@@ -32,6 +32,14 @@ export const AUDIT_ACTION_LABEL: Record<AuditAction, string> = {
   // 나중에 풀려서 다시 살아난다. 이력에서 셋이 같은 글자로 보이면 「접었다는데 왜 또 나왔지?」가 된다.
   STOCK_REQUEST_HELD: "반출 보류",
   STOCK_REQUEST_HOLD_RELEASED: "반출 보류 해제",
+  // 🔴 「결재 승인」과 「불출 실행」은 **다른 사건이다** (2026-10-15, 조각 11a). 승인은 「빼도 된다」까지이고
+  // 실제로 빼는 것은 재고 담당자가 따로 누른다 — 이력에서 둘이 같은 글자로 보이면 「승인은 났는데 아직 안
+  // 나간 것」을 나중에 가려낼 수 없다.
+  STOCK_ISSUE_APPROVAL_REQUESTED: "불출 결재 올림",
+  STOCK_ISSUE_APPROVAL_APPROVED: "불출 결재 승인",
+  STOCK_ISSUE_APPROVAL_REJECTED: "불출 결재 반려",
+  STOCK_ISSUE_APPROVAL_EXECUTED: "불출 결재 실행(반출)",
+  STOCK_ISSUE_APPROVAL_CANCELLED: "불출 결재 거둠",
   WORKBOOK_IMPORT: "현황판 엑셀 가져오기",
   WORKBOOK_PARKED: "현황판 엑셀 멈춤(엑셀 수기입)",
   WORKBOOK_RESUMED: "현황판 엑셀 다시 쓰기 시작",
@@ -77,6 +85,9 @@ export function describeTarget(target: string | null): string {
   if (kind === "users") return "사용자";
   if (kind === "part_items") return `항목 ${rest ?? ""}`.trim();
   if (kind === "requests") return "확인 대기 신청";
+  // "issue_approvals:<uuid>" → "부품 불출 결재". uuid 는 사람에게 뜻이 없어 붙이지 않는다
+  // (「기록 번호 entryNos」 때와 같은 까닭 — CLAUDE.md 10-12 기록).
+  if (kind === "issue_approvals") return "부품 불출 결재";
   if (kind === "workbook") return "현황판 엑셀";
   // "oh_templates:표준 O/H" → "O/H 템플릿 표준 O/H". 2026-10-15 에 기종 코드를 없앤 뒤로 대상
   // 글자는 **템플릿 이름**이다. 🔵 그 전에 쌓인 줄에는 코드("oh_templates:301")가 남아 있는데,
