@@ -2,11 +2,12 @@ import { inArray } from "drizzle-orm";
 import { NextResponse, type NextRequest } from "next/server";
 import { db } from "@/db/client";
 import { parts } from "@/db/schema/parts";
-import { NO_STORE, checkApiWriteToken } from "@/lib/api/auth";
+import { NO_STORE, checkApiToken, checkApiWriteToken } from "@/lib/api/auth";
+import { buildStatusResponse, parseStatusKeys } from "@/lib/api/stock-request-status";
 import { buildApiUseRequest, parseApiStockRequest, resolveApiRequestLines, toApiStockRequest } from "@/lib/api/stock-requests";
 import { findActiveUserByAuthSub } from "@/lib/auth/users";
 import { todaySeoul } from "@/lib/stock/codes";
-import { createRequest } from "@/lib/stock/requests";
+import { createRequest, listRequestsByExternalKeys } from "@/lib/stock/requests";
 
 /**
  * POST /api/v1/stock-requests — A/S 가 올리는 **부품 반출 신청**. 설명은 API.md 4절.
@@ -18,7 +19,8 @@ import { createRequest } from "@/lib/stock/requests";
  * 🔴 **멱등**: 같은 `requestKey` 가 두 번 오면 새로 만들지 않고 **처음 만든 신청을 그대로** 돌려준다
  *    (201 새로 만듦 / 200 이미 있음, 본문의 `created`). 그래야 끊겼을 때 A/S 가 안심하고 다시 보낸다.
  * 🔴 **결과를 알려 주지 않는다.** 승인·반려는 A/S 가 **물어 간다**(2026-10-15 사용자 결정) — 되돌려 부르는
- *    길(웹훅)은 만들지 않았다. 재고관리가 A/S 를 부르는 통로는 인수번호 조회 하나뿐이다(API.md 4-2절).
+ *    길(웹훅)은 만들지 않았다. 재고관리가 A/S 를 부르는 통로는 인수번호 조회 하나뿐이다(API.md 4-6절).
+ *    물어 가는 통로는 **이 파일 아래의 `GET`** 이다(2026-10-15, API.md 4-7절).
  *
  * 규칙·검사는 전부 순수 함수에 있다(`src/lib/api/stock-requests.ts`). 여기서 하는 일은 셋뿐이다:
  * 부품 No. 되짚기 · 포털 번호로 사람 되짚기 · `createRequest` 부르기.
@@ -71,6 +73,32 @@ export async function POST(request: NextRequest) {
     console.error("[api] 반출 신청 만들기 실패:", e instanceof Error ? e.message : e);
     return NextResponse.json({ error: "server_error", message: "신청을 만들지 못했습니다. 같은 requestKey 로 다시 보내십시오." }, { status: 500, headers: NO_STORE });
   }
+}
+
+/**
+ * GET /api/v1/stock-requests?key=…&key=… — A/S 가 **제가 올린 신청의 지금 상태를 물어 간다**.
+ * 설명은 API.md 4-7절, 규칙과 모양은 전부 `src/lib/api/stock-request-status.ts`(순수 함수).
+ *
+ * 🔴 **읽기 토큰이다**(`INVENTORY_API_TOKEN`). 바로 위 POST 와 **같은 주소인데 토큰이 다르다** — 가르는 것은
+ *    주소가 아니라 **하는 일**이다. 읽기 토큰은 부품 목록을 가져가는 여러 시스템이 나눠 쓰는 값이라 재고를
+ *    움직이는 신청을 만들 수 없어야 하고, 거꾸로 **읽기만 하는 이 통로에 쓰기 토큰을 요구할 까닭은 없다.**
+ *    (쓰기 토큰으로 두드리면 401 이다 — 두 값이 다르기 때문이고, 그것을 시험이 지킨다.)
+ * 🔴 **열쇠는 A/S 쪽 요청 번호**(`requestKey`)다. 우리 내부 번호로 묻게 하지 않는다.
+ * 🔴 **못 찾은 열쇠를 조용히 빠뜨리지 않는다** — 응답의 `notFound` 에 그대로 적어 돌려준다.
+ *
+ * 여기서 하는 일은 둘뿐이다: 열쇠 읽기 · 그 열쇠들로 신청 되읽기.
+ */
+export async function GET(request: NextRequest) {
+  const denied = checkApiToken(request);
+  if (denied) return denied;
+
+  const parsed = parseStatusKeys(request.nextUrl.searchParams);
+  if (!parsed.ok) return bad(parsed.message);
+
+  const found = await listRequestsByExternalKeys(parsed.keys);
+  // 🔵 찾은 것을 열쇠로 묶어 순수 함수에 넘긴다 — 「물어본 차례 그대로」와 「못 찾은 열쇠」를 거기서 가린다.
+  const byKey = new Map(found.map((f) => [f.externalKey, f.request]));
+  return NextResponse.json(buildStatusResponse(parsed.keys, byKey, new Date().toISOString()), { headers: NO_STORE });
 }
 
 function bad(message: string) {

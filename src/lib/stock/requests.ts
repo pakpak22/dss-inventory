@@ -678,6 +678,27 @@ export async function listAllRequests(): Promise<PendingRequestRow[]> {
 }
 
 /**
+ * 바깥 요청 번호(A/S 쪽 `requestKey`)로 신청을 **여러 건 한 번에** 되읽는다
+ * (2026-10-15, `GET /api/v1/stock-requests`. 설명은 API.md 4-7절).
+ *
+ * 🔵 **읽기만 더한 함수다** — 이 파일의 어떤 동작도 바뀌지 않았다. 줄을 빚는 길은 그대로
+ *    `attachNames` → `toRow` 하나라, A/S 가 물어 가는 값과 화면이 그리는 값이 **같은 곳에서** 나온다.
+ * 🔴 열쇠를 함께 돌려준다 — `PendingRequestRow` 에는 바깥 요청 번호가 없고(화면이 쓸 일이 없다),
+ *    돌려줄 때는 **물어본 열쇠로 짝지어야** 하기 때문이다. 차례에 기대지 않고 신청 번호로 맞춘다.
+ * 🔵 못 찾은 열쇠를 여기서 가리지 않는다 — 가르는 자리는 순수 함수 한 곳이다
+ *    (`lib/api/stock-request-status.ts` 의 `buildStatusResponse`). 그래야 시험이 DB 없이 덮는다.
+ * 🔵 재고 관리에서 직접 올린 신청은 이 칸이 비어 있어 **절대 걸리지 않는다**(NULL 은 어떤 값과도 같지 않다).
+ */
+export async function listRequestsByExternalKeys(keys: readonly string[]): Promise<Array<{ externalKey: string; request: PendingRequestRow }>> {
+  const unique = [...new Set(keys)];
+  if (unique.length === 0) return [];
+  const rows = await db().select().from(stockRequests).where(inArray(stockRequests.externalKey, unique));
+  const keyById = new Map(rows.map((r) => [r.id, r.externalKey ?? ""]));
+  const views = await attachNames(rows);
+  return views.map((request) => ({ externalKey: keyById.get(request.id) ?? "", request }));
+}
+
+/**
  * 🔵 부품 정보와 「이미 나간 수량」을 각각 **한 번씩**만 묻는다(신청 수와 무관하게 질의 둘).
  * 🔴 목록을 만드는 길은 여기 하나뿐이다 — 신청 줄을 읽는 자리가 늘어도 **같은 줄 모양**을 받는다.
  *    화면마다 따로 채우면 언젠가 한쪽에만 칸이 생겨 갈린다.

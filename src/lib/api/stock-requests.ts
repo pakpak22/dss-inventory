@@ -53,7 +53,11 @@ export interface ApiStockRequestInput {
 
 export type ParseApiStockRequestResult = { ok: true; value: ApiStockRequestInput } | { ok: false; message: string };
 
-const MAX_KEY = 100;
+/**
+ * 바깥 요청 번호의 길이 상한. 🔵 **되읽는 통로도 이 값으로 자른다**(`./stock-request-status.ts`) —
+ * 올릴 때 잘려 저장된 열쇠를 물을 때 안 자르면 **같은 글자로 물어도 못 찾는다.** 그래서 내보낸다.
+ */
+export const MAX_KEY = 100;
 const MAX_SUB = 200;
 const MAX_NAME = 100;
 

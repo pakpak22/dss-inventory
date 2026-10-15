@@ -1,5 +1,5 @@
 import "server-only";
-import { asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db/client";
 import {
   ohPartTemplateItems,
@@ -23,6 +23,9 @@ export type { OhTemplateItemView, OhTemplateModelView, OhTemplateView };
  * 「이 수리 건의 장비에 붙은 템플릿」을 찾는 일은 **A/S 쪽 화면의 것**이고, 이 시스템에는
  * `repair_cases` · `products` 표가 아예 없다. 나중에 부품 요청 화면이 그것을 필요로 하면 그때
  * A/S 가 모델 id 를 실어 보내고 이쪽이 `oh_part_template_models` 로 찾는 모양이 될 것이다.
+ *
+ * 🔵 **2026-10-15 에 그대로 됐다** — 아래 `findOhTemplateByProductModel` 이 그 모양이고,
+ *    `GET /api/v1/oh-templates?modelId=…` 가 부른다. 수리 건은 저쪽이 풀어서 **모델 id 만** 보낸다.
  *
  * ── 🔴 모델 고르개 목록은 여기서 만들지 않는다 ──────────────────────────
  * 제품 모델 표가 이 시스템에 없다. 고를 수 있는 모델은 A/S 에서 받아 오고(`as-product-models.ts`),
@@ -155,4 +158,76 @@ export async function listOhPartOptions(): Promise<OhPartLinkOption[]> {
     .from(parts)
     .where(eq(parts.isDeleted, false))
     .orderBy(asc(parts.name), asc(parts.no));
+}
+
+/**
+ * 이 통로가 쓰는 템플릿 한 장의 모양. 🔵 화면용 `OhTemplateView` 와 **일부러 다르다** —
+ * 그쪽은 고칠 때 필요한 것(판 번호 · 줄 id · 부품 uuid · O/H 단가)을 싣고, 이쪽은 **읽어 가는 쪽이
+ * 쓰는 것만** 싣는다(API.md 2절의 「UUID 는 내주지 않는다」).
+ */
+export type OhTemplateForModel = {
+  id: string;
+  name: string;
+  note: string | null;
+  items: {
+    displayOrder: number;
+    partNameText: string;
+    quantity: number;
+    partNo: number | null;
+    partName: string | null;
+  }[];
+};
+
+/**
+ * **이 제품 모델에 이어진 O/H 템플릿 한 장.** 없으면 `null` 이다(오류가 아니다 — 안 이어 두었거나
+ * O/H 템플릿이 없는 기종이면 없다).
+ *
+ * A/S 가 「이 장비의 O/H 부품」을 읽어 갈 때 쓴다(`GET /api/v1/oh-templates`, API.md 6절).
+ * 🔴 열쇠는 **A/S 의 `product_models.id`** 다 — 그 값이 그대로 `oh_part_template_models.product_model_id`
+ *    에 적혀 있다(스키마 머리말). 이름으로 잇지 않는다: 이름은 **이을 때 떠 온 사본**이라 저쪽에서 고치면
+ *    여기 값은 따라 바뀌지 않는다.
+ *
+ * 🔴 **모델 하나는 템플릿 하나에만 붙는다**(`oh_part_template_models_model_uq`). 그래서 `limit(1)` 이고,
+ *    결과가 여럿일 수 없다.
+ *
+ * 🔵 `listOhTemplates` 를 다시 쓰지 않는 까닭 둘:
+ *    ① 그쪽은 **살아 있는 템플릿을 전부** 읽어 와서 하나를 고른다(원본 A/S 가 그렇게 한다). 통로가
+ *       부를 때마다 전부 읽을 일이 아니다.
+ *    ② 🔴 그쪽은 **O/H 단가를 함께 읽는다.** 이 통로는 단가를 내보내지 않기로 했으므로
+ *       (`lib/api/oh-templates.ts` 머리말) 아예 **그 표를 열지 않는 길**로 간다 — 읽어 놓고 모양에서
+ *       빼는 것은, 다음 사람이 칸을 하나 더할 때 조용히 새어 나가는 길을 열어 둔다.
+ */
+export async function findOhTemplateByProductModel(productModelId: string): Promise<OhTemplateForModel | null> {
+  const [head] = await db()
+    .select({ id: ohPartTemplates.id, name: ohPartTemplates.name, note: ohPartTemplates.note })
+    .from(ohPartTemplateModels)
+    .innerJoin(ohPartTemplates, eq(ohPartTemplates.id, ohPartTemplateModels.templateId))
+    // 🔴 **지워진(숨긴) 템플릿은 뺀다.** 되살릴 수 있게 남겨 둔 것이지 쓰라고 둔 것이 아니다.
+    .where(and(eq(ohPartTemplateModels.productModelId, productModelId), eq(ohPartTemplates.isDeleted, false)))
+    .limit(1);
+
+  if (!head) return null;
+
+  const items = await db()
+    .select({
+      displayOrder: ohPartTemplateItems.displayOrder,
+      partNameText: ohPartTemplateItems.partNameText,
+      quantity: ohPartTemplateItems.quantity,
+      partNo: parts.no,
+      partName: parts.name,
+    })
+    .from(ohPartTemplateItems)
+    /**
+     * 🔴 **이어 읽는 조건에 `is_deleted = false` 가 함께 있다.** 숨긴 부품은 「안 이어진 줄」로 나간다.
+     *    빼고 보면 부품이 숨겨진 줄이 **번호를 달고** 나가고, A/S 가 그것을 담아 올린 반출 신청은
+     *    `POST /api/v1/stock-requests` 에서 **통째로 400** 이 된다(숨긴 부품은 거절한다). 줄 하나 때문에
+     *    요청 전체가 막히는데, A/S 쪽에서는 왜인지 알 길이 없다.
+     * 🔵 `where` 가 아니라 **join 조건**에 둔다 — `where` 에 두면 그 줄이 통째로 사라져, 감추지 않기로 한
+     *    약속이 깨진다.
+     */
+    .leftJoin(parts, and(eq(parts.id, ohPartTemplateItems.partId), eq(parts.isDeleted, false)))
+    .where(eq(ohPartTemplateItems.templateId, head.id))
+    .orderBy(asc(ohPartTemplateItems.displayOrder));
+
+  return { ...head, items };
 }
