@@ -1,5 +1,5 @@
 import { CHARGE_TYPES, ENTRY_TYPES, PURPOSES, type ChargeType, type EntryType, type Purpose, type Sheet } from "@/db/schema/stock";
-import type { RequestStatus } from "@/db/schema/stock-requests";
+import type { RequestSource, RequestStatus } from "@/db/schema/stock-requests";
 
 /**
  * 수량 변경 기록의 코드값 → 화면 글자 (DESIGN 4-1절). 저장은 영문, 화면은 한글. 화면 전체가 이 표 하나를 쓴다.
@@ -91,6 +91,42 @@ export type ClaimableRequestStatus = (typeof CLAIMABLE_REQUEST_STATUSES)[number]
 /** 🔵 좁히는 검사다 — 화면이 단추 묶음에 넘기는 상태가 **둘 중 하나임을 타입이 보증**한다(그래서 거기서 「반려냐 마감이냐」를 가를 수 있다). */
 export function isClaimableRequest(status: RequestStatus): status is ClaimableRequestStatus {
   return (CLAIMABLE_REQUEST_STATUSES as readonly RequestStatus[]).includes(status);
+}
+
+/**
+ * 신청이 **어디서 올라왔나** → 화면 글자 (2026-10-15, A/S 반출 신청 통로).
+ *
+ * 🔴 `Record` 로 둔 까닭은 위 `REQUEST_STATUS_LABEL` 과 같다 — 출처를 하나 더하고 여기를 안 고치면 **tsc 가 멈춘다.**
+ * 🔵 재고 관리에서 직접 올린 것은 **글자를 비운다**(`""`). 거의 전부가 그것이라, 줄마다 「재고 관리」가 붙으면
+ *    눈에 띄어야 할 「A/S」가 묻힌다. 표식은 **다른 데서 온 것에만** 붙인다.
+ */
+export const REQUEST_SOURCE_LABEL: Record<RequestSource, string> = {
+  INVENTORY: "",
+  AS: "A/S",
+};
+
+/**
+ * 신청한 사람이 **거둘 수 있는 출처** — 재고 관리에서 직접 올린 것뿐이다 (2026-10-15).
+ *
+ * 🔴 **A/S 에서 올라온 신청은 재고 관리에서 취소되지 않는다.** 저쪽에 「이 부품 내 달라」가 열린 채 남아 있는데
+ *    이쪽에서 접으면, A/S 는 영영 답을 못 받고 사람은 기다린다. 거두는 것은 **낸 쪽(A/S)의 몫**이다.
+ * 🔴 **화면과 서버가 이 한 벌을 같이 본다** — 아래 `canCancelRequest`(화면이 단추를 그릴지)와
+ *    `src/lib/stock/requests.ts` 의 `cancelRequest`(실제로 막는 WHERE). 손으로 두 벌 적으면 언젠가 갈린다.
+ */
+export const CANCELLABLE_REQUEST_SOURCES = ["INVENTORY"] as const satisfies readonly RequestSource[];
+
+/**
+ * 「내가 거둘 수 있는 신청인가」 — 출처 · 상태 · 본인 셋을 함께 본다 (2026-10-15).
+ *
+ * 🔵 **울타리가 아니라 단추를 그릴지의 판정이다.** 실제로 막는 자리는 `cancelRequest` 의 WHERE 이고,
+ *    거기도 **같은 세 조건**을 건다. 여기를 지워도 쓰기는 안 뚫린다.
+ * 🔴 `requestedBy` 가 `null` 이면(= A/S 에서 왔고 재고 관리에 없는 사람) 누구와도 같지 않다 — 지어낸 기본값을
+ *    넣지 않는다. SQL 쪽도 `NULL = <내 id>` 가 참이 되지 않아 **저절로** 같은 답을 낸다.
+ */
+export function canCancelRequest(request: { source: RequestSource; status: RequestStatus; requestedBy: string | null }, actorUserId: string): boolean {
+  if (!(CANCELLABLE_REQUEST_SOURCES as readonly RequestSource[]).includes(request.source)) return false;
+  if (request.status !== "PENDING") return false;
+  return request.requestedBy !== null && request.requestedBy === actorUserId;
 }
 
 /**

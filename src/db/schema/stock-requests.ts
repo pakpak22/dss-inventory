@@ -39,6 +39,22 @@ export const REQUEST_STATUSES = ["PENDING", "CONFIRMING", "CONFIRMED", "REJECTED
 export type RequestStatus = (typeof REQUEST_STATUSES)[number];
 export const requestStatusEnum = pgEnum("stock_request_status", REQUEST_STATUSES);
 
+/**
+ * **어디서 올라온 신청인가** (2026-10-15, A/S 반출 신청 통로).
+ *
+ * - `INVENTORY` 재고 관리 화면에서 직접 — **기본값**이고, 지금까지의 모든 신청이 이것이다.
+ * - `AS` A/S 관리 시스템이 통로(`POST /api/v1/stock-requests`)로 올린 것.
+ *
+ * 🔴 **값은 언제나 맨 뒤에 더한다**(이 저장소 규약). 가운데 끼우면 마이그레이션이 enum 타입을 통째로
+ *    다시 만들 수 있어서, 기존 값을 건드리지 않는 `ALTER TYPE … ADD VALUE` 한 줄로 끝내려는 것이다.
+ *    차례에 뜻은 없다. 선례: `drizzle/0010_concerned_lucky_pierre.sql` 의 `PARTIAL`.
+ * 🔵 「PO·내자에서도 올라올 수 있다」는 생각으로 enum 으로 뒀다. 불리언(`from_as`)이면 셋째가 생길 때
+ *    칸을 갈아야 한다.
+ */
+export const REQUEST_SOURCES = ["INVENTORY", "AS"] as const;
+export type RequestSource = (typeof REQUEST_SOURCES)[number];
+export const requestSourceEnum = pgEnum("stock_request_source", REQUEST_SOURCES);
+
 export const stockRequests = pgTable(
   "stock_requests",
   {
@@ -49,8 +65,42 @@ export const stockRequests = pgTable(
     payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
     /** 화면에 보여 줄 요약(부품 줄 수·총 수량·인수번호 등). payload 를 매번 풀지 않으려고 */
     summary: text("summary").notNull().default(""),
-    requestedBy: uuid("requested_by").notNull(),
+    /**
+     * 어디서 올라왔나 (2026-10-15). 🔵 기본값이 `INVENTORY` 라 지금까지 쌓인 신청과 화면에서 올리는
+     * 신청은 **한 글자도 달라지지 않는다.**
+     */
+    source: requestSourceEnum("source").notNull().default("INVENTORY"),
+    /**
+     * 바깥 요청 번호 — **A/S 쪽 요청 id**(통로의 `requestKey`). 🔴 **중복 불가**다: 통신이 끊겨 같은 신청이
+     * 두 번 와도 신청은 하나여야 한다(담당자 답변3 4절). 두 번째 호출은 오류가 아니라 **처음 만든 신청을
+     * 그대로 돌려받는다**(`src/lib/stock/requests.ts` 의 `createRequest`).
+     *
+     * 🔵 **재고 관리에서 직접 올린 신청은 비어 있고, 여러 줄이 비어 있어도 중복 불가에 안 걸린다** —
+     *    PostgreSQL 의 UNIQUE 색인은 NULL 을 서로 다른 값으로 보기 때문이다(기본 `NULLS DISTINCT`).
+     *    그래서 부분 색인(`WHERE external_key IS NOT NULL`)을 따로 두지 않았다.
+     * 🔴 미리 찾아보는 것만으로는 못 막는다 — 두 호출이 같은 순간 들어오면 둘 다 「없음」을 본다.
+     *    **진짜 울타리는 이 색인**이고, 거기 부딪히면 다시 찾아 돌려준다.
+     */
+    externalKey: text("external_key"),
+    /**
+     * 신청한 사람의 재고 관리 `users.id`.
+     *
+     * 🔴 **2026-10-15 에 NOT NULL 을 풀었다.** A/S 에서 올라온 신청자는 **이 시스템에 계정이 없을 수 있고**,
+     *    없다고 신청을 막으면 현장에서 요청을 못 낸다(사용자 결정). 그때는 이름(`requested_by_name`)과
+     *    포털 번호(`requester_sub`)만 남는다.
+     * 🔴 그래서 **본인 확인이 필요한 자리**는 id 가 없는 신청을 자동으로 떨어뜨린다 — SQL 에서 `NULL = <내 id>`
+     *    는 참이 되지 않는다. 신청 취소가 그 자리이고, 거기엔 출처 조건도 따로 걸어 두었다
+     *    (`src/lib/stock/requests.ts` 의 `cancelRequest`: A/S 신청은 A/S 가 거둔다).
+     * 🔴 FK 를 걸지 않는다 — 걸면 이 시스템에 없는 사람의 신청을 아예 넣을 수 없다.
+     */
+    requestedBy: uuid("requested_by"),
     requestedByName: text("requested_by_name").notNull(),
+    /**
+     * 신청자의 **포털 번호**(`users.auth_sub` 와 같은 값). 재고 관리에서 사람을 찾았든 못 찾았든 적어 둔다 —
+     * 🔵 못 찾은 사람을 나중에 되짚을 **유일한 열쇠**다(이름은 동명이인이 있고 바뀐다).
+     * 🔵 화면에서 직접 올린 신청은 비어 있다. 거기서는 `requested_by` 가 곧 사람이라 번호를 또 적을 까닭이 없다.
+     */
+    requesterSub: text("requester_sub"),
     requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
     decidedBy: uuid("decided_by"),
     decidedByName: text("decided_by_name"),
@@ -75,7 +125,12 @@ export const stockRequests = pgTable(
     /** 확인되어 쓰인 원장 머리 */
     entryId: uuid("entry_id"),
   },
-  (t) => [index("stock_requests_status_idx").on(t.status, t.requestedAt), index("stock_requests_requester_idx").on(t.requestedBy)],
+  (t) => [
+    index("stock_requests_status_idx").on(t.status, t.requestedAt),
+    index("stock_requests_requester_idx").on(t.requestedBy),
+    /** 🔴 같은 바깥 요청 번호로 신청이 두 번 서지 않게. 빈 칸끼리는 안 부딪힌다(위 `externalKey` 주석). */
+    uniqueIndex("stock_requests_external_key_uq").on(t.externalKey),
+  ],
 );
 
 export type StockRequest = typeof stockRequests.$inferSelect;

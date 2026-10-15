@@ -5,13 +5,13 @@ import { auditLogs } from "@/db/schema/audit-logs";
 import { parts } from "@/db/schema/parts";
 import { stockBalances } from "@/db/schema/stock-balances";
 import { stockTransactions } from "@/db/schema/stock";
-import { stockRequestIssues, stockRequests, type RequestStatus } from "@/db/schema/stock-requests";
+import { stockRequestIssues, stockRequests, type RequestSource, type RequestStatus } from "@/db/schema/stock-requests";
 import { auditValues } from "@/lib/audit";
 import type { Owner } from "@/lib/parts/codes";
-import { ACTIONABLE_REQUEST_STATUSES, CLAIMABLE_REQUEST_STATUSES, ENTRY_TYPE_LABEL, isClosedRequest, type EntryType } from "./codes";
+import { ACTIONABLE_REQUEST_STATUSES, CANCELLABLE_REQUEST_SOURCES, CLAIMABLE_REQUEST_STATUSES, ENTRY_TYPE_LABEL, isClosedRequest, type EntryType } from "./codes";
 import type { EntryInput } from "./form";
 import { buildIssueInput, type IssueQuantity } from "./issue";
-import { LedgerAbort, ledgerErrorMessage, recordEntryIn, type Actor, type RecordResult } from "./ledger";
+import { LedgerAbort, ledgerErrorMessage, recordEntryIn, type Actor, type EntryAuthor, type RecordResult } from "./ledger";
 
 /**
  * 반출 확인 대기 (2026-10-06 사용자 결정). 신청 → 담당자 확인 → 원장.
@@ -95,7 +95,16 @@ export interface PendingRequestRow {
    * 🔵 「누가 언제 왜 걸고 풀었나」의 이력은 칸이 아니라 감사 로그에 있다(`STOCK_REQUEST_HELD`·`…_HOLD_RELEASED`).
    */
   hold: { reason: string; heldByName: string; heldAt: string } | null;
-  requestedBy: string;
+  /**
+   * 어디서 올라왔나 (2026-10-15). 화면이 「A/S」 표식을 붙이고 [신청 취소]를 그릴지 가린다
+   * (`./codes` 의 `REQUEST_SOURCE_LABEL`·`canCancelRequest`).
+   */
+  source: RequestSource;
+  /**
+   * 신청한 사람의 재고 관리 `users.id`. 🔴 **`null` 일 수 있다** — A/S 에서 올라왔고 포털 번호로 재고 관리의
+   * 사람을 못 찾은 신청이다. 그때도 이름(`requestedByName`)은 있다.
+   */
+  requestedBy: string | null;
   requestedByName: string;
   requestedAt: string;
   decidedByName: string | null;
@@ -158,17 +167,110 @@ async function partViewsOf(partIds: readonly string[]): Promise<Map<string, Part
   return new Map(rows.map((r) => [r.id, { no: r.no, name: r.name, owner: r.owner, available: r.available ?? 0 }]));
 }
 
-export async function createRequest(input: EntryInput, actor: Actor): Promise<{ id: string }> {
+/**
+ * 신청을 낸 사람 (2026-10-15, A/S 통로).
+ *
+ * 🔴 **`id` 가 `null` 일 수 있다** — A/S 에서 올라온 신청자는 재고 관리의 `users` 에 **없을 수 있다.**
+ *    없다고 신청을 막으면 현장에서 요청을 못 낸다(사용자 결정). 그때 남는 것은 **이름과 포털 번호**뿐이고,
+ *    나중에 그 사람이 재고 관리에 로그인하면 포털 번호로 이어 볼 수 있다.
+ * 🔵 화면이 쓰는 `Actor`(`id: string`)는 이 모양에 그대로 들어맞는다 — 부르는 자리를 하나도 고치지 않았다.
+ */
+export interface Requester {
+  id: string | null;
+  name: string;
+}
+
+/** 재고 관리 화면에서 직접 올린 신청. 🔵 기본값이라 부르는 쪽이 아무것도 안 넘기면 이것이다. */
+const INVENTORY_ORIGIN: RequestOrigin = { source: "INVENTORY" };
+
+export interface RequestOrigin {
+  /** 어디서 올라왔나. 🔵 감사 로그에도 그대로 남는다. */
+  source: RequestSource;
+  /**
+   * 바깥 요청 번호(A/S 쪽 요청 id). 🔴 **같은 값이 두 번 오면 새로 만들지 않고 처음 것을 돌려준다.**
+   * 직접 올린 신청은 `null` 이다.
+   */
+  externalKey?: string | null;
+  /** 신청자의 포털 번호. `users` 에서 못 찾아도 적어 둔다 — 사람을 되짚을 유일한 열쇠다. */
+  requesterSub?: string | null;
+  /** 감사 로그에 더 실을 것(바깥이 보낸 이름 등). 🔵 본 작업과 한 트랜잭션에 들어간다. */
+  audit?: Record<string, unknown>;
+}
+
+export interface CreatedRequest {
+  id: string;
+  status: RequestStatus;
+  /** 🔴 **이번에 새로 만들었나.** 거짓이면 같은 열쇠로 이미 들어와 있던 신청을 그대로 돌려준 것이다. */
+  created: boolean;
+}
+
+/** 같은 바깥 요청 번호로 이미 들어온 신청. 멱등의 양쪽(미리 보기·부딪힌 뒤)이 **같은 질의**를 쓴다. */
+async function findByExternalKey(externalKey: string): Promise<{ id: string; status: RequestStatus } | null> {
+  const [row] = await db().select({ id: stockRequests.id, status: stockRequests.status }).from(stockRequests).where(eq(stockRequests.externalKey, externalKey));
+  return row ?? null;
+}
+
+/** 바깥 요청 번호의 UNIQUE(`stock_requests_external_key_uq`)에 부딪혔나 — 두 호출이 **같은 순간** 들어왔을 때. */
+function isExternalKeyConflict(e: unknown): boolean {
+  const o = e as { code?: unknown; constraint_name?: unknown } | null;
+  return !!o && typeof o === "object" && o.code === "23505" && o.constraint_name === "stock_requests_external_key_uq";
+}
+
+/**
+ * 신청 만들기 — **신청이 생기는 길은 여기 하나다**(화면도, A/S 통로도).
+ *
+ * 🔵 **멱등 (2026-10-15, A/S 통로)**: `origin.externalKey` 가 있으면 먼저 그 번호로 찾아보고, 있으면
+ *    **새로 만들지 않고 그것을 돌려준다**(`created: false`). 끊겨서 다시 보내도 두 번 서지 않는다.
+ *  - 🔴 **오류가 아니라 「처음 것」을 돌려준다.** 오류로 답하면 A/S 가 「만들어진 건가 아닌가」를 알 수 없어
+ *    사람이 손으로 확인해야 한다. 그 편이 재고보다 더 자주 틀린다.
+ *  - 🔴 미리 찾아보는 것만으로는 부족하다 — 두 호출이 같은 순간 들어오면 둘 다 「없음」을 보고 둘 다 넣으려 한다.
+ *    **진짜 울타리는 DB 의 UNIQUE** 이고, 거기 부딪히면 다시 찾아 돌려준다. 미리 찾는 것은 흔한 쪽(이미 있음)을
+ *    값싸게 끝내는 지름길일 뿐이다.
+ *  - 🔵 비어 있는(`null`) 바깥 번호는 UNIQUE 에 안 걸린다 — PostgreSQL 의 UNIQUE 는 NULL 을 서로 다른 값으로
+ *    본다(기본 `NULLS DISTINCT`). 그래서 재고 관리에서 직접 올린 신청이 몇천 건 쌓여도 서로 부딪히지 않는다.
+ */
+export async function createRequest(input: EntryInput, actor: Requester, origin: RequestOrigin = INVENTORY_ORIGIN): Promise<CreatedRequest> {
+  const externalKey = origin.externalKey ?? null;
+  if (externalKey !== null) {
+    const found = await findByExternalKey(externalKey);
+    if (found) return { ...found, created: false };
+  }
   const names = await partNamesOf(linesOf(input).map((l) => l.partId));
   const summary = buildRequestSummary(input, names);
-  return db().transaction(async (tx) => {
-    const [row] = await tx
-      .insert(stockRequests)
-      .values({ type: input.type, payload: input as unknown as Record<string, unknown>, summary, requestedBy: actor.id, requestedByName: actor.name })
-      .returning({ id: stockRequests.id });
-    await tx.insert(auditLogs).values(auditValues({ action: "STOCK_REQUEST", actorId: actor.id, actorName: actor.name, target: `requests:${row.id}`, detail: { type: input.type, summary } }));
-    return { id: row.id };
-  });
+  try {
+    return await db().transaction(async (tx) => {
+      const [row] = await tx
+        .insert(stockRequests)
+        .values({
+          type: input.type,
+          payload: input as unknown as Record<string, unknown>,
+          summary,
+          requestedBy: actor.id,
+          requestedByName: actor.name,
+          source: origin.source,
+          externalKey,
+          requesterSub: origin.requesterSub ?? null,
+        })
+        .returning({ id: stockRequests.id, status: stockRequests.status });
+      await tx.insert(auditLogs).values(
+        auditValues({
+          action: "STOCK_REQUEST",
+          actorId: actor.id,
+          actorName: actor.name,
+          target: `requests:${row.id}`,
+          // 🔴 **출처가 이력에 남는다.** 신청 표의 칸은 지금 값이고, 「어디서 들어왔나」를 영영 들고 있는 것은 여기다.
+          detail: { type: input.type, summary, source: origin.source, externalKey, ...(origin.audit ?? {}) },
+        }),
+      );
+      return { id: row.id, status: row.status, created: true };
+    });
+  } catch (e) {
+    if (externalKey !== null && isExternalKeyConflict(e)) {
+      const found = await findByExternalKey(externalKey);
+      if (found) return { ...found, created: false };
+    }
+    throw e;
+  }
 }
 
 export type ConfirmResult =
@@ -290,7 +392,10 @@ export async function confirmRequest(id: string, admin: Actor, opts: ConfirmOpti
   const restore = () => db().update(stockRequests).set({ status: previousStatus }).where(eq(stockRequests.id, id));
 
   const payload = request.payload as unknown as EntryInput;
-  const requester: Actor = { id: request.requestedBy, name: request.requestedByName };
+  // 🔴 **신청한 사람의 id 가 없을 수 있다** — A/S 에서 올라왔고 재고 관리에 계정이 없는 사람이다.
+  //    그때 원장 건의 `created_by` 는 비고 `created_by_name` 에 이름만 남는다(`EntryAuthor` 주석).
+  //    🔵 확인하는 담당자(`admin`)는 여전히 `Actor` 라 반드시 이 시스템의 사람이다.
+  const requester: EntryAuthor = { id: request.requestedBy, name: request.requestedByName };
 
   // 2. 「요청 수량」이 아니라 「이번에 줄 수량」으로 원장 입력을 만든다. 🔴 원장으로 가는 길은 이 함수 하나뿐이다.
   //    집기로 이 요청을 혼자 들고 있으므로 이미 나간 수량을 트랜잭션 밖에서 읽어도 그 사이에 바뀌지 않는다.
@@ -489,15 +594,24 @@ export async function releaseRequestHold(id: string, admin: Actor): Promise<{ ok
   return { ok: true };
 }
 
-/** 신청한 사람 본인이 아직 PENDING 인 것만 거둔다. 🔴 보류 중이면 막힌다 — 담당자가 먼저 풀어야 한다(위 `holdRequest`). */
+/**
+ * 신청한 사람 본인이 아직 PENDING 인 것만 거둔다. 🔴 보류 중이면 막힌다 — 담당자가 먼저 풀어야 한다(위 `holdRequest`).
+ *
+ * 🔴 **A/S 에서 올라온 신청은 여기서 거둬지지 않는다** (2026-10-15). 저쪽에 「이 부품 내 달라」가 열린 채 남아
+ *    있는데 이쪽에서 접으면 A/S 는 영영 답을 못 받는다 — 거두는 것은 **낸 쪽의 몫**이다. 출처 묶음은
+ *    `./codes` 의 `CANCELLABLE_REQUEST_SOURCES` 하나뿐이고 화면의 단추도 **같은 것**을 본다.
+ * 🔵 사람 조건(`requested_by = 나`)만으로는 모자란다: 포털 번호가 재고 관리의 사람과 **맞아떨어진** A/S 신청은
+ *    그 사람의 id 가 적혀 있어 조건을 통과한다. 못 맞춘 신청은 `requested_by` 가 NULL 이라 저절로 막히지만,
+ *    **맞은 쪽과 못 맞춘 쪽이 다르게 굴면 안 된다.** 그래서 출처를 따로 건다.
+ */
 export async function cancelRequest(id: string, actor: Actor): Promise<{ ok: boolean; message?: string }> {
   const now = new Date();
   const [row] = await db()
     .update(stockRequests)
     .set({ status: "CANCELLED", decidedBy: actor.id, decidedByName: actor.name, decidedAt: now })
-    .where(and(eq(stockRequests.id, id), eq(stockRequests.status, "PENDING"), eq(stockRequests.requestedBy, actor.id)))
+    .where(and(eq(stockRequests.id, id), eq(stockRequests.status, "PENDING"), eq(stockRequests.requestedBy, actor.id), inArray(stockRequests.source, [...CANCELLABLE_REQUEST_SOURCES])))
     .returning({ summary: stockRequests.summary });
-  if (!row) return { ok: false, message: "거둘 수 없는 신청입니다. 이미 처리됐거나 본인 신청이 아닙니다." };
+  if (!row) return { ok: false, message: "거둘 수 없는 신청입니다. 이미 처리됐거나, 본인 신청이 아니거나, A/S 에서 올라온 신청입니다(그것은 A/S 에서 거둡니다)." };
   await db().insert(auditLogs).values(auditValues({ action: "STOCK_REQUEST_CANCELLED", actorId: actor.id, actorName: actor.name, target: `requests:${id}`, detail: { summary: row.summary } }));
   return { ok: true };
 }
@@ -532,6 +646,7 @@ function toRow(r: typeof stockRequests.$inferSelect, names: ReadonlyMap<string, 
     closed: isClosedRequest(r.status, lines),
     // 🔴 **상태로 가른다** — 칸에 값이 남아 있어도 `ON_HOLD` 가 아니면 `null` 이다 (`PendingRequestRow.hold` 주석).
     hold: r.status === "ON_HOLD" ? { reason: r.holdReason, heldByName: r.heldByName ?? "", heldAt: r.heldAt?.toISOString() ?? "" } : null,
+    source: r.source,
     requestedBy: r.requestedBy,
     requestedByName: r.requestedByName,
     requestedAt: r.requestedAt.toISOString(),

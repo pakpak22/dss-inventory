@@ -192,6 +192,22 @@ export const env = {
     if (v.length < 32) throw new Error("INVENTORY_API_TOKEN 은 32자 이상이어야 합니다.");
     return v;
   },
+
+  /**
+   * A/S 가 **쓰기** 통로(`POST /api/v1/stock-requests`)를 부를 때 내는 공유 토큰. 32자 이상 (2026-10-15).
+   *
+   * 🔴 **읽기 토큰(`INVENTORY_API_TOKEN`)과 다른 값이어야 한다.** 읽기 토큰은 부품 목록을 가져가는
+   *    여러 시스템이 나눠 쓰는 값이고, 그것 하나로 재고를 움직이는 신청까지 만들 수 있으면 안 된다.
+   *    같은 값을 넣어도 프로그램은 막지 못한다 — 담당자가 **따로 만들어** 양쪽에 넣는다(API.md).
+   * 🔴 비어 있으면 쓰기 통로가 503 으로 **닫힌다**. 열어 두지 않는다 — 읽기 쪽과 같은 규칙이다.
+   *    화면과 읽기 통로는 영향을 받지 않는다.
+   */
+  get inventoryWriteToken(): string | null {
+    const v = optional("INVENTORY_WRITE_TOKEN", "");
+    if (v === "") return null;
+    if (v.length < 32) throw new Error("INVENTORY_WRITE_TOKEN 은 32자 이상이어야 합니다.");
+    return v;
+  },
 } as const;
 
 /**

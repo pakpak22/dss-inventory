@@ -24,6 +24,22 @@ export interface Actor {
   name: string;
 }
 
+/**
+ * 원장 건에 **「기록한 사람」으로 적히는 사람** (2026-10-15, A/S 반출 신청 통로).
+ *
+ * 🔴 **`id` 가 `null` 일 수 있다** — 확인 대기를 거친 건의 기록자는 **신청한 사람**인데(아래 `RecordOptions`),
+ *    A/S 에서 올라온 신청자는 재고 관리의 `users` 에 없을 수 있다. 그때는 이름만 남는다.
+ *    `stock_entries.created_by` 와 `audit_logs.actor_id` 는 **원래부터 nullable** 이라(두 스키마 파일)
+ *    DB 는 한 칸도 바뀌지 않았고, 들어가는 값도 전과 같다. **타입만 넓힌 것이고 동작은 그대로다.**
+ * 🔴 **`Actor` 를 넓히지 않고 자리를 가른 까닭**: 확인한 담당자(`confirmedBy`)·취소한 관리자 같은 자리는
+ *    **반드시 이 시스템의 사람**이라 `null` 이 들어올 수 없어야 한다. 한 타입을 넓히면 그 울타리까지 같이 풀린다.
+ * 🔵 `Actor` 는 이 모양에 그대로 들어맞으므로(좁은 쪽이 넓은 쪽에 들어간다) 부르는 자리는 하나도 안 고쳤다.
+ */
+export interface EntryAuthor {
+  id: string | null;
+  name: string;
+}
+
 export type LedgerError =
   | { code: "part_not_found"; partId: string }
   | { code: "insufficient"; partNo: number; partName: string; have: number; need: number }
@@ -99,7 +115,7 @@ async function lockBalances(tx: Tx, partIds: string[]): Promise<Map<string, { no
 }
 
 /** 머리 + 줄 + 캐시 + 감사 로그. 호출자가 트랜잭션 안에서 부른다. */
-async function writeEntry(tx: Tx, head: HeadSpec, lines: LineSpec[], actor: Actor): Promise<{ ok: true; entryId: string; sheetYear: number; sheetNo: number } | { ok: false; error: LedgerError }> {
+async function writeEntry(tx: Tx, head: HeadSpec, lines: LineSpec[], actor: EntryAuthor): Promise<{ ok: true; entryId: string; sheetYear: number; sheetNo: number } | { ok: false; error: LedgerError }> {
   const balances = await lockBalances(
     tx,
     lines.map((l) => l.partId),
@@ -202,7 +218,7 @@ export interface RecordOptions {
   confirmedBy?: Actor;
 }
 
-export async function recordEntry(input: EntryInput, actor: Actor, opts: RecordOptions = {}): Promise<RecordResult> {
+export async function recordEntry(input: EntryInput, actor: EntryAuthor, opts: RecordOptions = {}): Promise<RecordResult> {
   return db()
     .transaction((tx) => recordEntryIn(tx, input, actor, opts))
     .catch((e) => {
@@ -220,7 +236,7 @@ export type LedgerTx = Tx;
  * 🔴 거절 사유는 결과로 돌려주지 않고 `LedgerAbort` 를 **던진다** — 그래야 호출자의 트랜잭션이 통째로 되돌아간다
  *    (drizzle 은 콜백이 던지면 ROLLBACK). 혼자 한 건 쓸 때는 recordEntry 를 부른다(던진 것을 결과로 바꿔 준다).
  */
-export async function recordEntryIn(tx: Tx, input: EntryInput, actor: Actor, opts: RecordOptions = {}): Promise<Extract<RecordResult, { ok: true }>> {
+export async function recordEntryIn(tx: Tx, input: EntryInput, actor: EntryAuthor, opts: RecordOptions = {}): Promise<Extract<RecordResult, { ok: true }>> {
   const viaRequest = { requestId: opts.requestId ?? null, confirmedBy: opts.confirmedBy ?? null };
   let intake: IntakeInfo | null = null;
   let intakeUnverified = false;

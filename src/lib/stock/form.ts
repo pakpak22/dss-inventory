@@ -43,8 +43,13 @@ type FormLike = { get(name: string): FormDataEntryValue | string | null };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const MAX_QTY = 1_000_000;
-const MAX_LINES = 50;
+/**
+ * 한 건에 받는 상한 둘. 🔵 **내보내는 까닭**(2026-10-15): A/S 가 부르는 반출 신청 통로가 같은 울타리를
+ * 써야 하는데, 거기서 숫자를 새로 정하면 화면으로 적은 신청과 통로로 온 신청이 **다른 규칙**을 받는다.
+ * 숫자가 적힌 곳은 여기 하나다 (`src/lib/api/stock-requests.ts`).
+ */
+export const MAX_QTY = 1_000_000;
+export const MAX_LINES = 50;
 
 function text(fd: FormLike, name: string, max = 500): string {
   const v = fd.get(name);

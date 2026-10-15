@@ -2,10 +2,10 @@
 
 import { useState } from "react";
 import { RequestActions, type RequestActionLine, type RequestActionStatus } from "./RequestActions";
-import type { RequestStatus } from "@/db/schema/stock-requests";
+import type { RequestSource, RequestStatus } from "@/db/schema/stock-requests";
 import { partIssueConfirmLabel, type PartIssueLock } from "@/lib/approval/part-issue-gate";
 import { OWNER_LABEL, formatQuantity, type Owner } from "@/lib/parts/codes";
-import { ENTRY_TYPE_LABEL, REQUEST_STATUS_LABEL, REQUEST_STATUS_ORDER, isClaimableRequest, requestStatusBadge, requestStatusLabel, type EntryType } from "@/lib/stock/codes";
+import { ENTRY_TYPE_LABEL, REQUEST_SOURCE_LABEL, REQUEST_STATUS_LABEL, REQUEST_STATUS_ORDER, canCancelRequest, isClaimableRequest, requestStatusBadge, requestStatusLabel, type EntryType } from "@/lib/stock/codes";
 import type { RequestNotice } from "@/lib/stock/request-notice";
 
 /**
@@ -52,8 +52,13 @@ export interface ManagerRequestRow {
   /** 마감된 신청인가 — 🔴 상태값이 아니라 **세어서** 안다(`isClosedRequest`). 화면은 글자만 「마감」으로 바꾼다 */
   closed: boolean;
   hold: { reason: string; heldByName: string; heldAt: string } | null;
-  /** 신청한 사람의 id. 🔴 **[신청 취소]를 그릴지 가리는 값**이라 이름이 아니라 id 로 견준다(동명이인). */
-  requestedBy: string;
+  /** 어디서 올라왔나 (2026-10-15). 신청자 옆의 표식과 [신청 취소]를 그릴지가 여기서 갈린다. */
+  source: RequestSource;
+  /**
+   * 신청한 사람의 id. 🔴 **[신청 취소]를 그릴지 가리는 값**이라 이름이 아니라 id 로 견준다(동명이인).
+   * 🔴 A/S 에서 올라왔고 포털 번호로 사람을 못 찾은 신청은 `null` 이다 — 그때도 이름은 있다.
+   */
+  requestedBy: string | null;
   requestedByName: string;
   requestedAt: string;
 }
@@ -229,8 +234,10 @@ export function RequestManagerScreen({
    * 🔴 기록 내역에 있던 조건 그대로다(`r.status === "PENDING" && r.requestedBy === 내 id`). 부품이 한 개라도
    *    나간 뒤에는(PARTIAL) 거둘 수 없고, 보류 중이면 담당자가 먼저 풀어야 한다 — 서버의 WHERE 와 같은 말이다.
    * 🔵 관리자도 **자기가 낸 요청**이면 이 단추를 본다. 2026-10-15 부터는 관리자가 적은 반출도 요청으로 올라간다.
+   * 🔴 **A/S 에서 올라온 신청에는 안 그린다** — 거두는 것은 낸 쪽의 몫이다. 판정은 화면이 다시 적지 않고
+   *    서버와 **같은 한 벌**(`canCancelRequest`, `codes.ts`)을 쓴다.
    */
-  const canCancelOf = (r: ManagerRequestRow) => r.status === "PENDING" && r.requestedBy === currentUserId;
+  const canCancelOf = (r: ManagerRequestRow) => canCancelRequest(r, currentUserId);
   /**
    * 단추 열을 그릴지. 🔴 **「관리자면」이 아니다** — 신청자도 자기 대기 신청을 거두므로, 거둘 수 있는 줄이
    *    하나라도 보이면 그 열이 필요하다. 지금 **보이는 목록**(`filtered`)으로 재는 까닭: 열이 거르개를 따라가야
@@ -328,7 +335,12 @@ export function RequestManagerScreen({
                         <span className="tabular block text-xs text-zinc-500">{r.occurredOn}</span>
                       </td>
                       <td className={`${TD} max-w-64 text-zinc-700`}>{aboutOf(r) || <span className="text-zinc-400">-</span>}</td>
-                      <td className={`${TD} whitespace-nowrap text-zinc-700`}>{r.requestedByName}</td>
+                      {/* 🔵 다른 데서 올라온 신청에만 표식을 붙인다 — 거의 전부가 재고 관리에서 직접 올린 것이라,
+                          줄마다 출처가 붙으면 눈에 띄어야 할 「A/S」가 묻힌다(`REQUEST_SOURCE_LABEL`). */}
+                      <td className={`${TD} whitespace-nowrap text-zinc-700`}>
+                        {r.requestedByName}
+                        {REQUEST_SOURCE_LABEL[r.source] ? <span className={`${BADGE} ml-1 bg-zinc-100 text-zinc-600`}>{REQUEST_SOURCE_LABEL[r.source]}</span> : null}
+                      </td>
                       <td className={`${TD} w-[24rem]`}>
                         <RequestItems lines={r.lines} />
                       </td>
