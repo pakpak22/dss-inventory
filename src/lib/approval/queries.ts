@@ -32,15 +32,41 @@ export type { ApprovalRouteStepView, ApprovalRouteView };
  * 둘 다 「절차를 쓰지 않는다」는 뜻이지만, 화면이 「현재 N번째 판 · ○○○ 님이 저장」을 적어야
  * 하므로 같은 것으로 뭉개면 **방금 절차를 끈 사람이 자기가 저장한 흔적을 볼 수 없다.** 판이
  * 없으면 `null`, 0개짜리 판은 `steps: []` 인 판이다.
+ *
+ * ── 🔴 포털 번호가 든 모양과 화면이 받는 모양을 **가른다** ───────────────
+ * `approver_sub` 는 결재자 판정의 열쇠이면서 신원 증명에 쓰이는 값이다. 그래서 읽는 함수가
+ * 둘이다: 서버 안에서 쓰는 `getCurrentApprovalRouteWithSubs`(번호가 들어 있다)와 화면에
+ * 내려보내는 `getCurrentApprovalRoute`(번호 대신 **있느냐 없느냐** 한 칸). 한 벌로 두면 다음
+ * 사람이 그대로 `props` 에 실어 결재자들의 포털 번호가 브라우저로 나간다
+ * (`./directory.ts` 머리말의 `AsUserChoice` 와 같은 까닭).
  * ============================================================================
  */
 
 /**
- * 그 용도에 지금 쓰이는 절차 한 판과 그 단계들. **그 용도의 판이 하나도 없으면 `null`.**
+ * 🔴 **서버 안에서만 쓴다** — `approverSub` 가 들어 있다. 화면으로 내려보내지 마라(머리말).
+ * 결재건을 올릴 때 이 모양 그대로 `planPartIssueApproval` 에 넘어간다.
  */
-export async function getCurrentApprovalRoute(
+export type ApprovalRouteStepWithSub = {
+  stepOrder: number;
+  /** A/S 사용자 id. 명부로 되짚는 번호다 — **결재자 판정의 열쇠가 아니다.** */
+  approverUserId: string;
+  /** 🔴 포털 번호. 판정의 열쇠. 옛 판(번호를 적기 전에 저장된 단계)에는 없다. */
+  approverSub: string | null;
+  approverName: string;
+  approverRole: string;
+};
+
+export type ApprovalRouteWithSubs = Omit<ApprovalRouteView, "steps"> & {
+  steps: ApprovalRouteStepWithSub[];
+};
+
+/**
+ * 그 용도에 지금 쓰이는 절차 한 판과 그 단계들 — **포털 번호까지.**
+ * 🔴 화면에 내려보내려면 아래 `getCurrentApprovalRoute` 를 쓴다.
+ */
+export async function getCurrentApprovalRouteWithSubs(
   scope: ApprovalRouteScope,
-): Promise<ApprovalRouteView | null> {
+): Promise<ApprovalRouteWithSubs | null> {
   const [route] = await db()
     .select({
       id: approvalRoutes.id,
@@ -60,6 +86,7 @@ export async function getCurrentApprovalRoute(
     .select({
       stepOrder: approvalRouteSteps.stepOrder,
       approverUserId: approvalRouteSteps.approverUserId,
+      approverSub: approvalRouteSteps.approverSub,
       approverName: approvalRouteSteps.approverName,
       approverRole: approvalRouteSteps.approverRole,
     })
@@ -68,4 +95,27 @@ export async function getCurrentApprovalRoute(
     .orderBy(asc(approvalRouteSteps.stepOrder));
 
   return { ...route, steps };
+}
+
+/**
+ * 그 용도에 지금 쓰이는 절차 한 판과 그 단계들. **그 용도의 판이 하나도 없으면 `null`.**
+ *
+ * 🔴 **포털 번호 자체는 빠진다** — 대신 `approverHasSub` 한 칸이 간다(머리말). 그 칸이 거짓인
+ * 단계는 **아무도 열 수 없는 문**이라, 화면이 그 사실을 관리자에게 말해 줘야 한다.
+ */
+export async function getCurrentApprovalRoute(
+  scope: ApprovalRouteScope,
+): Promise<ApprovalRouteView | null> {
+  const route = await getCurrentApprovalRouteWithSubs(scope);
+  if (!route) return null;
+  return {
+    ...route,
+    steps: route.steps.map((step) => ({
+      stepOrder: step.stepOrder,
+      approverUserId: step.approverUserId,
+      approverName: step.approverName,
+      approverRole: step.approverRole,
+      approverHasSub: step.approverSub !== null,
+    })),
+  };
 }

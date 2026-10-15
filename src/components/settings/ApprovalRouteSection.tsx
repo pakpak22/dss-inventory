@@ -5,9 +5,10 @@ import { useRouter } from "next/navigation";
 import { saveApprovalRouteAction } from "@/app/actions/approval-routes";
 import {
   approverNoticeFor,
+  asUserChoiceLabel,
   asUserLabel,
   AS_DIRECTORY_MESSAGES,
-  type AsUserDirectory,
+  type AsUserChoiceDirectory,
 } from "@/lib/approval/directory";
 import {
   APPROVAL_ROUTE_EMPTY_NOTICES,
@@ -59,6 +60,15 @@ import type { ApprovalRouteView } from "@/lib/approval/view";
  * 결재선에 올라간 뒤 계정이 잠기거나 지워지는 일은 실제로 일어나고, 그때 결재는 그 단계에서
  * 멈춘다. 줄은 그대로 두고 왜 안 되는지를 그 자리에 적는다 — 조용히 빼면 절차가 짧아진 것처럼
  * 보이고, 「왜 결재가 안 넘어가지」를 아무도 답할 수 없다.
+ *
+ * ── 🔴 통합 로그인 기록이 없는 사람은 **고를 수 없다**(2026-10-15) ───────
+ * 결재자 판정의 열쇠는 포털 번호다(`src/lib/approval/directory.ts` 머리말). 포털로 한 번도
+ * 들어온 적 없는 사람을 결재선에 세우면 그 단계는 **아무도 열 수 없는 문**이 된다. 그래서
+ * 고르개에서 **잠그되 목록에서 빼지는 않고**, 까닭을 그 줄에 적는다 — 빼 버리면 「왜 저 사람이
+ * 목록에 없지」가 되고, 관리자는 A/S 가 고장 난 줄 안다(위 규칙과 같은 판단이다).
+ *
+ * 🔵 **포털 번호 자체는 이 화면에 내려오지 않는다.** 신원 증명에 쓰이는 값이라 서버가
+ * `selectable`·`approverHasSub` 라는 **참/거짓 한 칸**으로 바꿔 보낸다.
  * ============================================================================
  */
 
@@ -84,8 +94,12 @@ export function ApprovalRouteSection({
 }: {
   /** 용도별 현재 절차(그 용도 안에서 version 이 가장 큰 판). 판이 없으면 null 이다. */
   routes: ApprovalRoutesByScope;
-  /** A/S 사람 명부. 🔴 못 받아 왔을 수 있고, 그것은 「한 명도 없다」와 다른 말이다. */
-  directory: AsUserDirectory;
+  /**
+   * A/S 사람 명부. 🔴 못 받아 왔을 수 있고, 그것은 「한 명도 없다」와 다른 말이다.
+   * 🔵 **포털 번호가 빠진 모양**이다(`AsUserChoice`) — 서버가 `toAsUserChoiceDirectory` 로
+   * 바꿔서 내려보낸다.
+   */
+  directory: AsUserChoiceDirectory;
 }) {
   const router = useRouter();
 
@@ -135,7 +149,8 @@ export function ApprovalRouteSection({
   /** 그 줄에 보일 이름. 명부에 없으면 저장돼 있던 이름으로 버틴다. */
   function approverLabel(approverUserId: string): string {
     const candidate = candidateById.get(approverUserId);
-    if (candidate) return asUserLabel(candidate);
+    // 고를 수 없는 사람이면 까닭이 이름 뒤에 붙는다 — 이미 골라 둔 줄에도 그대로 보여야 한다.
+    if (candidate) return asUserChoiceLabel(candidate);
     const saved = savedStepById.get(approverUserId);
     if (saved) return asUserLabel({ name: saved.approverName, role: saved.approverRole });
     return "알 수 없는 사용자";
@@ -172,6 +187,10 @@ export function ApprovalRouteSection({
     if (!result.ok) return;
     router.refresh();
   }
+
+  // 🔴 **저장돼 있는** 판에 통합 로그인 번호가 없는 단계가 몇 개인가. 편집 중인 목록이 아니라
+  // 저장된 것을 센다 — 그 판으로 결재건이 올라가기 때문이다.
+  const savedStepsWithoutSub = (route?.steps ?? []).filter((step) => !step.approverHasSub).length;
 
   const scopeLabel = APPROVAL_ROUTE_SCOPE_LABELS[scope];
   const atStepLimit = steps.length >= MAX_APPROVAL_ROUTE_STEPS;
@@ -231,6 +250,16 @@ export function ApprovalRouteSection({
         </p>
       )}
 
+      {/* 🔴 **지금 저장돼 있는 판**에 통합 로그인 번호가 없는 단계가 있다. 그대로 두면 결재건을
+          올릴 수 없다(올리는 쪽이 거절한다) — 그 사실이 신청하는 사람 쪽에서만 드러나면 아무도
+          어디를 고쳐야 하는지 모른다. 번호를 적기 전에 저장된 옛 판이 여기 걸린다. */}
+      {savedStepsWithoutSub > 0 && (
+        <p className="mt-3 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800">
+          지금 저장된 결재선에는 통합 로그인 번호가 없는 단계가 {savedStepsWithoutSub}개 있습니다. 그대로 두면 이
+          절차로는 결재를 올릴 수 없습니다 — 아래 목록을 확인하고 [저장]을 다시 눌러 주십시오.
+        </p>
+      )}
+
       {/* 🔴 결과 문구는 이 카드 **안**에 둔다. 카드 밖 형제로 두면 부모가 격자일 때 이 문단이
           칸 하나를 먹어 배치가 깨진다(원본 저장소에서 실제로 있었다). */}
       {message && (
@@ -271,9 +300,11 @@ export function ApprovalRouteSection({
                     {/* 명부에 없는 사람도 자리를 지키게 한다 — 옵션이 없으면 고른 값이
                         화면에서 조용히 사라진다. A/S 가 꺼져 있으면 모든 줄이 여기로 온다. */}
                     {isOrphan && <option value={approverUserId}>{approverLabel(approverUserId)}</option>}
+                    {/* 🔴 통합 로그인 기록이 없는 사람은 **잠그되 목록에 둔다**(머리말). 빼
+                        버리면 「왜 저 사람이 없지」가 되고, 잠가 두면 까닭이 그 자리에 보인다. */}
                     {candidates.map((candidate) => (
-                      <option key={candidate.id} value={candidate.id}>
-                        {asUserLabel(candidate)}
+                      <option key={candidate.id} value={candidate.id} disabled={!candidate.selectable}>
+                        {asUserChoiceLabel(candidate)}
                       </option>
                     ))}
                   </select>

@@ -135,6 +135,17 @@ describe("stock_issue_approval_steps — 칸", () => {
     assert.equal(columnOf(steps, "approver_role")?.getSQLType(), "text");
   });
 
+  it("🔴 포털 번호 칸이 있고 **NOT NULL** 이다 — 새로 만드는 줄에는 언제나 있다", () => {
+    const col = columnOf(steps, "approver_sub");
+    assert.ok(col, "approver_sub 가 없으면 「내가 결재할 건」이 영원히 빈 목록이 된다");
+    assert.equal(col.getSQLType(), "text", "users.auth_sub 와 같은 모양이라야 비교가 어긋나지 않는다");
+    assert.equal(
+      col.notNull,
+      true,
+      "비울 수 있게 두면 아무도 열 수 없는 단계가 생기고, 그 건이 반출 신청을 영영 붙들고 있게 된다",
+    );
+  });
+
   it("한 결재건 안에서 단계 차례는 한 번만 — (approval_id, step_order) 유니크", () => {
     const uq = steps.indexes.find((i) => i.config.name === "stock_issue_approval_steps_order_uq");
     assert.ok(uq);
@@ -152,10 +163,19 @@ describe("stock_issue_approval_steps — 칸", () => {
     assert.ok(uq.config.where);
   });
 
-  it("「내가 결재할 건」이 (결재자, 상태)로 들어온다", () => {
+  it("🔴 「내가 결재할 건」은 (포털 번호, 상태) 색인으로 들어온다", () => {
+    const idx = steps.indexes.find((i) => i.config.name === "stock_issue_approval_steps_approver_sub_idx");
+    assert.ok(idx, "조회가 포털 번호로 도는데 색인이 A/S 번호에만 있으면 표를 통째로 훑는다");
+    assert.equal(idx.config.unique, false);
+    assert.deepEqual(
+      idx.config.columns.map((c) => ("name" in c ? c.name : String(c))),
+      ["approver_sub", "status"],
+    );
+  });
+
+  it("🔵 A/S 번호 색인은 남겨 둔다 — 명부로 되짚는 길이고, 지우면 DROP INDEX 가 생긴다", () => {
     const idx = steps.indexes.find((i) => i.config.name === "stock_issue_approval_steps_approver_idx");
     assert.ok(idx);
-    assert.equal(idx.config.unique, false);
     assert.deepEqual(
       idx.config.columns.map((c) => ("name" in c ? c.name : String(c))),
       ["approver_user_id", "status"],

@@ -107,6 +107,20 @@ describe("approval_route_steps — 칸", () => {
     assert.equal(fk, undefined, "FK 를 걸면 A/S 의 결재자 대부분을 아예 넣을 수 없다");
   });
 
+  it("🔴 포털 번호 칸이 있고 **nullable** 이다 — 이 칸이 생기기 전에 저장된 옛 판에는 값이 없다", () => {
+    const col = columnOf(steps, "approver_sub");
+    assert.ok(col, "approver_sub 가 없으면 결재자를 알아볼 길이 없다(A/S 번호는 이 시스템의 로그인 번호가 아니다)");
+    assert.equal(col.getSQLType(), "text", "users.auth_sub 와 같은 모양이라야 비교가 어긋나지 않는다");
+    assert.equal(col.notNull, false, "NOT NULL 로 올리면 개발 DB 의 옛 판 둘 때문에 마이그레이션이 멈춘다");
+  });
+
+  it("🔴 approver_user_id 는 그대로 남는다 — 뜻을 갈아끼우지 않는다", () => {
+    // 포털 번호가 생겼다고 A/S 번호를 지우거나 그 칸에 포털 번호를 넣지 않는다. 그러면 칸
+    // 이름이 거짓이 되고, A/S 명부로 되짚는 길이 사라진다.
+    assert.equal(columnOf(steps, "approver_user_id")?.getSQLType(), "uuid");
+    assert.equal(columnOf(steps, "approver_user_id")?.notNull, true);
+  });
+
   it("approver_name·approver_role 은 글자 사본이다 — 정본은 A/S 다", () => {
     assert.equal(columnOf(steps, "approver_name")?.getSQLType(), "text");
     assert.equal(columnOf(steps, "approver_role")?.getSQLType(), "text");

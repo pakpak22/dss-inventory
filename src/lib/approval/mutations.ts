@@ -56,6 +56,16 @@ import { stepOrderFromIndex, type ApprovalRouteScope } from "./route";
  * `approver_name` · `approver_role` 은 명부의 사본이 아니라 **「그때 이렇게 저장했다」는
  * 기록**이다. 그것이 있어야 A/S 가 꺼져 있어도 결재선이 보이고, 그 사람이 나중에 없어져도
  * 그 자리에 적을 말이 「알 수 없는 사람」 말고 남는다.
+ *
+ * ── 🔴 **포털 번호를 함께 적는다** (2026-10-15) ─────────────────────────
+ * `approver_sub` 가 결재자 판정의 열쇠다 — A/S 번호(`approver_user_id`)는 이 시스템의 로그인
+ * 번호가 아니라서 그것만 적어 두면 **아무도 결재할 수 없는 결재선**이 된다(까닭은
+ * `./directory.ts` 머리말). 🔴 번호가 없는 사람이 섞이면 **저장 자체를 거절한다** —
+ * 화면이 고르지 못하게 가려 두지만 **화면 검사만 믿지 않는다**(이 함수는 화면을 거치지 않고도
+ * 불린다). 판정은 `resolveApproversFromDirectory` 하나가 쥐고 있다.
+ *
+ * 🔵 포털 번호는 **감사 기록에 싣지 않는다.** 누가 결재선에 들어갔나는 이름과 A/S 번호로
+ * 충분하고, 신원 증명에 쓰이는 값을 로그에 흘려 둘 까닭이 없다.
  * ============================================================================
  */
 
@@ -81,6 +91,22 @@ class ApprovalRouteSaveRejected extends Error {
 
 /** 감사 기록에 싣는 단계 한 줄. 🔴 id 만 적으면 로그가 스스로를 설명하지 못한다. */
 type AuditStep = { stepOrder: number; approverUserId: string; approverName: string; approverRole: string };
+
+/**
+ * 표에 넣을 단계 한 줄. 감사 기록에 싣는 것(`AuditStep`)보다 **포털 번호 한 칸이 더 많다** —
+ * 그 값은 저장하되 로그에는 적지 않는다(머리말).
+ */
+type RouteStepToSave = AuditStep & { approverSub: string };
+
+/** 포털 번호를 떼어 낸다 — 감사 기록에 싣기 전에 반드시 거치는 자리다. */
+function toAuditStep(step: RouteStepToSave): AuditStep {
+  return {
+    stepOrder: step.stepOrder,
+    approverUserId: step.approverUserId,
+    approverName: step.approverName,
+    approverRole: step.approverRole,
+  };
+}
 
 /**
  * 그 용도에 판을 하나 얹는다.
@@ -149,12 +175,15 @@ export async function saveApprovalRoute(
         });
       }
 
-      // 6. 🔴 이름·역할을 **그 시점의 명부에서 복사해** 적는다(머리말).
-      const nextSteps: AuditStep[] = resolved.approvers.map((user, index) => ({
+      // 6. 🔴 이름·역할과 **포털 번호**를 그 시점의 명부에서 복사해 적는다(머리말).
+      //    `user.ssoSubject` 가 `string` 인 것은 위 자격 확인이 **타입으로** 보장한다
+      //    (`SelectableAsUser`) — 여기서 `null` 검사를 한 번 더 적으면 두 벌이 된다.
+      const nextSteps: RouteStepToSave[] = resolved.approvers.map((user, index) => ({
         stepOrder: stepOrderFromIndex(index),
         approverUserId: user.id,
         approverName: user.name,
         approverRole: user.role,
+        approverSub: user.ssoSubject,
       }));
 
       // 7. 🔴 바뀐 게 없으면 새 판을 만들지 않는다. 판정은 순수 함수가 쥐고 있고, 화면의
@@ -183,6 +212,7 @@ export async function saveApprovalRoute(
             routeId: insertedRoute.id,
             stepOrder: step.stepOrder,
             approverUserId: step.approverUserId,
+            approverSub: step.approverSub,
             approverName: step.approverName,
             approverRole: step.approverRole,
           })),
@@ -202,7 +232,8 @@ export async function saveApprovalRoute(
             scope: validated.scope,
             version: nextVersion,
             previousVersion: currentRoute?.version ?? null,
-            steps: nextSteps,
+            // 🔴 포털 번호는 떼고 싣는다(머리말).
+            steps: nextSteps.map(toAuditStep),
             previousSteps: currentSteps,
           },
         }),

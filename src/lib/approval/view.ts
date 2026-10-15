@@ -19,6 +19,14 @@ export type ApprovalRouteStepView = {
   approverName: string;
   /** A/S 의 역할 코드. 사람이 읽는 이름은 `asRoleLabel`. */
   approverRole: string;
+  /**
+   * 🔴 이 단계에 **포털 번호가 저장돼 있는가.** 번호 자체는 내려오지 않는다 — 신원 증명에
+   * 쓰이는 값이라 화면에 실어 보내지 않는다(`queries.ts` 머리말).
+   *
+   * 거짓이면 **아무도 그 단계를 열 수 없다**(그 결재선으로는 결재건이 올라가지 않는다).
+   * 포털 번호를 적기 전에 저장된 옛 판이 그렇다 — 다시 저장하면 채워진다.
+   */
+  approverHasSub: boolean;
 };
 
 export type ApprovalRouteView = {

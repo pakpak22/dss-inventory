@@ -149,6 +149,26 @@ export const approvalRouteSteps = pgTable(
      */
     approverUserId: uuid("approver_user_id").notNull(),
     /**
+     * 🔴 **포털(통합 로그인) 번호** — 이 시스템 `users.auth_sub` 와 같은 값이고, **결재자 판정의
+     * 열쇠다**(2026-10-15 사용자 결정).
+     *
+     * 위 `approver_user_id` 는 A/S 의 번호라 **이 시스템의 로그인 번호가 아니다.** 같은 사람이
+     * 시스템마다 다른 번호를 갖기 때문에(실측: 재고 `users.id` ≠ A/S `users.id` ≠ 포털 `sub`),
+     * A/S 번호로 「내가 결재할 건」을 찾으면 **영원히 빈 목록**이 된다. 두 번호를 **둘 다** 적어
+     * 두는 까닭이 그것이다 — 포털 번호는 사람을 가르고, A/S 번호는 명부로 되짚는다.
+     * 🔴 `approver_user_id` 의 뜻을 갈아끼우지 마라. 칸 이름이 거짓이 된다.
+     *
+     * 🔵 **nullable 이다.** 이 칸이 생기기 전에 저장된 옛 판에는 값이 없다(개발 DB 에 둘 있다).
+     * 새로 저장하는 판에는 언제나 들어간다 — 번호가 없는 사람은 저장 자체가 거절되기 때문이다
+     * (`src/lib/approval/directory.ts` 의 `resolveApproversFromDirectory`). 값이 없는 단계가
+     * 섞인 판으로는 **결재건을 올릴 수 없다**(`planPartIssueApproval` 의 `MISSING_SUB`) —
+     * 그래야 아무도 열 수 없는 결재가 생기지 않는다.
+     *
+     * 🔵 `text` 다 — 포털의 `sub` 는 지금은 uuid 모양이지만 규격상 **불투명한 글자**이고,
+     * 이 저장소의 `users.auth_sub` 도 `text` 다. 둘이 짝이라야 비교가 어긋나지 않는다.
+     */
+    approverSub: text("approver_sub"),
+    /**
      * 받아 올 때의 이름·역할 사본. 정본은 A/S 다(머리말).
      *
      * 🔴 **이름을 적어 두는 까닭**: A/S 가 꺼져 있어도 「누가 결재선에 있나」가 보여야 하고,
@@ -170,7 +190,10 @@ export const approvalRouteSteps = pgTable(
      * 말해 주는 앞단은 `validateApprovalRouteSteps` 이고, **이 유니크가 최종 방어선이다.**
      */
     uniqueIndex("approval_route_steps_approver_uq").on(t.routeId, t.approverUserId),
-    /** 나중 조각의 「지금 내 차례인가」 조회가 이 사람으로 들어온다. */
+    /**
+     * A/S 번호로 되짚는 길. 🔵 「지금 내 차례인가」는 **이 색인을 타지 않는다** — 그 판정은
+     * 포털 번호로 하고(위 `approver_sub`), 결재건 쪽 표에서 돈다.
+     */
     index("approval_route_steps_approver_idx").on(t.approverUserId),
     /** 표의 CHECK 와 `stepOrderFromIndex`(index + 1) 가 짝이다. */
     check("approval_route_steps_step_order_positive", sql`${t.stepOrder} >= 1`),

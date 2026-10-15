@@ -201,6 +201,21 @@ export const stockIssueApprovalSteps = pgTable(
     /** 이 단계를 결재할 사람. 🔴 **FK 없음**(머리말) — A/S 의 사용자 ID 를 글자로 적어 둘 뿐이다. */
     approverUserId: uuid("approver_user_id").notNull(),
     /**
+     * 🔴 **포털(통합 로그인) 번호 — 「지금 내 차례인가」를 가르는 열쇠다**(2026-10-15 결정).
+     *
+     * 위 `approver_user_id` 는 A/S 의 번호이고 **이 시스템의 로그인 번호가 아니다.** 그것으로
+     * 결재자를 찾으면 「내가 결재할 건」이 **영원히 빈 목록**이 된다 — 코드는 맞고 값이 안 맞는
+     * 결함이라 시험으로도 안 잡힌다(까닭은 `src/lib/approval/directory.ts` 머리말).
+     *
+     * 🔴 **NOT NULL 이다.** 새로 만드는 줄에는 언제나 있다 — 올릴 때 결재선 단계에서 **복사해
+     * 굳히고**(`part-issue.ts`), 결재선에 번호 없는 단계가 하나라도 있으면 결재건 자체를 만들지
+     * 않는다(`planPartIssueApproval` 의 `MISSING_SUB`). 비울 수 있게 두면 **아무도 열 수 없는
+     * 단계**가 생기고, 그 건은 영영 결재되지 않은 채 반출 신청을 붙들고 있게 된다.
+     * 🔵 결재선 쪽(`approval_route_steps.approver_sub`)은 **nullable** 이다 — 거기에는 이 칸이
+     * 생기기 전에 저장된 옛 판이 있다. 이 표는 그 칸이 생길 때 0행이었다(실측).
+     */
+    approverSub: text("approver_sub").notNull(),
+    /**
      * 🔴 **올릴 때 결재선 단계에서 복사해 굳힌** 이름·역할이다. 결재선의 사본을 또 베끼는 셈이지만,
      * 그래야 나중에 결재선이 바뀌어도 「그때 누가 결재하게 돼 있었나」가 참말로 남는다. 정본은
      * 언제나 A/S 다.
@@ -223,7 +238,16 @@ export const stockIssueApprovalSteps = pgTable(
      * UPDATE)이 1차 방어선이고, 이 색인은 경쟁 조건을 「드물다」가 아니라 「불가능하다」로 만든다.
      */
     uniqueIndex("stock_issue_approval_steps_one_open_uq").on(t.approvalId).where(sql`status = 'REQUESTED'`),
-    /** 「내가 결재할 건」이 이 사람·이 상태로 들어온다. */
+    /**
+     * 🔴 **「내가 결재할 건」은 이 색인으로 들어온다** — 열쇠는 **포털 번호**다
+     * (`listPartIssueApprovalsToDecide`). A/S 번호로 찾으면 아무것도 안 나온다(위 칸 주석).
+     */
+    index("stock_issue_approval_steps_approver_sub_idx").on(t.approverSub, t.status),
+    /**
+     * A/S 번호 쪽 색인. 🔵 **지우지 않고 남긴다** — 「그 사람이 어느 결재선에 있었나」를 A/S
+     * 명부로 되짚는 길이고, 지우려면 `DROP INDEX` 가 마이그레이션에 들어간다(이 조각은 칸을
+     * 더하기만 한다). 조회 경로는 위 색인으로 옮겼다.
+     */
     index("stock_issue_approval_steps_approver_idx").on(t.approverUserId, t.status),
     /** `stepOrderFromIndex`(index + 1) 와 짝이다. 0 이나 음수는 그 판의 어느 단계와도 짝지어지지 않는다. */
     check("stock_issue_approval_steps_step_order_positive", sql`${t.stepOrder} >= 1`),

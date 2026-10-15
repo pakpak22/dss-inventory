@@ -189,30 +189,45 @@ export function validateApprovalRouteSteps(
  */
 
 /**
- * 이 층이 단계 하나에서 보는 것 — 몇 번째이고 누구인가. 표를 읽는 층의 단계 타입들이 이
- * 모양을 이미 만족하므로, 그쪽 타입을 그대로 넘기고 **그대로 돌려받는다**(아래 함수가
- * 제네릭인 이유다 — 돌려받은 값에서 그쪽 층의 다른 칸도 계속 쓸 수 있다).
+ * 이 층이 단계 하나에서 보는 것 — 몇 번째이고 **누구인가(포털 번호)**. 표를 읽는 층의 단계
+ * 타입들이 이 모양을 이미 만족하므로, 그쪽 타입을 그대로 넘기고 **그대로 돌려받는다**(아래
+ * 함수가 제네릭인 이유다 — 돌려받은 값에서 그쪽 층의 다른 칸도 계속 쓸 수 있다).
  *
  * 🔴 도메인 층은 db 층을 가져오지 않는다. 같은 모양을 여기 한 벌 적어 두는 것이 관례다.
+ *
+ * ── 🔴 열쇠는 `approverSub`(포털 번호)이지 `approverUserId`(A/S 번호)가 아니다 ──
+ * 사람을 가르는 일은 **전부** 포털 번호로 한다(2026-10-15 사용자 결정,
+ * `./directory.ts` 머리말). A/S 번호는 이 시스템의 로그인 번호가 아니라서, 그것으로 견주면
+ * 「내 차례인가」가 **언제나 거짓**이 된다 — 코드는 맞고 값이 안 맞는 결함이라 시험으로도
+ * 안 잡힌다. 그래서 칸 이름을 `…Sub` 로 둔다: `approverUserId` 라는 이름이 남아 있으면 다음
+ * 사람이 거기에 `users.id` 를 넘긴다(이번 결함이 바로 그렇게 생겼다).
+ *
+ * 🔵 `null` 인 것은 **옛 판**이다 — 포털 번호를 적기 전에 저장된 단계(개발 DB 에 둘 있다).
+ * 그런 단계가 섞인 결재선으로는 결재건을 올릴 수 없다(`planPartIssueApproval`).
  */
 export type RouteStepAssignment = {
   /** 1부터. */
   stepOrder: number;
-  approverUserId: string;
+  /** 포털 번호. 옛 판에는 없다(`null`). */
+  approverSub: string | null;
 };
 
 /**
  * 이 단계를 **건너뛰는가** — 그 단계의 승인자가 그 요청을 올린 사람인가.
  *
- * 요청자를 모르면(`null`) 언제나 거짓이다. 건너뛸 근거가 없으면 결재선은 예전 그대로 도는
- * 것이 맞다 — 여기서 참을 돌려주면 아무도 결재하지 않은 단계가 조용히 사라진다.
+ * 🔴 견주는 것은 **포털 번호 둘**이다. 신청자 쪽은 이 시스템의 `users.auth_sub`, 단계 쪽은
+ * 저장해 둔 `approver_sub` — 둘 다 포털이 준 같은 값이라야 같은 사람이 같은 사람으로 보인다.
+ * A/S 번호로 견주면 건너뛰기가 **조용히 작동하지 않고**, 신청자가 자기 건을 결재하게 된다.
+ *
+ * 둘 중 하나라도 모르면(`null`) 언제나 거짓이다. 건너뛸 근거가 없으면 결재선은 예전 그대로
+ * 도는 것이 맞다 — 여기서 참을 돌려주면 아무도 결재하지 않은 단계가 조용히 사라진다.
  */
 export function isRouteStepSkippedForRequester(
-  approverUserId: string,
-  requesterUserId: string | null,
+  approverSub: string | null,
+  requesterSub: string | null,
 ): boolean {
-  if (requesterUserId === null) return false;
-  return approverUserId === requesterUserId;
+  if (requesterSub === null || approverSub === null) return false;
+  return approverSub === requesterSub;
 }
 
 /**
@@ -222,8 +237,9 @@ export function isRouteStepSkippedForRequester(
  *   고르므로 부르는 쪽의 정렬에 기대지 않는다.
  * @param completedStepOrder 지금까지 온 단계 번호. **처음 요청이면 0** 이다(0보다 큰 번호만
  *   후보가 되므로 1단계부터 본다).
- * @param requesterUserId 그 사슬을 시작한 사람. 사슬이 나아가도 바뀌지 않는다 — 방금 결재한
- *   사람이 아니라 요청 행에 적힌 요청자다.
+ * @param requesterSub 그 사슬을 시작한 사람의 **포털 번호**. 사슬이 나아가도 바뀌지 않는다 —
+ *   방금 결재한 사람이 아니라 요청 행에 적힌 요청자다. 🔴 이름이 `…Sub` 인 까닭은 위
+ *   `RouteStepAssignment` 주석에 있다(`users.id` 를 넘기면 건너뛰기가 조용히 꺼진다).
  *
  * 🔴 **돌려주는 단계의 번호를 1로 고쳐 적지 않는다.** 건너뛴 뒤의 실제 번호(예: 2)가 그대로
  * 표에 들어가야 한다 — 다음 단계를 찾을 때 그 번호로 옛 판을 이어 세기 때문이다.
@@ -239,12 +255,12 @@ export function isRouteStepSkippedForRequester(
 export function findNextRouteStepToApprove<T extends RouteStepAssignment>(
   steps: readonly T[],
   completedStepOrder: number,
-  requesterUserId: string | null,
+  requesterSub: string | null,
 ): T | null {
   let next: T | null = null;
   for (const step of steps) {
     if (step.stepOrder <= completedStepOrder) continue;
-    if (isRouteStepSkippedForRequester(step.approverUserId, requesterUserId)) continue;
+    if (isRouteStepSkippedForRequester(step.approverSub, requesterSub)) continue;
     if (next === null || step.stepOrder < next.stepOrder) next = step;
   }
   return next;

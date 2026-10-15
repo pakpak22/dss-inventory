@@ -120,6 +120,13 @@
       "when": 1792032823559,
       "tag": "0016_swift_pride",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1792036396977,
+      "tag": "0017_warm_namora",
+      "breakpoints": true
     }
   ]
 }

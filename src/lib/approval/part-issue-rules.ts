@@ -111,6 +111,19 @@ export function isOpenPartIssueStatus(status: PartIssueStatus): boolean {
  * 전까지 재고가 통째로 잠긴다**(아무도 결재할 수 없는 신청만 쌓이고 부품은 나가지 못한다).
  * 판이 비어 있는 것이 정상 초기 상태라는 것은 결재선 표의 규약과 같다.
  *
+ * 🔴 `MISSING_SUB` 는 **결재선 단계 중에 포털 번호가 없는 것이 있다**는 뜻이다. 그 단계는
+ * 아무도 열 수 없는 문이라, 결재건을 만들면 **영영 결재되지 않는 건**이 하나 생기고 그 신청은
+ * 담당자가 바로 확인할 수도 없게 잠긴다(살아 있는 결재건이 신청을 붙들기 때문이다). 그래서
+ * 만들지 않고 **사람에게 고치는 길을 말한다** — 설정 → 승인 절차에서 다시 저장하면 그때의
+ * 명부에서 포털 번호가 채워진다.
+ *
+ * 🔵 `NO_ROUTE` 와 **절대 뭉개지 않는다.** 저쪽은 「결재 제도를 쓰지 않는다」라서 부르는 쪽이
+ * 지금까지처럼 바로 [확인]을 누르는데, 이쪽은 **결재선이 있는데 고장 난 것**이다. 같은 것으로
+ * 다루면 관리자가 세워 둔 결재를 건너뛰고 부품이 나간다.
+ *
+ * 🔴 **남는 단계만이 아니라 그 판의 단계 전부**를 본다. 뒤쪽 단계 하나에 번호가 없어도 사슬은
+ * 거기까지 가서 멈춘다 — 그때는 이미 앞사람들이 결재를 한 뒤라 되돌리기가 더 어렵다.
+ *
  * 🔴 `AUTO_APPROVED` 는 **단계는 있는데 전부 신청자 본인이라 남는 단계가 0개**인 경우다.
  * 곧바로 `APPROVED` 로 만든다 — 결재할 사람이 아무도 없으니 **기다릴 것이 없고**, 그런데도
  * `PENDING_APPROVAL` 로 두면 아무도 누를 수 없는 건이 영영 남아 재고가 잠긴다(위 `NO_ROUTE`
@@ -119,16 +132,34 @@ export function isOpenPartIssueStatus(status: PartIssueStatus): boolean {
  * 누가 언제 무엇을 올렸는지가 남아야 한다. 뭉개면 자기 이름이 결재선에 들어 있는 사람만
  * 이력 없이 부품을 뺄 수 있게 된다.
  */
+/**
+ * 포털 번호가 **있는 것이 타입으로 보장된** 단계. 서버는 이 모양만 표에 넣는다 —
+ * `stock_issue_approval_steps.approver_sub` 는 NOT NULL 이고, 그 약속을 지키는 자리가
+ * `planPartIssueApproval` 하나다(`null` 검사가 여러 곳에 흩어지면 하나가 빠지는 날 터진다).
+ */
+export type RouteStepWithSub<T extends RouteStepAssignment> = T & { approverSub: string };
+
 export type PartIssueRoutePlan<T extends RouteStepAssignment> =
   | { kind: "NO_ROUTE" }
+  /** 🔴 결재선이 **고장 났다** — 「절차 없음」과 뭉개지 않는다. `message` 는 사람이 읽는 글이다. */
+  | { kind: "MISSING_SUB"; message: string }
   | { kind: "AUTO_APPROVED"; steps: readonly [] }
-  | { kind: "NEEDS_APPROVAL"; steps: readonly [T, ...T[]] };
+  | { kind: "NEEDS_APPROVAL"; steps: readonly [RouteStepWithSub<T>, ...Array<RouteStepWithSub<T>>] };
+
+/**
+ * 결재선에 포털 번호 없는 단계가 섞였을 때 사람에게 하는 말. 🔴 **고치는 길까지** 적는다 —
+ * 「올릴 수 없습니다」만 주면 신청자는 담당자를 찾아다니고, 담당자도 어디를 고칠지 모른다.
+ */
+export const PART_ISSUE_ROUTE_MISSING_SUB_MESSAGE =
+  "결재선에 통합 로그인 번호가 없는 분이 있습니다. 설정 → 승인 절차에서 다시 저장해 주십시오.";
 
 /**
  * 그 판의 단계들 중 **이 신청이 실제로 밟을 단계**를 차례대로.
  *
  * @param routeSteps 현재 판의 단계들. 순서가 뒤섞여 있어도 된다.
- * @param requesterUserId 결재건을 올리는 사람. 그 사람의 단계는 건너뛴다.
+ * @param requesterSub 결재건을 올리는 사람의 **포털 번호**. 그 사람의 단계는 건너뛴다.
+ *   🔴 이름이 `…Sub` 인 까닭은 `./route.ts` 의 `RouteStepAssignment` 주석에 있다 — 여기에
+ *   `users.id`(이 시스템의 번호)나 A/S 번호를 넘기면 건너뛰기가 **조용히 꺼진다.**
  *
  * 🔴 걸러 내는 일을 여기서 직접 하지 않고 `findNextRouteStepToApprove` 를 **되풀이해 부른다.**
  * 사슬이 나아갈 때 서버가 부르는 것도 같은 함수라, 「올릴 때 만든 목록」과 「나아가며 고르는
@@ -136,45 +167,64 @@ export type PartIssueRoutePlan<T extends RouteStepAssignment> =
  */
 export function planPartIssueApproval<T extends RouteStepAssignment>(
   routeSteps: readonly T[],
-  requesterUserId: string,
+  requesterSub: string,
 ): PartIssueRoutePlan<T> {
   if (routeSteps.length === 0) return { kind: "NO_ROUTE" };
 
-  const steps: T[] = [];
+  // 🔴 **판 전체**를 먼저 본다 — 뒤쪽 단계 하나가 비어 있어도 사슬은 거기까지 가서 멈춘다.
+  if (routeSteps.some((step) => step.approverSub === null)) {
+    return { kind: "MISSING_SUB", message: PART_ISSUE_ROUTE_MISSING_SUB_MESSAGE };
+  }
+
+  const steps: Array<RouteStepWithSub<T>> = [];
   let completedStepOrder = 0;
   for (;;) {
-    const next = findNextRouteStepToApprove(routeSteps, completedStepOrder, requesterUserId);
+    const next = findNextRouteStepToApprove(routeSteps, completedStepOrder, requesterSub);
     if (next === null) break;
-    steps.push(next);
+    // 위에서 판 전체에 번호가 있는 것을 확인했다 — 그래서 여기서 다시 보지 않는다.
+    steps.push(next as RouteStepWithSub<T>);
     completedStepOrder = next.stepOrder;
   }
 
   if (steps.length === 0) return { kind: "AUTO_APPROVED", steps: [] };
-  return { kind: "NEEDS_APPROVAL", steps: steps as [T, ...T[]] };
+  return { kind: "NEEDS_APPROVAL", steps: steps as [RouteStepWithSub<T>, ...Array<RouteStepWithSub<T>>] };
 }
 
 /* ------------------------------------------------------------------ */
 /* ② 지금 차례가 누구인가                                                */
 /* ------------------------------------------------------------------ */
 
-/** 이 층이 단계 한 줄에서 보는 것. 표를 읽는 층의 타입이 이 모양을 이미 만족한다. */
+/**
+ * 이 층이 단계 한 줄에서 보는 것. 표를 읽는 층의 타입이 이 모양을 이미 만족한다.
+ *
+ * 🔴 **`approverUserId`(A/S 번호)가 아니라 `approverSub`(포털 번호)다.** 결재건 단계 표는 둘
+ * 다 들고 있지만, 「누구인가」를 가르는 것은 포털 번호 하나뿐이다 — A/S 번호는 이 시스템의
+ * 로그인 번호가 아니라서 그것으로 견주면 **언제나 거짓**이 된다(`./directory.ts` 머리말).
+ */
 export type PartIssueStepAssignment = {
-  approverUserId: string;
+  /** 🔴 포털 번호. 결재건 단계 표에서는 NOT NULL 이다(올릴 때 결재선에서 복사해 굳힌다). */
+  approverSub: string;
   status: PartIssueStepStatus;
 };
 
 /**
  * 이 사람이 **지금** 이 단계를 결재할 수 있는가.
  *
- * 🔴 조건은 둘뿐이다: 그 줄이 아직 `REQUESTED` 이고, 그 줄에 적힌 결재자가 이 사람이다.
- * 「관리자면 아무 단계나 대신 누를 수 있다」 같은 예외를 **두지 않는다** — 순차 승인에서
- * 누가 승인했는지가 곧 그 건의 근거이고, 대신 누르는 길이 있으면 그 근거가 무너진다.
+ * 🔴 조건은 둘뿐이다: 그 줄이 아직 `REQUESTED` 이고, 그 줄에 적힌 **포털 번호**가 이 사람의
+ * 것이다. 「관리자면 아무 단계나 대신 누를 수 있다」 같은 예외를 **두지 않는다** — 순차
+ * 승인에서 누가 승인했는지가 곧 그 건의 근거이고, 대신 누르는 길이 있으면 그 근거가 무너진다.
+ *
+ * 🔴 **매개변수 이름이 `actorSub` 인 것은 장식이 아니다.** 여기에 `users.id` 나 A/S 번호를
+ * 넘기면 이 함수는 **아무에게도 참을 돌려주지 않고**, 「내가 결재할 건」은 영원히 빈 목록이
+ * 된다. 코드는 맞고 값이 안 맞는 결함이라 눈으로도 시험으로도 잘 안 잡힌다 — 그래서
+ * `tests/part-issue-approval.test.ts` 에 **A/S 번호를 넘기면 거짓이 되는 시험**을 울타리로
+ * 세워 두었다.
  *
  * 🔵 결재건 자체가 아직 `PENDING_APPROVAL` 인지는 **여기서 보지 않는다**(단계 줄만 본다).
  * 그 판정은 `checkCanDecidePartIssue` 가 쥐고 있고, 서버는 둘 다 통과해야 받아 준다.
  */
-export function mayDecidePartIssueStep(step: PartIssueStepAssignment, actorUserId: string): boolean {
-  return step.status === "REQUESTED" && step.approverUserId === actorUserId;
+export function mayDecidePartIssueStep(step: PartIssueStepAssignment, actorSub: string): boolean {
+  return step.status === "REQUESTED" && step.approverSub === actorSub;
 }
 
 /* ------------------------------------------------------------------ */
