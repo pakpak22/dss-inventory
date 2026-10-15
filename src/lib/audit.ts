@@ -29,6 +29,13 @@ export type AuditAction =
   | "STOCK_REQUEST_CLOSED"
   | "STOCK_REQUEST_REJECTED"
   | "STOCK_REQUEST_CANCELLED"
+  /**
+   * 보류 걸기·풀기 (2026-10-15, 조각 10a).
+   * 🔴 **보류 사유가 영영 남는 곳은 여기뿐이다** — 신청 표의 `hold_reason` 은 풀 때 비워지고(지금 보류 중인 것만
+   *    들고 있다), 감사 로그는 append-only 다. 그래서 거는 쪽 `detail.reason` 에 사유를 싣는다.
+   */
+  | "STOCK_REQUEST_HELD"
+  | "STOCK_REQUEST_HOLD_RELEASED"
   | "WORKBOOK_IMPORT"
   | "WORKBOOK_PARKED"
   | "WORKBOOK_RESUMED"

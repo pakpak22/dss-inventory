@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { REQUEST_STATUSES } from "../src/db/schema/stock-requests";
-import { CLAIMABLE_REQUEST_STATUSES, CONFIRMATION_TYPES, DECIDED_REQUEST_STATUSES, ENTRY_TYPES, PENDING_REQUEST_STATUSES, isClaimableRequest, isClosedRequest, needsConfirmation } from "../src/lib/stock/codes";
+import {
+  ACTIONABLE_REQUEST_STATUSES,
+  CLAIMABLE_REQUEST_STATUSES,
+  CONFIRMATION_TYPES,
+  DECIDED_REQUEST_STATUSES,
+  ENTRY_TYPES,
+  PENDING_REQUEST_STATUSES,
+  isClaimableRequest,
+  isClosedRequest,
+  needsConfirmation,
+} from "../src/lib/stock/codes";
 
 describe("담당자 확인 단계 (2026-10-06)", () => {
   it("반출 계열(사용·대여·폐기)만 확인을 거친다", () => {
@@ -36,7 +46,7 @@ describe("반출 신청을 세는 쪽 — 어느 상태를 대기로 보나 (202
   });
 
   it("처리 중(CONFIRMING)도 대기, 확인·반려·취소는 결정된 것", () => {
-    assert.deepEqual([...PENDING_REQUEST_STATUSES].sort(), ["CONFIRMING", "PARTIAL", "PENDING"]);
+    assert.deepEqual([...PENDING_REQUEST_STATUSES].sort(), ["CONFIRMING", "ON_HOLD", "PARTIAL", "PENDING"]);
     assert.deepEqual([...DECIDED_REQUEST_STATUSES].sort(), ["CANCELLED", "CONFIRMED", "REJECTED"]);
   });
 
@@ -44,6 +54,39 @@ describe("반출 신청을 세는 쪽 — 어느 상태를 대기로 보나 (202
     const counted = [...PENDING_REQUEST_STATUSES, ...DECIDED_REQUEST_STATUSES];
     assert.deepEqual(counted.slice().sort(), [...REQUEST_STATUSES].sort(), "상태를 더했으면 둘 중 한 묶음에도 넣어야 한다");
     assert.equal(new Set(counted).size, counted.length, "한 상태가 양쪽에 들어가면 같은 신청이 두 목록에 보인다");
+  });
+});
+
+/**
+ * 보류 — 「멈춰 둠」 (2026-10-15, 조각 10a).
+ *
+ * 🔴 보류는 **대기 목록에는 남고 재촉하는 숫자에서만 빠진다.** 그 둘을 가르는 자리가 묶음 둘이라, 어느 한쪽만
+ *    고치면 보류한 신청이 화면에서 사라지거나(목록에서 빼면) 매일 재촉당한다(배지에 넣으면). 이 시험이 그 울타리다.
+ */
+describe("보류(ON_HOLD) — 어느 묶음에 드나 (2026-10-15, 조각 10a)", () => {
+  it("보류는 대기로 센다 — 끝난 것으로 세면 목록에서 사라져 다시 집을 길이 없다", () => {
+    assert.ok((PENDING_REQUEST_STATUSES as readonly string[]).includes("ON_HOLD"), "대기 목록에 남아야 잊히지 않는다");
+    assert.ok(!(DECIDED_REQUEST_STATUSES as readonly string[]).includes("ON_HOLD"), "보류는 결정이 아니다 — 풀면 다시 살아난다");
+  });
+
+  it("🔴 재촉하는 숫자(배지·알림 종)에서는 뺀다 — 일부러 멈춰 둔 것을 매일 재촉하지 않는다", () => {
+    assert.deepEqual([...ACTIONABLE_REQUEST_STATUSES].sort(), ["CONFIRMING", "PARTIAL", "PENDING"]);
+    assert.ok(!(ACTIONABLE_REQUEST_STATUSES as readonly string[]).includes("ON_HOLD"));
+  });
+
+  it("손댈 수 있는 묶음은 대기 묶음의 부분집합이다 — 세지 않는 것을 재촉할 수는 없다", () => {
+    for (const s of ACTIONABLE_REQUEST_STATUSES) assert.ok((PENDING_REQUEST_STATUSES as readonly string[]).includes(s), s);
+    assert.ok(ACTIONABLE_REQUEST_STATUSES.length < PENDING_REQUEST_STATUSES.length, "보류 하나만큼 좁다");
+  });
+
+  it("🔴 보류 중에는 집을 수 없다 — 확인·반려·마감이 저절로 막히는 자리다", () => {
+    assert.ok(!(CLAIMABLE_REQUEST_STATUSES as readonly string[]).includes("ON_HOLD"));
+    assert.equal(isClaimableRequest("ON_HOLD"), false);
+    assert.deepEqual([...CLAIMABLE_REQUEST_STATUSES].sort(), ["PARTIAL", "PENDING"], "보류를 걸 수 있는 묶음이기도 하다(requests.ts 의 holdRequest)");
+  });
+
+  it("보류는 마감으로 보이지 않는다 — 아직 접힌 것이 아니다", () => {
+    assert.equal(isClosedRequest("ON_HOLD", [{ quantity: 8, issued: 5 }]), false);
   });
 });
 

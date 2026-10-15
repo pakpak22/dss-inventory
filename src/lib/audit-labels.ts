@@ -28,6 +28,10 @@ export const AUDIT_ACTION_LABEL: Record<AuditAction, string> = {
   STOCK_REQUEST_CLOSED: "반출 마감(남은 수량 그만 주기)",
   STOCK_REQUEST_REJECTED: "반출 반려",
   STOCK_REQUEST_CANCELLED: "반출 신청 취소",
+  // 🔴 **반려·마감과 또 다른 행위다** (2026-10-15, 조각 10a). 반려·마감은 접는 것이고, 보류는 **멈춰 두는 것**이라
+  // 나중에 풀려서 다시 살아난다. 이력에서 셋이 같은 글자로 보이면 「접었다는데 왜 또 나왔지?」가 된다.
+  STOCK_REQUEST_HELD: "반출 보류",
+  STOCK_REQUEST_HOLD_RELEASED: "반출 보류 해제",
   WORKBOOK_IMPORT: "현황판 엑셀 가져오기",
   WORKBOOK_PARKED: "현황판 엑셀 멈춤(엑셀 수기입)",
   WORKBOOK_RESUMED: "현황판 엑셀 다시 쓰기 시작",

@@ -42,7 +42,8 @@ export const NOTIFICATION_SOURCE_NAME = "DSS 재고 관리";
  * **여러 줄을 하나로 묶은 것**이라 「대기로 세는 상태」를 함께 센다 — PENDING·CONFIRMING 에
  * 더해 **일부만 나가고 아직 남은 것(PARTIAL)까지**다 (2026-10-14, 조각 4c).
  * 🔴 그 목록을 여기에 다시 적지 않는다. 가르는 자리는 `src/lib/stock/codes.ts` 의
- * `PENDING_REQUEST_STATUSES` 하나이고, 이 파일은 거기로 센 **건수만** 받는다(아래 PendingSummary).
+ * `ACTIONABLE_REQUEST_STATUSES` 하나이고, 이 파일은 거기로 센 **건수만** 받는다(아래 PendingSummary).
+ * 🔴 **보류(ON_HOLD)는 이 숫자에서 빠진다** — 대기 **목록**에는 그대로 보인다 (2026-10-15, 조각 10a).
  */
 export const NOTIFICATION_KINDS = {
   pending: "STOCK_REQUEST_PENDING",
@@ -144,7 +145,7 @@ export type InventoryNotificationFeed = {
 
 /** 확인 대기 요약. 부르는 쪽이 세어 온다. */
 export type PendingSummary = {
-  /** 대기로 세는 상태(`PENDING_REQUEST_STATUSES` — PENDING·CONFIRMING·PARTIAL)의 건수. 🔴 머리말 배지와 같은 묶음이다. */
+  /** 대기로 세는 상태(`ACTIONABLE_REQUEST_STATUSES` — PENDING·CONFIRMING·PARTIAL)의 건수. 🔴 머리말 배지와 같은 묶음이고, 보류(ON_HOLD)는 이 숫자에서 빠진다 — 대기 목록에는 그대로 보인다. */
   count: number;
   /** 가장 오래 기다린 신청의 시각. 없으면 null. */
   oldestAt: Date | null;

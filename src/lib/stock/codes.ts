@@ -38,16 +38,31 @@ export const ADMIN_ONLY_TYPES: ReadonlySet<EntryType> = new Set<EntryType>(["ADJ
  * 🔵 **`PARTIAL`(일부만 나갔고 아직 남음)은 대기다.** 아직 줄 것이 남아 담당자가 계속 봐야 하기 때문이다
  *    (`src/db/schema/stock-requests.ts` 의 `REQUEST_STATUSES` 주석). 끝난 것으로 세면 대기 목록·머리말 배지·
  *    알림 종 어디에도 안 걸려 **화면에서 사라지고**, 그러면 그 신청을 다시 집을 수 없다.
+ * 🔵 **`ON_HOLD`(담당자가 사유를 적어 멈춰 둠)도 대기다** (2026-10-15, 조각 10a). `PARTIAL` 과 **같은 논리**다 —
+ *    보류는 「그만둔 것」이 아니라 「나중에 다시 볼 것」이라, 목록에서 사라지면 다시 집을 길이 없어 잊힌다.
+ *    🔴 다만 **재촉하는 숫자**(머리말 배지·알림 종)에서는 뺀다 — 아래 `ACTIONABLE_REQUEST_STATUSES`.
  * 🔴 두 묶음이 `REQUEST_STATUSES` 를 **빠짐없이, 겹치지 않게** 덮는다. 상태를 더하고 여기를 안 고치면 그 상태의
  *    신청이 어느 목록에도 안 걸린다 — 원장은 안 깨지므로 아무 오류 없이 조용히 사라진다. 그 덮기는
  *    `tests/stock-requests.test.ts` 가 지킨다.
  * 🔵 서버 전용이 아닌 이 파일에 둔다 — 세는 질의(`src/lib/stock/requests.ts`, server-only)와 시험이 **같은 한 벌**을 본다.
  *    「대기」를 가르는 글자가 적힌 곳은 여기 하나뿐이어야 머리말 배지와 알림 종이 어긋나지 않는다.
  */
-export const PENDING_REQUEST_STATUSES = ["PENDING", "CONFIRMING", "PARTIAL"] as const satisfies readonly RequestStatus[];
+export const PENDING_REQUEST_STATUSES = ["PENDING", "CONFIRMING", "PARTIAL", "ON_HOLD"] as const satisfies readonly RequestStatus[];
 
-/** 더 볼 일이 없는 것 — 신청한 사람에게 결과로만 보인다. 🔴 `PARTIAL` 은 여기 **없다**(위 주석). */
+/** 더 볼 일이 없는 것 — 신청한 사람에게 결과로만 보인다. 🔴 `PARTIAL`·`ON_HOLD` 는 여기 **없다**(위 주석). */
 export const DECIDED_REQUEST_STATUSES = ["CONFIRMED", "REJECTED", "CANCELLED"] as const satisfies readonly RequestStatus[];
+
+/**
+ * 지금 **담당자가 손댈 수 있는** 신청 — 머리말 「대기 N」 배지와 알림 종이 세는 묶음 (2026-10-15, 조각 10a).
+ *
+ * 🔴 **세는 묶음(`PENDING_REQUEST_STATUSES`)에서 보류(`ON_HOLD`)만 뺀 것이다.** 담당자가 사유를 적어
+ *    **일부러 멈춰 둔** 것을 「대기 N」으로 세면 매일 재촉하는 숫자가 되어, 보류를 걸어 둔 뜻이 사라진다.
+ *    대기 **목록**에는 그대로 보인다(위 주석) — 안 보이면 잊히기 때문이다. 「목록에 보인다」와
+ *    「숫자로 재촉한다」는 뜻이 다르다. 그래서 묶음을 또 하나 둔다.
+ * 🔴 **배지(`countPendingRequests`)와 종(`summarizePendingRequests`)이 반드시 이 한 묶음을 같이 본다.**
+ *    둘이 갈리면 「배지에는 있는데 종에는 없는」 신청이 생긴다(`src/lib/stock/requests.ts` 의 두 함수 주석).
+ */
+export const ACTIONABLE_REQUEST_STATUSES = ["PENDING", "CONFIRMING", "PARTIAL"] as const satisfies readonly RequestStatus[];
 
 /**
  * 담당자가 **집을 수 있는** 상태 — 아직 아무것도 안 나간 것(PENDING)과 일부만 나간 것(PARTIAL) (2026-10-14, 조각 4d).

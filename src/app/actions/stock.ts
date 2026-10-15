@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { roleAtLeast } from "@/lib/auth/role";
 import { requireRole } from "@/lib/auth/session";
 import { ADMIN_ONLY_TYPES, needsConfirmation, sheetNoText, todaySeoul } from "@/lib/stock/codes";
-import { cancelRequest, closeRequest, confirmRequest, createRequest, rejectRequest } from "@/lib/stock/requests";
+import { cancelRequest, closeRequest, confirmRequest, createRequest, holdRequest, rejectRequest, releaseRequestHold } from "@/lib/stock/requests";
 import { parseEntryForm, type EntryFieldErrors } from "@/lib/stock/form";
 import { parseIssueQuantities } from "@/lib/stock/issue";
 import { LOOKUP_MESSAGES, lookupIntake, type IntakeInfo } from "@/lib/stock/intake-lookup";
@@ -191,6 +191,50 @@ export async function rejectRequestAction(_prev: RequestActionState, formData: F
   revalidatePath("/entries");
   revalidatePath("/", "layout");
   redirect("/entries?rejected=1");
+}
+
+/**
+ * 보류 = 「멈춰 두기」 (2026-10-15, 조각 10a). 🔴 **반려도 마감도 아니다** — 나중에 풀면 멈추기 전 자리로 돌아간다.
+ * 사유를 꼭 받는다(반려·마감과 같은 관례): 왜 멈췄는지가 안 남으면 나중에 아무도 못 푼다.
+ */
+export async function holdRequestAction(_prev: RequestActionState, formData: FormData): Promise<RequestActionState> {
+  const session = await requireRole("ADMIN", "/entries");
+  const id = String(formData.get("requestId") ?? "");
+  const reason = String(formData.get("reason") ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!id) return { error: "신청이 정해지지 않았습니다." };
+  if (reason.length < 2) return { error: "보류 사유를 적으십시오." };
+  let r;
+  try {
+    r = await holdRequest(id, reason, { id: session.user.id, name: session.user.name });
+  } catch (e) {
+    console.error("[stock] 보류 실패:", e instanceof Error ? e.message : e);
+    return { error: "보류하지 못했습니다. 잠시 뒤 다시 시도하십시오." };
+  }
+  if (!r.ok) return { error: r.message ?? "보류하지 못했습니다." };
+  revalidatePath("/entries");
+  // 🔵 머리말 「대기 N」 배지와 알림 종이 줄어든다 — 보류는 재촉하는 숫자에서 빠진다(stock/codes.ts 의 ACTIONABLE_REQUEST_STATUSES).
+  revalidatePath("/", "layout");
+  redirect("/entries?held=1");
+}
+
+/** 보류 풀기. 🔵 **사유를 받지 않는다** — 「다시 진행한다」는 뜻뿐이라 적을 것이 없다(`releaseRequestHold` 주석). */
+export async function releaseHoldAction(_prev: RequestActionState, formData: FormData): Promise<RequestActionState> {
+  const session = await requireRole("ADMIN", "/entries");
+  const id = String(formData.get("requestId") ?? "");
+  if (!id) return { error: "신청이 정해지지 않았습니다." };
+  let r;
+  try {
+    r = await releaseRequestHold(id, { id: session.user.id, name: session.user.name });
+  } catch (e) {
+    console.error("[stock] 보류 해제 실패:", e instanceof Error ? e.message : e);
+    return { error: "보류를 풀지 못했습니다. 잠시 뒤 다시 시도하십시오." };
+  }
+  if (!r.ok) return { error: r.message ?? "보류를 풀지 못했습니다." };
+  revalidatePath("/entries");
+  revalidatePath("/", "layout");
+  redirect("/entries?holdReleased=1");
 }
 
 export async function cancelRequestAction(_prev: RequestActionState, formData: FormData): Promise<RequestActionState> {

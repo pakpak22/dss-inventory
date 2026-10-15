@@ -6,7 +6,7 @@ import { parts } from "@/db/schema/parts";
 import { stockTransactions } from "@/db/schema/stock";
 import { stockRequestIssues, stockRequests, type RequestStatus } from "@/db/schema/stock-requests";
 import { auditValues } from "@/lib/audit";
-import { CLAIMABLE_REQUEST_STATUSES, DECIDED_REQUEST_STATUSES, ENTRY_TYPE_LABEL, PENDING_REQUEST_STATUSES, isClosedRequest, type EntryType } from "./codes";
+import { ACTIONABLE_REQUEST_STATUSES, CLAIMABLE_REQUEST_STATUSES, DECIDED_REQUEST_STATUSES, ENTRY_TYPE_LABEL, PENDING_REQUEST_STATUSES, isClosedRequest, type EntryType } from "./codes";
 import type { EntryInput } from "./form";
 import { buildIssueInput, type IssueQuantity } from "./issue";
 import { LedgerAbort, ledgerErrorMessage, recordEntryIn, type Actor, type RecordResult } from "./ledger";
@@ -29,6 +29,14 @@ import { LedgerAbort, ledgerErrorMessage, recordEntryIn, type Actor, type Record
  *     가르는 글자는 `./codes` 의 `PENDING_REQUEST_STATUSES`·`DECIDED_REQUEST_STATUSES` 한 벌뿐이다.
  *   - 🔵 **마감 (2026-10-14, 조각 4d)**: 일부 나간 신청의 **남은 것만** 접는 `closeRequest`. 🔴 반려가 아니다 —
  *     아래 그 함수의 주석.
+ *
+ * 🔵 **보류 — 멈춰 둠 (2026-10-15, 조각 10a)**
+ *   - 담당자가 **사유를 적어** 신청을 멈춰 두고, 나중에 풀면 멈추기 전 자리로 돌아간다(`holdRequest`·`releaseRequestHold`).
+ *   - 🔴 **보류 중에는 확인도 반려도 마감도 안 된다.** 그 판정을 따로 넣지 않았다 — 셋 다 상태를 WHERE 에 걸고
+ *     `ON_HOLD` 를 받는 곳이 하나도 없으므로 **저절로** 막힌다. 막는 자리를 두 벌 적지 않으려는 것이다.
+ *     대신 그때 나가는 **문구**만 고쳤다(아래 `failureMessage`) — 「이미 처리된 신청」은 보류에는 거짓말이다.
+ *   - 🔴 신청한 사람의 취소(`cancelRequest`)도 같은 까닭으로 막힌다(PENDING 만 받는다). 보류된 신청을 접으려면
+ *     담당자가 먼저 풀어야 한다.
  */
 export interface RequestLineView {
   partId: string;
@@ -60,6 +68,14 @@ export interface PendingRequestRow {
    * 🔵 상태값이 아니라 **세어서** 안다. 가르는 규칙이 적힌 곳은 `./codes` 의 `isClosedRequest` 하나뿐이다.
    */
   closed: boolean;
+  /**
+   * 지금 멈춰 둔 것이면 그 사유·누가·언제 (2026-10-15, 조각 10a). 아니면 `null`.
+   *
+   * 🔴 **상태가 `ON_HOLD` 일 때만 채운다.** 푼 신청은 칸을 비우지만(`releaseRequestHold`), 비우기 전에
+   *    서버가 죽는 따위로 값이 남아 있어도 화면에 「보류 중」이 뜨면 안 된다 — 참말인 것은 **상태**다.
+   * 🔵 「누가 언제 왜 걸고 풀었나」의 이력은 칸이 아니라 감사 로그에 있다(`STOCK_REQUEST_HELD`·`…_HOLD_RELEASED`).
+   */
+  hold: { reason: string; heldByName: string; heldAt: string } | null;
   requestedBy: string;
   requestedByName: string;
   requestedAt: string;
@@ -207,10 +223,28 @@ function isIssueConflict(e: unknown): boolean {
   return o.constraint_name === "stock_request_issues_no_uq" || o.constraint_name === "stock_request_issues_entry_uq";
 }
 
+/** 보류 중이라 막혔을 때의 문구. 적힌 곳이 하나여야 세 단추([확인]·[반려]·[마감])가 같은 말을 한다. */
+const ON_HOLD_MESSAGE = "보류 중인 신청입니다. 먼저 보류를 풀어야 합니다.";
+
+/**
+ * **막힌 뒤에만** 부르는 문구 고르개 (2026-10-15, 조각 10a).
+ *
+ * 확인·반려·마감은 상태를 WHERE 에 걸어 `ON_HOLD` 를 받지 않는다 — 그래서 보류 중인 신청에 눌러도 막히는데,
+ * 그때 나가던 말이 「이미 처리된 신청이거나 없는 신청입니다」였다. **보류에는 거짓말이다**(처리되지도, 없지도 않다).
+ *
+ * 🔴 **성공하는 길에는 질의가 하나도 늘지 않는다.** 0행이 바뀐 **뒤에만** 상태를 한 번 읽는다. 막히는 일은 드물고,
+ *    드문 쪽에 질의 하나를 얹는 편이 모든 확인마다 한 번씩 더 묻는 것보다 싸다.
+ * 🔵 읽은 값이 그 사이 또 바뀌었을 수 있지만 상관없다 — 이것은 **문구**를 고르는 자리일 뿐, 막는 판정은 이미 DB 가 했다.
+ */
+async function failureMessage(id: string, fallback: string): Promise<string> {
+  const [r] = await db().select({ status: stockRequests.status }).from(stockRequests).where(eq(stockRequests.id, id));
+  return r?.status === "ON_HOLD" ? ON_HOLD_MESSAGE : fallback;
+}
+
 export async function confirmRequest(id: string, admin: Actor, opts: ConfirmOptions = {}): Promise<ConfirmResult> {
-  // 1. 집기 — 한 사람만. 일부만 나간 것(PARTIAL)은 다시 집어 다음 회차를 낸다.
+  // 1. 집기 — 한 사람만. 일부만 나간 것(PARTIAL)은 다시 집어 다음 회차를 낸다. 보류 중이면 집히지 않는다(ON_HOLD 는 집는 묶음에 없다).
   const claimed = await claimRequest(id);
-  if (!claimed) return { ok: false, message: "이미 처리된 신청이거나 없는 신청입니다." };
+  if (!claimed) return { ok: false, message: await failureMessage(id, "이미 처리된 신청이거나 없는 신청입니다.") };
   const { row: request, previousStatus } = claimed;
   const restore = () => db().update(stockRequests).set({ status: previousStatus }).where(eq(stockRequests.id, id));
 
@@ -299,7 +333,7 @@ export async function rejectRequest(id: string, note: string, admin: Actor): Pro
     .set({ status: "REJECTED", decidedBy: admin.id, decidedByName: admin.name, decidedAt: now, decisionNote: note })
     .where(and(eq(stockRequests.id, id), eq(stockRequests.status, "PENDING")))
     .returning({ summary: stockRequests.summary, requestedByName: stockRequests.requestedByName });
-  if (!row) return { ok: false, message: "이미 처리된 신청이거나 없는 신청입니다." };
+  if (!row) return { ok: false, message: await failureMessage(id, "이미 처리된 신청이거나 없는 신청입니다.") };
   await db()
     .insert(auditLogs)
     .values(auditValues({ action: "STOCK_REQUEST_REJECTED", actorId: admin.id, actorName: admin.name, target: `requests:${id}`, detail: { summary: row.summary, requestedBy: row.requestedByName, note } }));
@@ -325,7 +359,7 @@ export async function closeRequest(id: string, note: string, admin: Actor): Prom
     .set({ status: "CONFIRMED", decidedBy: admin.id, decidedByName: admin.name, decidedAt: now, decisionNote: note })
     .where(and(eq(stockRequests.id, id), eq(stockRequests.status, "PARTIAL")))
     .returning({ summary: stockRequests.summary, requestedByName: stockRequests.requestedByName, payload: stockRequests.payload });
-  if (!row) return { ok: false, message: "마감할 수 없는 신청입니다. 일부라도 내준 신청만 마감할 수 있습니다. 화면을 새로 고치고 다시 보십시오." };
+  if (!row) return { ok: false, message: await failureMessage(id, "마감할 수 없는 신청입니다. 일부라도 내준 신청만 마감할 수 있습니다. 화면을 새로 고치고 다시 보십시오.") };
 
   // 이력에 숫자를 남긴다 — 「요청 8 중 5 나감, 3 남음을 마감」이 나중에 읽혀야 한다. 회차 줄은 마감으로 바뀌지 않으므로 지금 세도 같다.
   const issued = await issuedQuantities(id);
@@ -344,7 +378,77 @@ export async function closeRequest(id: string, note: string, admin: Actor): Prom
   return { ok: true };
 }
 
-/** 신청한 사람 본인이 아직 PENDING 인 것만 거둔다. */
+/**
+ * 보류 — **멈춰 둠** (2026-10-15, 조각 10a. A/S 쪽 `holdPartRequest` 에서 규칙만 옮겨 왔다).
+ *
+ * 「지금은 처리하지 않는다」를 **사유와 함께** 남겨 두는 중간 자리다. 끝낸 것이 아니라 나중에 다시 볼 것이라,
+ * 대기 목록에는 그대로 남는다(`./codes` 의 `PENDING_REQUEST_STATUSES`). 재촉하는 숫자에서만 빠진다.
+ *
+ * 🔴 **보류 중에는 확인도 반려도 마감도 취소도 안 된다.** 그 판정을 여기 따로 적지 않았다 — 네 함수 모두 상태를
+ *    WHERE 에 걸고 `ON_HOLD` 를 받는 곳이 하나도 없어 **저절로** 막힌다. 막는 규칙을 두 벌 적으면 언젠가 갈린다.
+ * 🔴 걸 수 있는 상태는 **집을 수 있는 상태와 같은 묶음**(`CLAIMABLE_REQUEST_STATUSES` = PENDING·PARTIAL)이다.
+ *    우연이 아니라 같은 뜻이다 — 「담당자가 아직 손댈 차례인 신청」. 🔴 `CONFIRMING` 은 **뺀다**: 다른 담당자가
+ *    **지금** 집어 원장을 쓰는 중이라, 그 밑에서 상태를 바꾸면 그 사람의 되돌리기(`restore`)가 보류를 덮어 쓴다.
+ * 🔵 모양은 `rejectRequest`·`closeRequest` 그대로다 — 상태를 조건으로 건 UPDATE **한 번**(두 담당자가 동시에
+ *    눌러도 한 번만 걸린다), 그다음 감사 로그.
+ */
+export async function holdRequest(id: string, reason: string, admin: Actor): Promise<{ ok: boolean; message?: string }> {
+  const now = new Date();
+  const [row] = await db()
+    .update(stockRequests)
+    // 🔴 `decided*` 는 건드리지 않는다. 보류는 **결정이 아니다** — 결정 칸을 적으면 「더 볼 일 없음」이라는 그 칸의 뜻이 깨진다.
+    .set({ status: "ON_HOLD", holdReason: reason, heldBy: admin.id, heldByName: admin.name, heldAt: now })
+    .where(and(eq(stockRequests.id, id), inArray(stockRequests.status, [...CLAIMABLE_REQUEST_STATUSES])))
+    .returning({ summary: stockRequests.summary, requestedByName: stockRequests.requestedByName });
+  if (!row) return { ok: false, message: "보류할 수 없는 신청입니다. 대기 중이거나 일부만 내준 신청만 보류할 수 있습니다. 화면을 새로 고치고 다시 보십시오." };
+
+  await db()
+    .insert(auditLogs)
+    .values(auditValues({ action: "STOCK_REQUEST_HELD", actorId: admin.id, actorName: admin.name, target: `requests:${id}`, detail: { summary: row.summary, requestedBy: row.requestedByName, reason } }));
+  return { ok: true };
+}
+
+/**
+ * 보류 풀기 — 멈추기 **전 자리**로 돌려놓는다 (2026-10-15, 조각 10a).
+ *
+ * 🔴 **돌아갈 상태를 저장해 두지 않고 센다.** 이미 나간 수량이 있으면 `PARTIAL`, 하나도 없으면 `PENDING`.
+ *    보류 직전 상태를 칸에 적어 두면 그 사이 사정이 달라졌을 때 옛 상태로 되돌아가 **실제와 어긋난다** —
+ *    나간 수량에서 다시 구하는 편이 언제나 맞다(A/S 쪽 `statusAfterHoldRelease` 의 까닭 그대로).
+ *    🔵 보류 중에는 불출이 막혀 있으므로 지금 세는 값이 트랜잭션 밖에서 읽어도 그 사이 바뀌지 않는다.
+ * 🔴 **네 칸을 비운다** — 사유는 `''`, 나머지는 null. 칸에는 **지금 보류 중인 사유만** 남는다. 지워도 괜찮은 까닭은
+ *    「누가 언제 왜 걸고 풀었나」가 감사 로그에 있기 때문이다(`STOCK_REQUEST_HELD` 의 `detail.reason`, append-only).
+ *    칸을 이력으로 쓰지 않는다 — 한 신청을 여러 번 걸고 풀면 칸은 마지막 것만 들고 있을 수 있어 거짓이 된다.
+ * 🔵 **사유를 받지 않는다.** 보류는 왜 멈추는지가 남아야 하지만, 푸는 것은 「다시 진행한다」는 뜻뿐이라 적을 것이 없다.
+ */
+export async function releaseRequestHold(id: string, admin: Actor): Promise<{ ok: boolean; message?: string }> {
+  const issued = await issuedQuantities(id);
+  let out = 0;
+  for (const q of issued.values()) out += q;
+  const next: RequestStatus = out > 0 ? "PARTIAL" : "PENDING";
+
+  const [row] = await db()
+    .update(stockRequests)
+    .set({ status: next, holdReason: "", heldBy: null, heldByName: null, heldAt: null })
+    .where(and(eq(stockRequests.id, id), eq(stockRequests.status, "ON_HOLD")))
+    // 🔴 보류 사유를 여기서 되읽을 수 없다 — `RETURNING` 은 **바뀐 뒤** 값을 주므로 이미 비워진 빈 글자가 온다.
+    //    걸 때의 사유는 `STOCK_REQUEST_HELD` 감사 줄에 있다(append-only 라 거기선 사라지지 않는다).
+    .returning({ summary: stockRequests.summary, requestedByName: stockRequests.requestedByName });
+  if (!row) return { ok: false, message: "보류 중인 신청이 아닙니다. 화면을 새로 고치고 다시 보십시오." };
+
+  await db().insert(auditLogs).values(
+    auditValues({
+      action: "STOCK_REQUEST_HOLD_RELEASED",
+      actorId: admin.id,
+      actorName: admin.name,
+      target: `requests:${id}`,
+      // 돌아간 자리(`status`)와 그렇게 정한 근거(이미 나간 수량)를 적는다 — 나중에 「왜 PENDING 으로 갔지?」를 따질 수 있게.
+      detail: { summary: row.summary, requestedBy: row.requestedByName, status: next, issued: out },
+    }),
+  );
+  return { ok: true };
+}
+
+/** 신청한 사람 본인이 아직 PENDING 인 것만 거둔다. 🔴 보류 중이면 막힌다 — 담당자가 먼저 풀어야 한다(위 `holdRequest`). */
 export async function cancelRequest(id: string, actor: Actor): Promise<{ ok: boolean; message?: string }> {
   const now = new Date();
   const [row] = await db()
@@ -376,6 +480,8 @@ function toRow(r: typeof stockRequests.$inferSelect, names: ReadonlyMap<string, 
     note: input.note,
     lines,
     closed: isClosedRequest(r.status, lines),
+    // 🔴 **상태로 가른다** — 칸에 값이 남아 있어도 `ON_HOLD` 가 아니면 `null` 이다 (`PendingRequestRow.hold` 주석).
+    hold: r.status === "ON_HOLD" ? { reason: r.holdReason, heldByName: r.heldByName ?? "", heldAt: r.heldAt?.toISOString() ?? "" } : null,
     requestedBy: r.requestedBy,
     requestedByName: r.requestedByName,
     requestedAt: r.requestedAt.toISOString(),
@@ -390,6 +496,9 @@ function toRow(r: typeof stockRequests.$inferSelect, names: ReadonlyMap<string, 
  *
  * 🔵 **일부만 나간 것(PARTIAL)도 여기 남는다** (2026-10-14, 조각 4c) — 아직 줄 것이 남았으니 담당자가 계속 봐야 한다.
  *    차례는 **처음 신청한 시각**이라 회차를 거듭해도 자리가 바뀌지 않는다(오래 기다린 것이 계속 위).
+ * 🔵 **멈춰 둔 것(ON_HOLD)도 여기 남는다** (2026-10-15, 조각 10a) — 안 보이면 잊히기 때문이다. 🔴 다만 머리말
+ *    배지·알림 종의 **숫자에서는 빠진다**(`countPendingRequests`) — 그래서 「목록 줄 수 > 배지 숫자」가 될 수 있다.
+ *    버그가 아니라 정한 것이다.
  */
 export async function listPendingRequests(): Promise<PendingRequestRow[]> {
   const rows = await db()
@@ -423,9 +532,15 @@ async function attachNames(rows: Array<typeof stockRequests.$inferSelect>): Prom
   return rows.map((r) => toRow(r, names, issued.get(r.id) ?? new Map()));
 }
 
-/** 머리말의 「대기 N」 배지. 🔴 아래 `summarizePendingRequests()`(알림 종)와 **같은 묶음**을 본다 — 둘이 갈리면 「배지에는 있는데 종에는 없는」 신청이 생긴다. */
+/**
+ * 머리말의 「대기 N」 배지.
+ *
+ * 🔴 아래 `summarizePendingRequests()`(알림 종)와 **같은 묶음**을 본다 — 둘이 갈리면 「배지에는 있는데 종에는 없는」 신청이 생긴다.
+ * 🔴 그 묶음은 `ACTIONABLE_REQUEST_STATUSES` 다 — **대기 목록(`listPendingRequests`)보다 좁다.** 보류(`ON_HOLD`)는
+ *    목록에는 보이지만 이 숫자에서는 빠진다(2026-10-15, 조각 10a): 담당자가 일부러 멈춰 둔 것을 재촉하지 않으려는 것이다.
+ */
 export async function countPendingRequests(): Promise<number> {
-  const [r] = await db().select({ n: count() }).from(stockRequests).where(inArray(stockRequests.status, [...PENDING_REQUEST_STATUSES]));
+  const [r] = await db().select({ n: count() }).from(stockRequests).where(inArray(stockRequests.status, [...ACTIONABLE_REQUEST_STATUSES]));
   return r?.n ?? 0;
 }
 
@@ -437,8 +552,8 @@ export async function countPendingRequests(): Promise<number> {
 /**
  * 확인 대기 요약 — 건수와 **가장 오래 기다린 신청의 시각**.
  *
- * 🔴 `countPendingRequests()` 와 세는 범위가 **같다** — 둘 다 `PENDING_REQUEST_STATUSES` 를
- * 본다(일부 나감 PARTIAL 포함). 목록을 손으로 두 벌 적으면 언젠가 갈려서 「배지에는
+ * 🔴 `countPendingRequests()` 와 세는 범위가 **같다** — 둘 다 `ACTIONABLE_REQUEST_STATUSES` 를
+ * 본다(일부 나감 PARTIAL 포함, 보류 ON_HOLD 제외). 목록을 손으로 두 벌 적으면 언젠가 갈려서 「배지에는
  * 있는데 종에는 없는」 신청이 생긴다. 그런데도 질의를 둘로 둔 까닭: 머리말의 「대기 N」
  * 배지는 숫자 하나만 쓰고 모든 화면에 딸려 오므로, 거기에 집계 한 칸을 더 얹지 않는다.
  * 종은 줄에 적을 날짜가 필요해 따로 묻는다.
@@ -447,7 +562,7 @@ export async function summarizePendingRequests(): Promise<{ count: number; oldes
   const [r] = await db()
     .select({ n: count(), oldest: min(stockRequests.requestedAt) })
     .from(stockRequests)
-    .where(inArray(stockRequests.status, [...PENDING_REQUEST_STATUSES]));
+    .where(inArray(stockRequests.status, [...ACTIONABLE_REQUEST_STATUSES]));
   // 드라이버가 timestamptz 를 Date 로 주지만, 집계는 글자로 올 수도 있어 둘 다 받는다.
   const oldest = (r?.oldest ?? null) as Date | string | null;
   return {

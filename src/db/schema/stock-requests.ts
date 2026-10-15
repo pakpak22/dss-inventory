@@ -19,8 +19,17 @@ import { entryTypeEnum, stockEntries } from "./stock";
  *       **조각 4c 에서** 맞춘다. 이 조각(4a)은 값만 더한다 — 그래서 지금은 아직 어느 곳도 PARTIAL 을 대기로 세지 않는다.
  *    🔴 값을 **맨 뒤에** 붙였다. 가운데 끼우면 마이그레이션이 enum 타입을 다시 만들 수 있어서,
  *       기존 값을 건드리지 않는 `ALTER TYPE … ADD VALUE` 한 줄로 끝내려고 뒤에 붙인 것이다. 차례에 뜻은 없다.
+ *
+ * 🔵 `ON_HOLD` = **담당자가 사유를 적어 멈춰 둠** (2026-10-15, 조각 10a).
+ *    「지금은 처리하지 않는다」를 사유와 함께 남겨 두는 **중간** 자리다. 끝난 것이 아니라 나중에 다시 볼 것이라,
+ *    풀면 멈추기 전 자리(`PENDING` 또는 `PARTIAL`)로 돌아간다 — 🔴 돌아갈 자리를 **칸에 적어 두지 않고 센다**
+ *    (`src/lib/stock/requests.ts` 의 `releaseRequestHold`: 적어 두면 그 사이 사정이 달라졌을 때 실제와 어긋난다).
+ *    🔵 **대기로 센다** — 목록에서 사라지면 다시 집을 길이 없어 잊힌다(`PARTIAL` 과 같은 논리).
+ *    🔴 다만 머리말 배지·알림 종의 **숫자에서는 뺀다**(`src/lib/stock/codes.ts` 의 `ACTIONABLE_REQUEST_STATUSES`) —
+ *       일부러 멈춰 둔 것을 매일 재촉하지 않으려는 것이다.
+ *    🔴 여기도 **맨 뒤**다(위와 같은 까닭). 선례: `drizzle/0010_concerned_lucky_pierre.sql` 의 `PARTIAL`.
  */
-export const REQUEST_STATUSES = ["PENDING", "CONFIRMING", "CONFIRMED", "REJECTED", "CANCELLED", "PARTIAL"] as const;
+export const REQUEST_STATUSES = ["PENDING", "CONFIRMING", "CONFIRMED", "REJECTED", "CANCELLED", "PARTIAL", "ON_HOLD"] as const;
 export type RequestStatus = (typeof REQUEST_STATUSES)[number];
 export const requestStatusEnum = pgEnum("stock_request_status", REQUEST_STATUSES);
 
@@ -42,6 +51,21 @@ export const stockRequests = pgTable(
     decidedAt: timestamp("decided_at", { withTimezone: true }),
     /** 반려 사유 */
     decisionNote: text("decision_note").notNull().default(""),
+    /**
+     * 보류 네 칸 (2026-10-15, 조각 10a). 바로 위 `decided*` 넷과 **같은 모양**으로 둔다 — 읽는 사람이 새 규칙을
+     * 배우지 않아도 되게.
+     *
+     * 🔴 **지금 보류 중인 것만 들고 있다.** 풀 때 넷을 비운다(사유는 `''`, 나머지는 null). 이력 칸이 아니다 —
+     *    한 신청을 여러 번 걸고 풀면 칸은 마지막 것만 남아 거짓이 된다. 「누가 언제 왜 걸고 풀었나」는 감사
+     *    로그(`STOCK_REQUEST_HELD`·`STOCK_REQUEST_HOLD_RELEASED`)가 append-only 로 들고 있다.
+     * 🔴 그래서 **칸이 아니라 `status` 가 참말이다** — 상태가 `ON_HOLD` 가 아니면 값이 남아 있어도 보류가 아니다
+     *    (`src/lib/stock/requests.ts` 의 `toRow`).
+     * 🔵 `decided*` 는 **건드리지 않는다.** 보류는 결정이 아니다 — 거기 적으면 「더 볼 일 없음」이라는 그 칸의 뜻이 깨진다.
+     */
+    holdReason: text("hold_reason").notNull().default(""),
+    heldBy: uuid("held_by"),
+    heldByName: text("held_by_name"),
+    heldAt: timestamp("held_at", { withTimezone: true }),
     /** 확인되어 쓰인 원장 머리 */
     entryId: uuid("entry_id"),
   },
