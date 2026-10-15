@@ -82,8 +82,23 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  */
 export const NOTIFICATION_MAX_ITEMS = 200;
 
-/** 알림을 누르면 가는 화면 — 확인 대기 묶음과 내 신청 결과가 모두 여기 있다. */
-const ENTRIES_PATH = "/entries";
+/**
+ * 알림을 누르면 가는 화면 — **부품 요청 관리**(`/requests`).
+ *
+ * 🔴 **2026-10-15 에 `/entries` 에서 여기로 옮겼다.** 확인 대기 묶음도, 내 신청 결과도 기록 내역에서 걷어내
+ *    부품 요청 관리 한자리로 모았다(사용자 결정). 그대로 두었으면 종을 눌러 기록 내역으로 가 **그 신청이
+ *    하나도 보이지 않는 막다른 길**이었다.
+ * 🔴 **절대 주소를 만드는 자리는 아래 `href` 한 곳뿐이다**(`baseUrl` + 이 경로). 이 값은 이 시스템의 종뿐
+ *    아니라 포털을 거쳐 **다른 사내 시스템의 종에도 실려 나가는데**(notifications/queries.ts 를
+ *    app/api/integration/notifications 가 그대로 내준다), 양쪽이 **같은 줄**을 쓰므로 여기 한 줄이 둘 다 바꾼다.
+ * 🔵 **문이 기록 권한(STAFF) 이상이다**(그 화면의 `requireRole("STAFF")` — 기록 내역은 세션만 봤다). 「확인
+ *    대기」는 ADMIN 에게만 가니 괜찮고, 「반려」는 **신청을 낸 본인**에게만 가므로 보통은 STAFF 이상이다.
+ *    🔴 다만 **신청을 낸 뒤 보기(VIEWER)로 내려간 사람**은 7일 안에 반려된 자기 신청이 있으면 종에 줄이 뜨는데
+ *    눌러도 `/forbidden` 으로 가는 **막다른 길**이었다. **2026-10-15 에 막았다** — 조립 ②와 질의(queries.ts)가
+ *    둘 다 `receivesRejectedNotification` 을 지나간다. 🔴 **권한을 넓혀 푼 것이 아니다** — 이 화면의 문은
+ *    `requireRole("STAFF")` 그대로고, 못 여는 사람에게 **줄을 만들지 않는** 쪽으로 맞췄다.
+ */
+const REQUESTS_PATH = "/requests";
 
 /**
  * 반려 알림이 보이는 선. 이 시각보다 **먼저** 결정된 것은 사라진다.
@@ -116,13 +131,22 @@ export function receivesPendingNotification(role: Role): boolean {
 /**
  * 「내 반출 신청이 반려됨」을 받는 사람 — **신청을 낼 수 있는 사람**(기록 권한 이상).
  *
- * 🔴 실제로 거르는 것은 역할이 아니라 `stock_requests.requested_by` 다 — 자기 신청만
- * 온다(stock/requests.ts 의 listRejectedRequestsFor). 그래서 조립은 이 함수를 부르지
- * 않는다. 이 함수가 답하는 것은 포털 설정 화면의 물음, 즉 **「어느 역할이 이 알림을
- * 받을 수 있나」**다: 보기(VIEWER)는 기록을 못 하므로 신청 자체가 없고, 기록(STAFF)은
- * 반출을 적으면 확인 대기로 들어간다. 관리자(ADMIN)가 적은 반출은 바로 원장에
- * 떨어지지만(stock/codes.ts 의 needsConfirmation), 기록 권한이던 시절의 신청이
- * 남아 있을 수 있어 「못 받는다」고 적는 쪽이 거짓이 된다.
+ * 🔴 **어느 신청이 오는가**를 거르는 것은 역할이 아니라 `stock_requests.requested_by` 다 —
+ * 자기 신청만 온다(stock/requests.ts 의 listRejectedRequestsFor). 이 함수가 답하는 것은
+ * 그 앞의 물음, 즉 **「어느 역할이 이 알림을 받을 수 있나」**다: 보기(VIEWER)는 기록을
+ * 못 하므로 신청을 낼 수 없고, 기록(STAFF)과 관리자(ADMIN)는 반출을 적으면 확인 대기로
+ * 들어간다.
+ *
+ * 🔴 **이 판정이 적힌 자리는 여기 하나뿐이다.** 부르는 곳이 셋이다 — 조립(아래 ②) ·
+ * 질의(notifications/queries.ts) · 포털 설정 표(notifications/settings.ts). 어느 쪽에도
+ * `roleAtLeast(role, "STAFF")` 를 손으로 한 벌 더 적지 않는다. 두 벌이 되면 언젠가 갈려
+ * 「종에는 뜨는데 눌러도 못 여는」 줄이 다시 생긴다.
+ *
+ * 🔴 **2026-10-15 사용자 결정으로 관리자도 같아졌다** — 그 전에는 관리자가 적은 반출이
+ * 바로 원장에 떨어져서, 「그래도 기록 권한이던 시절의 신청이 남아 있을 수 있다」는
+ * 까닭으로 ADMIN 을 넣어 두고 있었다. 이제는 관리자가 낸 요청도 반려될 수 있으므로
+ * 까닭이 더 단순해졌다. 답(STAFF 이상)은 **그대로**다
+ * (stock/codes.ts 의 needsConfirmation).
  */
 export function receivesRejectedNotification(role: Role): boolean {
   return roleAtLeast(role, "STAFF");
@@ -205,7 +229,7 @@ function joinDetail(parts: Array<string | null | undefined>): string {
  * null 이 아니라 빈 문자열**이다(그쪽 types.ts).
  */
 export function buildInventoryNotificationItems(input: {
-  /** 보는 사람의 역할. 🔴 「확인 대기」는 ADMIN 에게만 간다. */
+  /** 보는 사람의 역할. 🔴 「확인 대기」는 ADMIN 에게만, 「반려」는 기록 권한(STAFF) 이상에게만 간다(위 receives*). */
   role: Role;
   pending: PendingSummary;
   /** 이미 상한(NOTIFICATION_MAX_ITEMS)에서 잘린 반려 줄. */
@@ -220,7 +244,7 @@ export function buildInventoryNotificationItems(input: {
   sourceId: string;
 }): InventoryNotificationFeed {
   const baseUrl = requireAbsoluteBaseUrl(input.baseUrl);
-  const href = `${baseUrl}${ENTRIES_PATH}`;
+  const href = `${baseUrl}${REQUESTS_PATH}`;
   const items: NotificationBellItem[] = [];
   const seen = new Set<string>();
 
@@ -260,26 +284,38 @@ export function buildInventoryNotificationItems(input: {
   }
 
   // ② 신청한 본인에게 — 「반출 신청이 반려되었습니다」. 결정된 지 7일이 지나면 사라진다.
+  //    🔴 **역할도 본다**(①과 같은 모양). 기록 권한(STAFF) 아래인 사람에게는 줄을 아예 만들지 않는다.
+  //    까닭: 이 줄이 가리키는 `/requests` 는 `requireRole("STAFF")` 라 자격이 없으면 눌러도 `/forbidden` 으로
+  //    튕긴다 — **눌러도 못 여는 줄**이다. 신청을 낸 뒤 보기(VIEWER)로 내려간 사람에게 실제로 그랬다.
+  //    게다가 이 줄은 포털을 거쳐 **다른 사내 시스템의 종에도 실려 나가므로**(app/api/integration/notifications),
+  //    막다른 길이 우리 화면 밖에서도 그려진다. 🔴 판정은 `receivesRejectedNotification` 한 곳에서만 온다.
+  const showRejected = receivesRejectedNotification(input.role);
   let rejectedShown = 0;
-  for (const row of input.rejected) {
-    // 🔴 질의가 이미 걸렀지만 여기서 한 번 더 본다. 둘이 같은 함수를 부르므로 규칙이
-    //    갈라질 수 없고, 질의가 쥐여 준 줄을 그대로 믿지 않아도 된다.
-    if (!isRejectionVisible(row.decidedAt, input.now)) continue;
-    rejectedShown += 1;
-    push(
-      rejectedNotificationId(row.id),
-      NOTIFICATION_KINDS.rejected,
-      "반출 신청이 반려되었습니다",
-      // 🔴 반려 **사유 본문**은 싣지 않는다 — /entries 에서 본다. 어느 신청인지만 가린다.
-      joinDetail([row.summary, row.decidedByName ? `${row.decidedByName} 반려` : null, row.decidedAt ? seoulDate(row.decidedAt) : null]),
-    );
+  if (showRejected) {
+    for (const row of input.rejected) {
+      // 🔴 질의가 이미 걸렀지만 여기서 한 번 더 본다. 둘이 같은 함수를 부르므로 규칙이
+      //    갈라질 수 없고, 질의가 쥐여 준 줄을 그대로 믿지 않아도 된다.
+      if (!isRejectionVisible(row.decidedAt, input.now)) continue;
+      rejectedShown += 1;
+      push(
+        rejectedNotificationId(row.id),
+        NOTIFICATION_KINDS.rejected,
+        "반출 신청이 반려되었습니다",
+        // 🔴 반려 **사유 본문**은 싣지 않는다 — /requests 에서 본다. 어느 신청인지만 가린다.
+        joinDetail([row.summary, row.decidedByName ? `${row.decidedByName} 반려` : null, row.decidedAt ? seoulDate(row.decidedAt) : null]),
+      );
+    }
   }
 
   // 🔴 자르기 전의 진짜 개수. 받은 줄이 상한에서 잘렸다면 rejectedTotal 이 더 크다.
   //    다만 「7일 선에 걸려 여기서 뺀 줄」까지 세면 거짓이 되므로, 상한에 걸리지 않은
   //    보통의 경우(총계 = 받은 줄 수)에는 실제로 그린 줄 수를 쓴다.
-  const rejectedTotal = input.rejectedTotal ?? input.rejected.length;
-  const rejectedCount = rejectedTotal > input.rejected.length ? rejectedTotal : rejectedShown;
+  //    🔴 자격이 없으면 **0 이다** — 줄이 없는데 배지 숫자만 남으면 눌러도 빈 종이 된다.
+  let rejectedCount = 0;
+  if (showRejected) {
+    const rejectedTotal = input.rejectedTotal ?? input.rejected.length;
+    rejectedCount = rejectedTotal > input.rejected.length ? rejectedTotal : rejectedShown;
+  }
 
   return {
     items: items.slice(0, NOTIFICATION_MAX_ITEMS),

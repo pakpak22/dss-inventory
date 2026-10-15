@@ -22,11 +22,22 @@ export type RecordableType = (typeof RECORDABLE_TYPES)[number];
 
 /**
  * 담당자 확인을 거치는 종류 — 반출 계열 (2026-10-06 사용자 결정: 「신청 → 담당자 확인 → 반출」).
- * 기록 권한자가 적으면 확인 대기로, 관리자가 적으면 바로 원장에. 입고·반환은 담당자가 하는 일이라 바로.
+ * 입고·반환은 담당자가 하는 일이라 지금도 바로 원장에 쓰인다.
+ *
+ * 🔴 **2026-10-15 사용자 결정으로 바뀜: 누가 적든 반출은 요청으로 올라간다. 관리자도 예외가 아니다.**
+ *    옛 규칙(2026-10-06)은 「기록 권한자가 적으면 확인 대기로, **관리자가 적으면 바로 원장에**」였다 —
+ *    까닭은 「관리자가 직접 적으면 신청과 확인이 한 번이다」였다. 그런데 그러면 관리자가 「수량 변경 기록」에
+ *    반출을 적을 때 **신청이 아예 만들어지지 않아** 부품 요청 관리(`/requests`)에 한 줄도 안 떴다
+ *    (2026-10-15 실측 — 쓰는 분이 적었는데 그 화면에 없었다). 이제 역할을 보지 않는다.
+ * 🔴 그래서 **매개변수가 하나다.** 역할을 넘기던 자리를 지워 두면 tsc 가 부르는 자리를 전부 잡아 준다.
+ * 🔵 **관리자가 낸 요청은 본인이 확인하게 된다.** 지금 코드가 그걸 이미 감당한다 — `confirmRequest` 는
+ *    신청한 사람을 원장의 `created_by`, 확인한 사람을 `confirmed_by` 로 적으므로 **같은 사람이어도 괜찮다**
+ *    (`src/lib/stock/requests.ts`). 확인을 누르기 전까지 수량이 빠지지 않는 것이 이 결정의 핵심이다.
+ * 🔵 **「누가 적을 수 있나」와는 다른 물음이다** — 그쪽은 아래 `ADMIN_ONLY_TYPES` 이고 이번에 손대지 않았다.
  */
 export const CONFIRMATION_TYPES: ReadonlySet<EntryType> = new Set<EntryType>(["USE", "LOAN", "DISPOSE"]);
-export function needsConfirmation(type: EntryType, isAdmin: boolean): boolean {
-  return !isAdmin && CONFIRMATION_TYPES.has(type);
+export function needsConfirmation(type: EntryType): boolean {
+  return CONFIRMATION_TYPES.has(type);
 }
 
 /** 관리자만 적을 수 있는 종류 (DESIGN 3절: 조정·소유 옮김·기록 취소) */
@@ -97,6 +108,75 @@ export function isClaimableRequest(status: RequestStatus): status is ClaimableRe
 export function isClosedRequest(status: RequestStatus, lines: readonly { quantity: number; issued: number }[]): boolean {
   if (status !== "CONFIRMED") return false;
   return lines.some((l) => l.issued > 0) && lines.some((l) => l.issued < l.quantity);
+}
+
+/**
+ * 신청 상태 → 화면 글자 (2026-10-15, 조각 10b. 부품 요청 관리 화면).
+ *
+ * 🔴 **`Record` 로 둔 까닭**: 상태를 하나 더하고 여기를 안 고치면 **tsc 가 멈춘다.** 화면이 `status` 를 그대로
+ *    보이던 때에는 영문 코드가 그냥 새어 나갔고(CLAUDE.md 10절: 코드값을 화면에 내지 않는다) 아무도 못 알아챘다.
+ * 🔵 글자는 **기록 내역의 「확인 대기」 구역이 쓰던 것 그대로**다(「처리 중」·「일부 나감」·「반려」·「취소」).
+ *    그 구역은 2026-10-15 에 걷어냈지만 글자는 옮겨 왔다 — 쓰는 분이 이미 그 말로 부르고 있어서,
+ *    화면이 옮겨 갔다고 낱말까지 바꾸면 같은 것이 다른 것으로 읽힌다. 표는 **한 곳에** 둔다.
+ */
+export const REQUEST_STATUS_LABEL: Record<RequestStatus, string> = {
+  PENDING: "대기",
+  CONFIRMING: "처리 중",
+  PARTIAL: "일부 나감",
+  CONFIRMED: "확인됨",
+  REJECTED: "반려",
+  CANCELLED: "취소",
+  ON_HOLD: "보류",
+};
+
+/**
+ * 거르개가 도는 차례 — 글자 표에서 **뽑아 쓴다**(따로 적으면 상태를 더했을 때 한쪽만 고쳐진다).
+ *
+ * 🔴 스키마의 `REQUEST_STATUSES` 를 쓰지 않는 까닭 둘: ① 저쪽은 enum 마이그레이션 때문에 **새 값이 맨 뒤에 붙는**
+ *    차례라(PARTIAL·ON_HOLD) 사람이 읽을 차례가 아니다. ② 값으로 끌어오면 **클라이언트 묶음에 표 정의(drizzle)가
+ *    딸려 온다** — 타입만 쓰면 컴파일할 때 지워진다.
+ */
+export const REQUEST_STATUS_ORDER: readonly RequestStatus[] = Object.keys(REQUEST_STATUS_LABEL) as RequestStatus[];
+
+/**
+ * 상태 배지 색 (2026-10-15, 조각 10b. A/S 쪽 `PartRequestManagerScreen` 의 색을 그대로 옮기고 `dark:` 만 뺐다 —
+ * 이 저장소에는 다크 모드가 없다).
+ *
+ * 🔵 요청 관리는 **「지금 손댈 것이 무엇인가」를 훑는 화면**이라, 처리 대기 중인 것과 이미 끝난 것이 한눈에 갈려야 한다.
+ * 🔴 **보류를 대기와 다른 색으로 둔다**(보라 ↔ 주황). 「멈춰 있다」가 한눈에 보여야 하기 때문이다 — 같은 주황이면
+ *    지금 처리해야 할 것으로 착각하고 눌러 보게 되는데, 보류 중에는 확인도 반려도 마감도 막혀 있다(requests.ts).
+ * 🔵 글자 표와 마찬가지로 **이 표를 보는 자리는 한 곳**이다(부품 요청 관리) — 2026-10-15 에 기록 내역의
+ *    「확인 대기」 구역을 걷어내면서 그렇게 됐다. 그래도 색을 화면 파일에 흩지 않는다: 글자와 색은 짝이고,
+ *    짝이 갈리면 「마감인데 초록」 같은 줄이 생긴다(아래 `requestStatusBadge`).
+ */
+export const REQUEST_STATUS_BADGE: Record<RequestStatus, string> = {
+  PENDING: "bg-amber-100 text-amber-800",
+  CONFIRMING: "bg-zinc-200 text-zinc-700",
+  PARTIAL: "bg-blue-100 text-blue-800",
+  CONFIRMED: "bg-green-100 text-green-800",
+  REJECTED: "bg-red-100 text-red-800",
+  CANCELLED: "bg-zinc-100 text-zinc-500",
+  ON_HOLD: "bg-violet-100 text-violet-800",
+};
+
+/**
+ * 마감된 신청의 글자와 색.
+ *
+ * 🔴 **마감은 상태값이 아니다** — 상태는 `CONFIRMED` 이고, 가르는 자리는 위 `isClosedRequest` 하나뿐이다(그 주석).
+ *    그래서 표에 여덟 번째 칸을 만들지 않고 따로 둔다. 상태를 새로 만들면 enum 마이그레이션이 또 필요하다.
+ * 🔵 색은 기록 내역 화면이 쓰던 마감 배지 그대로다(2026-10-14, 조각 4d).
+ */
+export const CLOSED_REQUEST_LABEL = "마감";
+export const CLOSED_REQUEST_BADGE = "bg-amber-100 text-amber-900";
+
+/** 화면에 보일 글자 — 마감된 신청은 「확인됨」이 아니라 「마감」이다. `closed` 는 `isClosedRequest` 가 센 값이다. */
+export function requestStatusLabel(status: RequestStatus, closed: boolean): string {
+  return closed ? CLOSED_REQUEST_LABEL : REQUEST_STATUS_LABEL[status];
+}
+
+/** 위와 짝이 되는 배지 색. 글자와 색을 따로 고르면 「마감인데 초록」 같은 짝이 생긴다. */
+export function requestStatusBadge(status: RequestStatus, closed: boolean): string {
+  return closed ? CLOSED_REQUEST_BADGE : REQUEST_STATUS_BADGE[status];
 }
 
 export const PURPOSE_LABEL: Record<Purpose, string> = {

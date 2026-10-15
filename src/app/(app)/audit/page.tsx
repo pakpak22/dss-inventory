@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { SettingsNav } from "@/components/settings/SettingsNav";
 import { AUDIT_ACTIONS, AUDIT_ACTION_LABEL, PART_FIELD_LABEL, describeTarget, isAuditAction } from "@/lib/audit-labels";
 import { requireRole } from "@/lib/auth/session";
 import { formatFileSize } from "@/lib/file-size";
@@ -13,6 +14,9 @@ import { entryNosByIds } from "@/lib/stock/queries";
  *
  * 표 모양: 시각 · 누가 · 행위 · 대상 · **칸 · 변경 전 · 변경 후**. 부품 수정은 **바뀐 칸마다 한 줄**로 펼친다
  * (한 칸에 줄로 쌓으면 둘째 줄이 눈에 안 띈다 — 2026-10-06 사용자 확인). 앞 네 칸은 rowSpan 으로 묶는다.
+ *
+ * 🔵 **설정 묶음의 한 탭이다** (2026-10-15 사용자 요청: 머리말에서 뺐다). 🔴 주소는 `/audit` 그대로 — 옮기면
+ *    열려 있는 탭·즐겨찾기·부품 상세의 [변경 이력] 링크가 깨진다. 탭 줄은 `SettingsNav`.
  */
 export const metadata = { title: "변경 이력" };
 
@@ -223,8 +227,10 @@ export default async function AuditPage({ searchParams }: { searchParams: Promis
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
+        {/* 🔵 제목 꼴은 설정 묶음의 다른 탭과 같게 (2026-10-15, 조각 10c) — 「설정 · O/H 템플릿」처럼.
+            🔴 부품으로 걸러 볼 때 붙는 「· 부품 No. N」과 그 옆 링크 둘은 그대로 둔다. */}
         <h1 className="text-xl font-semibold text-zinc-900">
-          변경 이력
+          설정 <span className="font-normal text-zinc-500">· 변경 이력</span>
           {partNo !== null ? (
             <span className="font-normal text-zinc-500">
               {" "}
@@ -256,6 +262,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Promis
           </button>
         </form>
       </div>
+      <SettingsNav current="audit" />
 
       <p className="text-xs text-zinc-500">
         누가 언제 무엇을 했는지 전부 쌓이는 곳입니다(부품 등록·수정·삭제, 수량 기록, 로그인). 수량이 어떻게 움직였는지 보려면{" "}

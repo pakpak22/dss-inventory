@@ -1,17 +1,22 @@
 import Link from "next/link";
 import { CorrectButton, ReverifyButton } from "@/components/stock/EntryActions";
-import { RequestActions } from "@/components/stock/RequestActions";
-import { listPendingRequests, listRecentDecidedRequests } from "@/lib/stock/requests";
 import { roleAtLeast } from "@/lib/auth/role";
 import { requireSession } from "@/lib/auth/session";
 import { OWNER_LABEL, formatQuantity } from "@/lib/parts/codes";
-import { CHARGE_LABEL, ENTRY_TYPES, ENTRY_TYPE_LABEL, PURPOSE_LABEL, formatDelta, isClaimableRequest, sheetNoText, sheetOf } from "@/lib/stock/codes";
+import { CHARGE_LABEL, ENTRY_TYPES, ENTRY_TYPE_LABEL, PURPOSE_LABEL, formatDelta, sheetNoText, sheetOf } from "@/lib/stock/codes";
 import { ALL_PART_SEARCH_FIELDS, PART_SEARCH_FIELDS, parseEntryListFilter } from "@/lib/stock/form";
+import { requestSavedNotice, type RequestNotice } from "@/lib/stock/request-notice";
 import { listEntries, type EntryRow } from "@/lib/stock/queries";
 
 /**
  * 기록 내역 `/entries` (모두, DESIGN 2-5절). 날짜 역순, 종류·기간·부품·담당·인수번호·「인수번호 확인 안 됨」으로 거르기.
  * [기록 취소] 는 관리자, [확인] 은 기록·관리자. 거르기는 주소에 담는다(평범한 GET 폼).
+ *
+ * 🔴 **맨 위의 「확인 대기」 구역은 2026-10-15 사용자 결정으로 걷어냈다.** 같은 날 생긴 부품 요청 관리
+ *    (`/requests`)가 **같은 신청을 상태까지 다 보여 주어** 한 신청이 두 화면에 뜨고 있었다. 신청을 보고
+ *    처리하는 자리는 이제 `/requests` 하나이고(머리말 「대기 N」 배지도 그 옆에 선다), 여기는 **수량이
+ *    움직인 기록**만 다룬다. 신청자가 자기 신청을 거두는 [신청 취소]도 그 화면으로 옮겼다 —
+ *    기능이 사라진 것이 아니라 자리가 하나로 모인 것이다(`RequestManagerScreen`).
  */
 export const metadata = { title: "기록 내역" };
 
@@ -19,6 +24,11 @@ const FLABEL = "flex flex-col gap-1.5 text-sm font-medium text-zinc-700";
 const FINPUT = "rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900";
 const BTN = "rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-100";
 const BADGE = "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap";
+/** 저장 결과 한 줄. 회색은 알림, 주황은 **아직 남은 것이 있다**는 뜻 (부품 요청 관리 화면과 같은 모양). */
+const NOTICE: Record<RequestNotice["tone"], string> = {
+  info: "rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700",
+  warn: "rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900",
+};
 
 function typeBadge(type: EntryRow["type"]) {
   const color =
@@ -53,28 +63,23 @@ function entryTitle(e: EntryRow): string {
   }
 }
 
-/**
- * 신청 줄의 합계 — 「요청 8 중 5 나감 · 3 남음」 (2026-10-14, 조각 4d).
- * 🔴 이미 나간 수량이 요청보다 커 보여도(기록 취소 등으로 어긋나면) 요청에서 자른다 — 「요청 8 중 9 나감」은 읽는 사람을 속인다.
- */
-type RequestLines = readonly { quantity: number; issued: number }[];
-const requestedTotal = (lines: RequestLines): number => lines.reduce((a, l) => a + l.quantity, 0);
-const issuedTotal = (lines: RequestLines): number => lines.reduce((a, l) => a + Math.min(l.quantity, l.issued), 0);
-
 export default async function EntriesPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const session = await requireSession("/entries");
   const canRecord = roleAtLeast(session.user.role, "STAFF");
   const isAdmin = roleAtLeast(session.user.role, "ADMIN");
   const sp = await searchParams;
   const f = parseEntryListFilter(sp);
-  const saved = typeof sp.saved === "string" ? sp.saved : null;
-  const savedUnverified = sp.unverified === "1" && saved !== null;
-  /** 방금 확인한 신청에 아직 남은 수량 (조각 4d). 주소로 온 값이라 숫자가 아니면 0 으로 본다. */
-  const savedRemaining = saved !== null && typeof sp.remaining === "string" && /^\d+$/.test(sp.remaining) ? Number(sp.remaining) : 0;
-  const [{ rows, total, pageSize }, pending, decided] = await Promise.all([listEntries(f), listPendingRequests(), listRecentDecidedRequests(8)]);
-  // 내 신청의 결과 — 확인(CONFIRMED)은 수량이 바뀌어 화면에서 바로 보이므로 뺀다.
-  // 🔵 **마감은 남긴다**(2026-10-14, 조각 4d): 상태는 같은 CONFIRMED 지만 **남은 수량이 안 온다**는 뜻이라 신청자가 알아야 한다.
-  const myRecent = decided.filter((r) => r.requestedBy === session.user.id && (r.status !== "CONFIRMED" || r.closed));
+  /**
+   * **기록이 저장된** 뒤의 한 줄 — 기록 번호와 「인수번호 확인 안 됨」 (2026-10-15, 조각 10c).
+   *
+   * 🔴 **남긴 까닭**: 바로 원장에 적히는 길이 아직 이 화면으로 온다 — [기록 취소](`correctTransactionAction`)가
+   *    `?saved=CH-…&type=CORRECTION` 으로 돌아온다. 지우면 취소해 놓고 아무 말이 없어진다.
+   * 🔴 **결정 알림(`requestDecisionNotice` — 반려·마감·보류·보류 해제·신청 취소)은 걷어냈다.** 그 꼬리표는
+   *    요청 단추가 붙이는 것이고, 단추는 이제 부품 요청 관리(`/requests`)에만 있다.
+   * 🔵 문구는 그 화면과 **같은 한 벌**에서 온다(`request-notice.ts`) — 같은 일을 두 화면이 다르게 말하지 않게.
+   */
+  const savedNotice = requestSavedNotice(sp, "entries");
+  const { rows, total, pageSize } = await listEntries(f);
   const pages = Math.max(1, Math.ceil(total / pageSize));
   const from = total === 0 ? 0 : (f.page - 1) * pageSize + 1;
   const to = Math.min(total, f.page * pageSize);
@@ -120,111 +125,8 @@ export default async function EntriesPage({ searchParams }: { searchParams: Prom
         수량이 움직인 기록입니다. 잘못 적은 줄은 지우지 않고 <b>[기록 취소]</b>로 되돌리는 줄을 새로 쌓습니다(관리자). 「인수번호 확인 안 됨」은 A/S 가 응답하지 않아 확인을 미룬 것이고 [확인]으로 다시 묻습니다.
       </p>
 
-      {sp.requested === "1" ? (
-        <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">신청이 확인 대기로 올라갔습니다. 담당자(관리자)가 확인하면 그때 수량이 바뀝니다.</p>
-      ) : null}
-      {sp.rejected === "1" ? <p className="rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700">신청을 반려했습니다.</p> : null}
-      {sp.closed === "1" ? (
-        <p className="rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700">남은 수량을 마감했습니다. 이미 나간 기록과 수량은 그대로입니다.</p>
-      ) : null}
-      {sp.cancelled === "1" ? <p className="rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700">신청을 취소했습니다.</p> : null}
-
-      {pending.length > 0 || myRecent.length > 0 ? (
-        <section className="rounded-lg border border-amber-300 bg-white">
-          <div className="border-b border-amber-200 bg-amber-50 px-4 py-2.5">
-            <h2 className="text-sm font-semibold text-amber-900">확인 대기 {pending.length}건</h2>
-            <p className="text-xs text-amber-800">
-              반출 신청입니다.{" "}
-              {isAdmin
-                ? "[확인]에서 줄별로 이번에 내줄 수량을 정합니다. 내준 수량만 그 순간 원장에 쓰이고, 다 못 주면 신청이 「일부 나감」으로 남아 나중에 다시 [확인]할 수 있습니다. 더 줄 것이 없으면 [마감]으로 닫습니다. 수량이 모자라면 확인이 거절됩니다."
-                : "담당자가 확인하면 수량이 바뀝니다. 여러 차례 나눠 받을 수도 있습니다."}
-            </p>
-          </div>
-          {pending.length === 0 ? <p className="px-4 py-3 text-sm text-zinc-500">지금 대기 중인 신청이 없습니다.</p> : null}
-          <ul className="divide-y divide-zinc-100">
-            {pending.map((r) => (
-              <li key={r.id} className="flex flex-col gap-2 px-4 py-3">
-                <div className="flex flex-wrap items-center gap-2 text-sm">
-                  {typeBadge(r.type)}
-                  <span className="tabular text-zinc-700">{r.occurredOn}</span>
-                  <span className="text-zinc-700"><span className="text-zinc-500">신청자:</span> <b>{r.requestedByName}</b></span>
-                  <span className="tabular text-xs text-zinc-400">{new Date(r.requestedAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", hour12: false })}</span>
-                  {r.status === "CONFIRMING" ? <span className={`${BADGE} bg-zinc-100 text-zinc-700`}>처리 중</span> : null}
-                  {r.status === "PARTIAL" ? (
-                    <>
-                      <span className={`${BADGE} bg-amber-100 text-amber-900`}>일부 나감</span>
-                      <span className="tabular text-xs text-amber-900">
-                        요청 {formatQuantity(requestedTotal(r.lines))} 중 {formatQuantity(issuedTotal(r.lines))} 나감 · {formatQuantity(requestedTotal(r.lines) - issuedTotal(r.lines))} 남음
-                      </span>
-                    </>
-                  ) : null}
-                </div>
-                <p className="text-sm text-zinc-700">
-                  {r.type === "USE" ? (r.noRepairCase ? `수리 건 없음 (${r.reason})` : r.intakeNumber) : r.type === "LOAN" ? `빌려준 곳 ${r.counterparty}` : r.type === "DISPOSE" ? `사유 ${r.reason}` : ""}
-                  {r.note ? ` · ${r.note}` : ""}
-                </p>
-                <ul className="flex flex-col gap-0.5 text-sm">
-                  {r.lines.map((l) => (
-                    <li key={l.partId}>
-                      {l.partNo !== null ? (
-                        <Link href={`/?part=${l.partNo}`} className="underline decoration-zinc-300">
-                          <span className="text-zinc-500">No. {l.partNo}</span> {l.partName}
-                        </Link>
-                      ) : (
-                        <span className="text-zinc-400">{l.partName}</span>
-                      )}{" "}
-                      <b className="tabular">×{formatQuantity(l.quantity)}</b>
-                      {l.issued > 0 ? (
-                        <span className="tabular ml-1.5 text-xs text-amber-900">
-                          (요청 {formatQuantity(l.quantity)} 중 {formatQuantity(Math.min(l.quantity, l.issued))} 나감 · {formatQuantity(Math.max(0, l.quantity - l.issued))} 남음)
-                        </span>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
-                {/* 🔴 단추는 **집을 수 있는 상태**(PENDING·PARTIAL)에 그린다 — 「대기로 세는 상태」와 다른 묶음이다(codes.ts).
-                    처리 중(CONFIRMING)에 그리면 눌러도 집기에서 거절당한다.
-                    🔴 [신청 취소]는 아직 아무것도 안 나간 신청뿐이다 — 부품이 나간 뒤에는 신청자가 거둘 수 없다. */}
-                {isClaimableRequest(r.status) ? (
-                  <RequestActions requestId={r.id} status={r.status} lines={r.lines} canDecide={isAdmin} canCancel={r.status === "PENDING" && r.requestedBy === session.user.id} />
-                ) : null}
-              </li>
-            ))}
-          </ul>
-          {myRecent.length > 0 ? (
-            <div className="border-t border-zinc-200 px-4 py-3">
-              <h3 className="text-xs font-semibold text-zinc-700">내 신청 중 최근 반려·취소·마감</h3>
-              <ul className="mt-1 flex flex-col gap-1 text-xs text-zinc-600">
-                {myRecent.map((r) => (
-                  <li key={r.id}>
-                    {r.closed ? (
-                      // 🔴 「마감」은 반려가 아니다 — 받은 것은 그대로이고 남은 것만 안 온다 (2026-10-14, 조각 4d).
-                      <span className={`${BADGE} bg-amber-100 text-amber-900`}>마감</span>
-                    ) : r.status === "REJECTED" ? (
-                      <span className={`${BADGE} bg-red-50 text-red-800`}>반려</span>
-                    ) : (
-                      <span className={`${BADGE} bg-zinc-100 text-zinc-700`}>취소</span>
-                    )}{" "}
-                    {r.summary}
-                    {r.closed ? ` — 요청 ${requestedTotal(r.lines)} 중 ${issuedTotal(r.lines)} 받음, 나머지는 받지 않음` : ""}
-                    {r.decisionNote ? ` — ${r.decisionNote}` : ""}
-                    {r.decidedByName ? ` (${r.decidedByName})` : ""}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-        </section>
-      ) : null}
-
-      {saved ? (
-        <p className={`rounded-md border px-3 py-2 text-sm ${savedUnverified || savedRemaining > 0 ? "border-amber-300 bg-amber-50 text-amber-900" : "border-zinc-200 bg-zinc-50 text-zinc-700"}`}>
-          {ENTRY_TYPE_LABEL[(typeof sp.type === "string" && (ENTRY_TYPES as readonly string[]).includes(sp.type) ? sp.type : "USE") as EntryRow["type"]]} 기록 {saved} 이(가) 저장되었습니다.
-          {/* 🔵 일부만 내준 회차 — 신청이 아직 열려 있다는 것을 말해 준다 (2026-10-14, 조각 4d). */}
-          {savedRemaining > 0 ? ` 아직 ${savedRemaining}개가 남았습니다. 이 신청은 위의 확인 대기에 그대로 있습니다.` : ""}
-          {savedUnverified ? " A/S 가 응답하지 않아 「인수번호 확인 안 됨」으로 남았습니다. 나중에 아래 [확인]을 누르십시오." : ""}
-        </p>
-      ) : null}
+      {/* 저장 결과 — 기록 번호와 「인수번호 확인 안 됨」. 🔵 글자는 부품 요청 관리와 같은 한 벌에서 온다(위 savedNotice 주석). */}
+      {savedNotice ? <p className={NOTICE[savedNotice.tone]}>{savedNotice.text}</p> : null}
 
       <form method="get" action="/entries" className="flex flex-col gap-4 rounded-lg border border-zinc-200 bg-white p-4 no-print">
         <h2 className="text-base font-semibold text-zinc-900">필터</h2>

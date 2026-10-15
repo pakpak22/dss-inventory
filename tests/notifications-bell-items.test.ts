@@ -67,6 +67,47 @@ describe("누가 무엇을 받는가", () => {
       assert.equal(feed.count, 0, role);
     }
   });
+
+  /**
+   * 🔴 2026-10-15. 반려 줄도 역할 관문을 지난다.
+   *
+   * 신청을 낸 **뒤에** 보기(VIEWER)로 내려간 사람은 7일 안에 반려된 자기 신청이 남아 있다 —
+   * 질의는 `requested_by` 로만 걸러 그 줄을 그대로 가져온다. 그런데 그 줄이 가리키는
+   * `/requests` 는 `requireRole("STAFF")` 라 눌러도 `/forbidden` 으로 튕긴다. 같은 줄이
+   * 포털을 거쳐 **남의 종에도** 실리므로 막다른 길이 우리 화면 밖에서도 그려진다.
+   * 고친 방향은 **권한을 넓히는 쪽이 아니라** 못 여는 사람에게 줄을 안 만드는 쪽이다.
+   */
+  it("🔴 보기(VIEWER)에게는 반려된 자기 신청이 있어도 줄이 없다 — 눌러도 못 여는 화면이다", () => {
+    const feed = build({ role: "VIEWER", rejected: [rejected({ id: "a" }), rejected({ id: "b" })] });
+    assert.deepEqual(feed.items, []);
+    assert.equal(feed.count, 0);
+  });
+
+  it("🔴 보기(VIEWER)는 배지 숫자도 0 이다 — 줄 없이 숫자만 남으면 빈 종이 된다", () => {
+    const feed = build({ role: "VIEWER", rejected: [rejected()], rejectedTotal: 412 });
+    assert.deepEqual(feed.items, []);
+    assert.equal(feed.count, 0);
+  });
+
+  it("기록(STAFF)·관리자(ADMIN)에게는 반려 줄이 그대로 나온다", () => {
+    for (const role of ["STAFF", "ADMIN"] as const) {
+      const feed = build({ role, rejected: [rejected({ id: "a" }), rejected({ id: "b" })] });
+      assert.deepEqual(
+        feed.items.map((i) => i.id),
+        [rejectedNotificationId("a"), rejectedNotificationId("b")],
+        role,
+      );
+      assert.equal(feed.count, 2, role);
+    }
+  });
+
+  it("🔴 역할 관문의 판정은 receivesRejectedNotification 하나에서 온다", () => {
+    // 조건을 조립 쪽에 한 벌 더 적으면 언젠가 갈린다 — 그 함수가 참인 역할에서만 줄이 선다.
+    for (const role of ["VIEWER", "STAFF", "ADMIN"] as const) {
+      const feed = build({ role, rejected: [rejected()] });
+      assert.equal(feed.items.length > 0, receivesRejectedNotification(role), role);
+    }
+  });
 });
 
 describe("확인 대기 — 여러 건을 한 줄로 묶는다", () => {
@@ -209,14 +250,17 @@ describe("둘이 함께 뜰 때", () => {
 });
 
 describe("링크는 절대 주소다 — 남의 종에 실리는 줄이다", () => {
-  it("두 종류 모두 기록 내역 화면으로 간다", () => {
+  // 🔴 2026-10-15 에 `/entries` → `/requests` 로 옮겼다 — 확인 대기도 내 신청 결과도
+  //    기록 내역에서 걷어내 부품 요청 관리 한자리로 모았기 때문이다(bell-items.ts 의 REQUESTS_PATH).
+  it("두 종류 모두 부품 요청 관리 화면(/requests)으로 간다", () => {
     const feed = build({ pending: { count: 1, oldestAt: NOW }, rejected: [rejected()] });
-    for (const item of feed.items) assert.equal(item.href, `${BASE}/entries`);
+    assert.equal(feed.items.length, 2);
+    for (const item of feed.items) assert.equal(item.href, `${BASE}/requests`);
   });
 
   it("끝 슬래시는 떼어 낸다", () => {
     const feed = build({ pending: { count: 1, oldestAt: NOW }, baseUrl: `${BASE}/` });
-    assert.equal(feed.items[0].href, `${BASE}/entries`);
+    assert.equal(feed.items[0].href, `${BASE}/requests`);
   });
 
   it("🔴 상대경로를 받으면 던진다 — 포털이 상대경로 줄을 버린다", () => {

@@ -19,15 +19,19 @@ export interface AppHeaderProps {
   portalUrl: string;
   services: DssService[];
   currentServiceId: string;
-  /** 관리자 메뉴(변경 이력·설정)를 보일지. 숨기는 것은 편의일 뿐이고 실제 차단은 각 화면의 requireRole 이 한다. */
+  /**
+   * 관리자 메뉴(설정)를 보일지.
+   * 숨기는 것은 편의일 뿐이고 실제 차단은 각 화면의 requireRole 이 한다.
+   * 🔵 「대기 N」 배지는 이제 이 값을 보지 않는다 — 역할과 무관하게 「부품 요청」 옆에 선다(아래 `PendingBadge`).
+   */
   isAdmin: boolean;
-  /** 기록·관리자 메뉴(수량 변경 기록)를 보일지 */
+  /** 기록·관리자 메뉴(수량 변경 기록·부품 요청)를 보일지. 🔵 「부품 요청」은 2026-10-15 부터 신청자도 **보기만** 한다. */
   canRecord: boolean;
   /** 확인 대기 중인 반출 신청 수. 0 이면 표시 없음 */
   pendingRequests: number;
   /**
    * 통합 알림 종(@dss/ui). **다 그려진 노드**를 받는다 — 여기서 자료를 가져오지 않는다.
-   * 🔴 위 `pendingRequests` 배지와 **역할이 다르다**: 배지는 「기록 내역 화면에 할 일이
+   * 🔴 위 `pendingRequests` 배지와 **역할이 다르다**: 배지는 「부품 요청 화면에 할 일이
    * 있다」는 표시이고, 종은 여러 사내 시스템의 알림을 모으는 자리다. 둘 다 남는다.
    * 🔵 알림이 0건이면 조각이 스스로 null 이 되고, 래퍼로 감싸지 않으므로 **머리말이
    * 예전과 글자 하나 다르지 않다**(빈 칸도 여백도 생기지 않는다).
@@ -38,6 +42,25 @@ export interface AppHeaderProps {
 }
 
 const NAV_LINK = "rounded-md px-2 py-1 text-sm text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900";
+
+/**
+ * 「대기 N」 — 확인 대기 중인 반출 신청 수 (0 이면 아무것도 그리지 않는다).
+ *
+ * 🔴 **자리는 「부품 요청」 하나다 — 역할로 가르지 않는다** (2026-10-15 사용자 결정). 그 전에는 관리자만
+ *    「부품 요청」에 달고 그 밖의 사람은 「기록 내역」에 달았는데, 같은 날 기록 내역의 「확인 대기」 구역을
+ *    걷어내 **신청이 보이는 자리가 `/requests` 하나**가 됐다. 배지를 기록 내역에 두면 눌러도 신청이 없다.
+ * 🔵 숫자와 `title` 은 누구에게나 같은 것이다(`countPendingRequests` — 보류한 신청은 이 숫자에서 빠진다.
+ *    stock/codes.ts 의 `ACTIONABLE_REQUEST_STATUSES`). 관리자에게는 「처리할 것」, 신청자에게는
+ *    「담당자가 아직 보고 있는 것」으로 읽히지만 **세는 묶음이 같아** 두 벌로 세지 않는다.
+ */
+function PendingBadge({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return (
+    <span className="ml-1 inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-900" title="확인 대기 중인 반출 신청">
+      대기 {count}
+    </span>
+  );
+}
 
 export function AppHeader({ user, portalUrl, services, currentServiceId, isAdmin, canRecord, pendingRequests, notificationBell, devRoleSwitch }: AppHeaderProps) {
   return (
@@ -65,21 +88,23 @@ export function AppHeader({ user, portalUrl, services, currentServiceId, isAdmin
             )}
             <Link href="/entries" className={NAV_LINK}>
               기록 내역
-              {pendingRequests > 0 ? (
-                <span className="ml-1 inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-900" title="확인 대기 중인 반출 신청">
-                  대기 {pendingRequests}
-                </span>
-              ) : null}
             </Link>
+            {/* 🔴 「부품 요청」은 **기록 권한 이상 모두**에게 보인다 (2026-10-15 사용자 결정: 신청자도 보기만 한다).
+                관리자는 거기서 처리하고, 신청자는 자기 요청이 어디까지 갔는지 본다. 막는 자리는 그 화면의 requireRole. */}
+            {canRecord && (
+              <Link href="/requests" className={NAV_LINK}>
+                부품 요청
+                {/* 🔴 배지는 **역할과 무관하게** 여기 선다 (2026-10-15) — 신청이 보이는 자리가 이 화면 하나다.
+                    기록 내역에 달던 것은 거기 「확인 대기」 구역이 있던 때의 이야기이고, 그 구역은 걷어냈다. */}
+                <PendingBadge count={pendingRequests} />
+              </Link>
+            )}
             {isAdmin && (
-              <>
-                <Link href="/audit" className={NAV_LINK}>
-                  변경 이력
-                </Link>
-                <Link href="/settings/items" className={NAV_LINK}>
-                  설정
-                </Link>
-              </>
+              /* 🔵 「변경 이력」(/audit)은 설정의 탭으로 옮겼다 (2026-10-15 사용자 요청). 주소는 그대로다 —
+                 옮기면 열려 있는 탭·즐겨찾기가 깨지고 얻는 것이 없다. */
+              <Link href="/settings/items" className={NAV_LINK}>
+                설정
+              </Link>
             )}
           </nav>
         </div>

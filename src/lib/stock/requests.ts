@@ -1,12 +1,14 @@
 import "server-only";
-import { and, asc, count, desc, eq, gte, inArray, min, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, min, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { auditLogs } from "@/db/schema/audit-logs";
 import { parts } from "@/db/schema/parts";
+import { stockBalances } from "@/db/schema/stock-balances";
 import { stockTransactions } from "@/db/schema/stock";
 import { stockRequestIssues, stockRequests, type RequestStatus } from "@/db/schema/stock-requests";
 import { auditValues } from "@/lib/audit";
-import { ACTIONABLE_REQUEST_STATUSES, CLAIMABLE_REQUEST_STATUSES, DECIDED_REQUEST_STATUSES, ENTRY_TYPE_LABEL, PENDING_REQUEST_STATUSES, isClosedRequest, type EntryType } from "./codes";
+import type { Owner } from "@/lib/parts/codes";
+import { ACTIONABLE_REQUEST_STATUSES, CLAIMABLE_REQUEST_STATUSES, ENTRY_TYPE_LABEL, isClosedRequest, type EntryType } from "./codes";
 import type { EntryInput } from "./form";
 import { buildIssueInput, type IssueQuantity } from "./issue";
 import { LedgerAbort, ledgerErrorMessage, recordEntryIn, type Actor, type RecordResult } from "./ledger";
@@ -49,6 +51,23 @@ export interface RequestLineView {
    * 🔵 화면이 「요청 8 중 5 나감 · 3 남음」을 그리고, [확인] 상자의 「이번에 줄 수량」 기본값(= 남은 수량)이 여기서 나온다.
    */
   issued: number;
+  /**
+   * 그 부품의 **지금 재고**(`stock_balances.quantity`) (2026-10-15, 조각 10b).
+   *
+   * 🔵 담당자가 「지금 다 내줄 수 있나」를 보는 근거다 — 가용이 남은 수량보다 적으면 화면이 빨갛게 적어,
+   *    [확인] 상자를 열거나 상자를 뜯으러 가기 **전에** 헛걸음을 막는다.
+   * 🔴 **신청 당시 값이 아니라 지금 값**이다. 신청은 수량을 잡아 두지 않으므로(requests.ts 머리말) 화면을 그리는
+   *    순간의 재고가 맞는 말이고, 모자라면 확인 순간 원장이 다시 거절한다.
+   * 🔵 수량 줄이 아직 없는 부품은 0 으로 본다(`leftJoin`).
+   */
+  available: number;
+  /**
+   * 부품의 소유. 글자는 화면이 `src/lib/parts/codes.ts` 의 `OWNER_LABEL` 로 푼다 (저장은 영문 코드).
+   *
+   * 🔴 부품을 못 찾으면 `null` 이다 — 「DSS」 같은 기본값을 넣으면 화면이 **거짓말**을 한다. 그 줄은 품명도
+   *    「(지워진 부품)」으로 나간다.
+   */
+  owner: Owner | null;
 }
 
 export interface PendingRequestRow {
@@ -115,6 +134,28 @@ async function partNamesOf(partIds: readonly string[]): Promise<Map<string, { no
   if (ids.length === 0) return new Map();
   const rows = await db().select({ id: parts.id, no: parts.no, name: parts.name }).from(parts).where(inArray(parts.id, ids));
   return new Map(rows.map((r) => [r.id, { no: r.no, name: r.name }]));
+}
+
+/** 화면에 보일 부품 한 줄 — No.·품명에 **소유와 지금 재고**까지 (2026-10-15, 조각 10b). */
+export type PartLineView = { no: number; name: string; owner: Owner; available: number };
+
+/**
+ * 목록이 그릴 부품 정보를 **부품 묶음으로 한 번에** (2026-10-15, 조각 10b).
+ *
+ * 🔴 신청마다 묻지 않는다 — 대기 30건이면 질의가 30번이 된다. 위 `issuedQuantitiesOf` 와 **같은 까닭·같은 방식**이다.
+ * 🔵 **위 `partNamesOf` 와 일부러 갈라 두었다.** 저쪽은 원장을 쓰는 길(신청 만들기·확인)에서 **오류 문구**에만 쓰여
+ *    수량도 소유도 필요 없다. 이 `leftJoin` 을 거기 얹으면 부품이 나갈 때마다 쓸데없이 한 표를 더 읽는다.
+ * 🔵 `leftJoin` 인 까닭: 수량 줄(`stock_balances`)이 아직 없는 부품이 있을 수 있다 — 그때는 0 이 맞는 말이다.
+ */
+async function partViewsOf(partIds: readonly string[]): Promise<Map<string, PartLineView>> {
+  const ids = [...new Set(partIds)];
+  if (ids.length === 0) return new Map();
+  const rows = await db()
+    .select({ id: parts.id, no: parts.no, name: parts.name, owner: parts.owner, available: stockBalances.quantity })
+    .from(parts)
+    .leftJoin(stockBalances, eq(stockBalances.partId, parts.id))
+    .where(inArray(parts.id, ids));
+  return new Map(rows.map((r) => [r.id, { no: r.no, name: r.name, owner: r.owner, available: r.available ?? 0 }]));
 }
 
 export async function createRequest(input: EntryInput, actor: Actor): Promise<{ id: string }> {
@@ -461,11 +502,20 @@ export async function cancelRequest(id: string, actor: Actor): Promise<{ ok: boo
   return { ok: true };
 }
 
-function toRow(r: typeof stockRequests.$inferSelect, names: ReadonlyMap<string, { no: number; name: string }>, issued: ReadonlyMap<string, number>): PendingRequestRow {
+function toRow(r: typeof stockRequests.$inferSelect, names: ReadonlyMap<string, PartLineView>, issued: ReadonlyMap<string, number>): PendingRequestRow {
   const input = r.payload as unknown as EntryInput;
   const lines = linesOf(input).map((l) => {
     const p = names.get(l.partId);
-    return { partId: l.partId, partNo: p?.no ?? null, partName: p?.name ?? "(지워진 부품)", quantity: l.quantity, issued: issued.get(l.partId) ?? 0 };
+    return {
+      partId: l.partId,
+      partNo: p?.no ?? null,
+      partName: p?.name ?? "(지워진 부품)",
+      quantity: l.quantity,
+      issued: issued.get(l.partId) ?? 0,
+      // 🔴 부품을 못 찾으면 가용 0 · 소유 null 이다 — 지어내지 않는다(`RequestLineView` 의 두 주석).
+      available: p?.available ?? 0,
+      owner: p?.owner ?? null,
+    };
   });
   return {
     id: r.id,
@@ -492,43 +542,33 @@ function toRow(r: typeof stockRequests.$inferSelect, names: ReadonlyMap<string, 
 }
 
 /**
- * 확인 대기 목록(오래된 것이 위 — 먼저 올라온 것부터 처리). CONFIRMING 도 대기로 보인다(처리 중).
+ * **전부** — 상태를 가리지 않고, 최신 신청이 위 (2026-10-15, 조각 10b. 「부품 요청 관리」 화면).
  *
- * 🔵 **일부만 나간 것(PARTIAL)도 여기 남는다** (2026-10-14, 조각 4c) — 아직 줄 것이 남았으니 담당자가 계속 봐야 한다.
- *    차례는 **처음 신청한 시각**이라 회차를 거듭해도 자리가 바뀌지 않는다(오래 기다린 것이 계속 위).
- * 🔵 **멈춰 둔 것(ON_HOLD)도 여기 남는다** (2026-10-15, 조각 10a) — 안 보이면 잊히기 때문이다. 🔴 다만 머리말
- *    배지·알림 종의 **숫자에서는 빠진다**(`countPendingRequests`) — 그래서 「목록 줄 수 > 배지 숫자」가 될 수 있다.
- *    버그가 아니라 정한 것이다.
+ * 🔴 **신청을 읽어 오는 목록은 이제 이 함수 하나다** (2026-10-15, 조각 10d). 그 전에는 둘이 더 있었다 —
+ *    「확인 대기만」(`listPendingRequests`, 오래된 것이 위)과 「최근 처리된 것만」(`listRecentDecidedRequests`).
+ *    기록 내역 맨 위의 「확인 대기」 구역이 쓰던 함수들인데 그 구역을 걷어내(사용자 결정) **부르는 곳이 하나도
+ *    없어졌고**, 쓰는 곳 없는 채로 한 조각이 더 지나가 지웠다. 🔵 가르는 글자(`./codes` 의
+ *    `PENDING_REQUEST_STATUSES`·`DECIDED_REQUEST_STATUSES`)는 **그대로 둔다** — 상태를 더했을 때 어느 쪽에도
+ *    안 들어간 신청이 조용히 사라지는 것을 막는 자리다(그 파일의 「빠짐없이 덮는다」 시험).
+ * 🔵 차례는 「방금 무슨 일이 있었나」를 훑는 자리라 **최신이 위**다(걷어낸 대기 목록은 「먼저 올라온 것부터
+ *    처리하는 일감 줄」이라 반대였다 — 일감 줄이 다시 필요해지면 그때 차례를 뒤집어 되살린다).
+ * 🔴 **건수 제한을 두지 않는다**(A/S 쪽 원본과 같다). 담당자가 「지난달 그 신청」을 찾는 자리이기도 해서, 잘라 내면
+ *    못 찾는다. 상태로 거르는 것은 **화면에서** 한다(목록이 한 번에 다 와 있어야 거르기가 서버 왕복 없이 끝난다).
+ * 🔵 **건수가 늘면 서버에서 쪽을 나눈다.** 그때 고칠 곳은 이 함수와 부르는 화면 둘뿐이다 — 지금은 신청이 몇십 건이라
+ *    한 번에 보내는 편이 빠르고, 거르개가 바뀔 때마다 서버를 부르지 않아도 된다.
  */
-export async function listPendingRequests(): Promise<PendingRequestRow[]> {
-  const rows = await db()
-    .select()
-    .from(stockRequests)
-    .where(inArray(stockRequests.status, [...PENDING_REQUEST_STATUSES]))
-    .orderBy(asc(stockRequests.requestedAt));
+export async function listAllRequests(): Promise<PendingRequestRow[]> {
+  const rows = await db().select().from(stockRequests).orderBy(desc(stockRequests.requestedAt));
   return attachNames(rows);
 }
 
 /**
- * 최근 처리된 것(반려·취소·확인) — 신청한 사람이 결과를 볼 수 있게.
- *
- * 🔵 **마감된 신청도 여기 온다** — 상태가 `CONFIRMED` 라서다(조각 4d). 화면은 `closed` 칸으로 「마감」이라 적는다.
- * 🔴 `PARTIAL` 은 여기 **없다.** 아직 끝나지 않아 위의 대기 목록에 있다 — 양쪽에 넣으면 같은 신청이 두 번 보인다.
- *    `decidedAt` 역순으로 세우는데 PARTIAL 은 그 칸이 비어 있기도 하다(confirmRequest: decided* 는 끝났을 때만 적는다).
+ * 🔵 부품 정보와 「이미 나간 수량」을 각각 **한 번씩**만 묻는다(신청 수와 무관하게 질의 둘).
+ * 🔴 목록을 만드는 길은 여기 하나뿐이다 — 신청 줄을 읽는 자리가 늘어도 **같은 줄 모양**을 받는다.
+ *    화면마다 따로 채우면 언젠가 한쪽에만 칸이 생겨 갈린다.
  */
-export async function listRecentDecidedRequests(limit = 10): Promise<PendingRequestRow[]> {
-  const rows = await db()
-    .select()
-    .from(stockRequests)
-    .where(inArray(stockRequests.status, [...DECIDED_REQUEST_STATUSES]))
-    .orderBy(desc(stockRequests.decidedAt))
-    .limit(limit);
-  return attachNames(rows);
-}
-
 async function attachNames(rows: Array<typeof stockRequests.$inferSelect>): Promise<PendingRequestRow[]> {
-  // 🔵 이름과 「이미 나간 수량」을 각각 **한 번씩**만 묻는다(신청 수와 무관하게 질의 둘).
-  const [names, issued] = await Promise.all([partNamesOf(rows.flatMap((r) => linesOf(r.payload as unknown as EntryInput).map((l) => l.partId))), issuedQuantitiesOf(rows.map((r) => r.id))]);
+  const [names, issued] = await Promise.all([partViewsOf(rows.flatMap((r) => linesOf(r.payload as unknown as EntryInput).map((l) => l.partId))), issuedQuantitiesOf(rows.map((r) => r.id))]);
   return rows.map((r) => toRow(r, names, issued.get(r.id) ?? new Map()));
 }
 
@@ -536,8 +576,9 @@ async function attachNames(rows: Array<typeof stockRequests.$inferSelect>): Prom
  * 머리말의 「대기 N」 배지.
  *
  * 🔴 아래 `summarizePendingRequests()`(알림 종)와 **같은 묶음**을 본다 — 둘이 갈리면 「배지에는 있는데 종에는 없는」 신청이 생긴다.
- * 🔴 그 묶음은 `ACTIONABLE_REQUEST_STATUSES` 다 — **대기 목록(`listPendingRequests`)보다 좁다.** 보류(`ON_HOLD`)는
- *    목록에는 보이지만 이 숫자에서는 빠진다(2026-10-15, 조각 10a): 담당자가 일부러 멈춰 둔 것을 재촉하지 않으려는 것이다.
+ * 🔴 그 묶음은 `ACTIONABLE_REQUEST_STATUSES` 다 — **세는 묶음(`./codes` 의 `PENDING_REQUEST_STATUSES`)보다 좁다.**
+ *    보류(`ON_HOLD`)는 부품 요청 관리 목록에는 보이지만 이 숫자에서는 빠진다(2026-10-15, 조각 10a): 담당자가 일부러
+ *    멈춰 둔 것을 재촉하지 않으려는 것이다.
  */
 export async function countPendingRequests(): Promise<number> {
   const [r] = await db().select({ n: count() }).from(stockRequests).where(inArray(stockRequests.status, [...ACTIONABLE_REQUEST_STATUSES]));

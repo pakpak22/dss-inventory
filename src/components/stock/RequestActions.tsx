@@ -1,11 +1,15 @@
 "use client";
 
+import { usePathname } from "next/navigation";
 import { startTransition, useActionState, useEffect, useRef, useState, type ReactNode } from "react";
-import { cancelRequestAction, closeRequestAction, confirmRequestAction, rejectRequestAction, type RequestActionState } from "@/app/actions/stock";
+import { cancelRequestAction, closeRequestAction, confirmRequestAction, holdRequestAction, rejectRequestAction, releaseHoldAction, type RequestActionState } from "@/app/actions/stock";
 import type { ClaimableRequestStatus } from "@/lib/stock/codes";
+import { RETURN_TO_FIELD } from "@/lib/stock/return-to";
 
 const BTN = "rounded-md border border-zinc-300 px-2.5 py-1 text-xs text-zinc-700 hover:bg-zinc-100 disabled:opacity-50";
 const BTN_P = "rounded-md bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-zinc-800 disabled:opacity-50";
+/** 보류 단추는 보라색 — 상태 배지와 같은 색이라 「이 단추가 그 상태를 만든다」가 눈으로 이어진다 (codes.ts 의 `REQUEST_STATUS_BADGE`). */
+const BTN_V = "rounded-md border border-violet-300 px-2.5 py-1 text-xs font-medium text-violet-700 hover:bg-violet-50 disabled:opacity-50";
 const DIALOG = "w-full max-w-lg rounded-lg border border-zinc-200 bg-white p-4 text-zinc-900 backdrop:bg-black/40";
 const FIELD = "rounded-md border border-zinc-200 bg-white px-2 py-1 text-sm text-zinc-900";
 const EMPTY: RequestActionState = { error: null };
@@ -60,12 +64,25 @@ function Modal({ open, onClose, children }: { open: boolean; onClose: () => void
 }
 
 /**
- * 담당자: [확인] 은 **줄별로 이번에 줄 수량**을 받고(조각 4d), [반려] 는 사유를, [마감] 은 남은 것을 접는 사유를 받는다.
+ * 이 단추 묶음을 그릴 수 있는 상태 (2026-10-15, 조각 10b).
+ *
+ * 🔴 집을 수 있는 둘(PENDING·PARTIAL)에 **보류(ON_HOLD)** 가 더해진 것이다. 보류 중에 그릴 단추는
+ *    [보류 해제] **하나뿐**이고, 나머지 셋은 서버가 어차피 막는다(requests.ts: 셋 다 상태를 WHERE 에 걸어
+ *    `ON_HOLD` 를 받지 않는다). 눌러도 거절당하는 단추를 사람에게 내밀지 않는다.
+ */
+export type RequestActionStatus = ClaimableRequestStatus | "ON_HOLD";
+
+/**
+ * 담당자: [확인] 은 **줄별로 이번에 줄 수량**을 받고(조각 4d), [반려] 는 사유를, [마감] 은 남은 것을 접는 사유를,
+ * [보류] 는 멈추는 사유를 받는다(조각 10b). [보류 해제] 만 사유를 받지 않는다.
  * 신청자: [신청 취소]. 제출은 직접 다룬다(폼 자동 초기화 방지).
  *
  * 🔴 **[반려]와 [마감]이 갈린다.** 반려는 아직 아무것도 안 나간 신청(PENDING)만 받고(`rejectRequest` 의 WHERE),
  *    마감은 일부 나간 신청(PARTIAL)만 받는다(`closeRequest`). 둘 다 그리면 눌러도 거절당하는 단추가 생긴다.
  * 🔴 **[신청 취소]도 PENDING 뿐이다** — 부품이 이미 나간 신청은 신청자가 거둘 수 없다(부르는 쪽이 `canCancel` 로 가린다).
+ * 🔵 **쓰는 화면은 부품 요청 관리(`/requests`) 하나다** (2026-10-15 사용자 결정으로 기록 내역의 「확인 대기」 구역을
+ *    걷어내면서 그렇게 됐다). 그래도 단추를 그 화면 파일에 녹여 넣지 않는다 — 상태별로 무엇을 그릴지 가르는 규칙이
+ *    여기 모여 있고(`canReject`·`canClose`·`canHold`…), 화면에 풀어 놓으면 서버가 받는 조건과 어긋나는 날이 온다.
  */
 export function RequestActions({
   requestId,
@@ -75,8 +92,8 @@ export function RequestActions({
   canCancel,
 }: {
   requestId: string;
-  /** 지금 상태 — 🔵 **집을 수 있는 둘(PENDING·PARTIAL) 중 하나임이 타입으로 보증된다**(`isClaimableRequest` 가 좁혀 준다). */
-  status: ClaimableRequestStatus;
+  /** 지금 상태 — 🔵 **셋 중 하나임이 타입으로 보증된다**(`isClaimableRequest` 가 좁혀 주고, 보류는 부르는 쪽이 따로 가린다). */
+  status: RequestActionStatus;
   lines: readonly RequestActionLine[];
   canDecide: boolean;
   canCancel: boolean;
@@ -85,22 +102,45 @@ export function RequestActions({
   const [rejectState, rejectAction, rejecting] = useActionState<RequestActionState, FormData>(rejectRequestAction, EMPTY);
   const [cancelState, cancelAction, cancelling] = useActionState<RequestActionState, FormData>(cancelRequestAction, EMPTY);
   const [closeState, closeAction, closing] = useActionState<RequestActionState, FormData>(closeRequestAction, EMPTY);
-  const [open, setOpen] = useState<null | "issue" | "reject" | "close">(null);
+  const [holdState, holdAction, holding] = useActionState<RequestActionState, FormData>(holdRequestAction, EMPTY);
+  const [releaseState, releaseAction, releasing] = useActionState<RequestActionState, FormData>(releaseHoldAction, EMPTY);
+  const [open, setOpen] = useState<null | "issue" | "reject" | "close" | "hold">(null);
   /** 보내기 전에 화면에서 거른 것(서버도 같은 것을 다시 본다 — `buildIssueInput`). */
   const [issueError, setIssueError] = useState<string | null>(null);
 
-  const busy = confirming || rejecting || cancelling || closing;
+  const busy = confirming || rejecting || cancelling || closing || holding || releasing;
+  /** 🔴 멈춰 둔 신청에는 확인·반려·마감을 **그리지 않는다** — 서버가 받지 않는다(requests.ts 의 `holdRequest` 주석). */
+  const held = status === "ON_HOLD";
   const canClose = canDecide && status === "PARTIAL";
   const canReject = canDecide && status === "PENDING";
+  // 보류를 걸 수 있는 묶음은 집을 수 있는 묶음과 같다(PENDING·PARTIAL) — 우연이 아니라 같은 뜻이다(codes.ts 의 `CLAIMABLE_REQUEST_STATUSES`).
+  const canHold = canDecide && !held;
+  const canRelease = canDecide && held;
   const issuedTotal = lines.reduce((a, l) => a + Math.min(l.quantity, l.issued), 0);
   const remainingTotal = lines.reduce((a, l) => a + remainingOf(l), 0);
-  const error = confirmState.error ?? rejectState.error ?? cancelState.error ?? closeState.error;
+  const error = confirmState.error ?? rejectState.error ?? cancelState.error ?? closeState.error ?? holdState.error ?? releaseState.error;
+
+  /**
+   * 🔴 **지금 있는 자리를 함께 싣는다** (2026-10-15, 조각 10c). 액션은 끝나고 이 값이 가리키는 자리로 돌려보낸다 —
+   *    없으면 서버가 기본값(`/entries`)으로 떨어뜨려, `/requests` 에서 누른 사람이 기록 내역으로 튕기며 보던 목록과
+   *    걸러 둔 상태를 잃는다. 🔵 지금 단추가 붙은 화면은 `/requests` 하나지만 **값은 계속 실어 보낸다**: 자리를 적는
+   *    쪽은 화면, 받아도 되는지 가리는 쪽은 서버로 갈라 두어야 화면이 늘 때 한 곳만 고치면 된다.
+   *    🔵 **서버는 이 값을 그대로 믿지 않는다**(`safeReturnTo`, 허용 목록에 든 글자만).
+   */
+  const returnTo = usePathname();
 
   const fd = () => {
     const f = new FormData();
     f.set("requestId", requestId);
+    f.set(RETURN_TO_FIELD, returnTo);
     return f;
   };
+
+  /**
+   * 폼으로 보내는 셋(반려·마감·보류)은 **숨은 칸**으로 싣는다 — 그 셋은 `new FormData(폼)` 으로 보내기 때문이다.
+   * 단추만 있는 둘(보류 해제·신청 취소)과 [확인]은 위 `fd()` 가 **같은 값**을 넣는다. 값은 한 곳(`returnTo`)에서 온다.
+   */
+  const returnToField = <input type="hidden" name={RETURN_TO_FIELD} value={returnTo} />;
 
   /**
    * 「이번에 줄 수량」 보내기.
@@ -138,7 +178,7 @@ export function RequestActions({
 
   return (
     <div className="flex flex-wrap items-center gap-1.5 no-print">
-      {canDecide ? (
+      {canDecide && !held ? (
         <button
           type="button"
           className={BTN_P}
@@ -160,6 +200,17 @@ export function RequestActions({
       {canClose ? (
         <button type="button" className={BTN} disabled={busy} onClick={() => setOpen("close")}>
           마감(남은 것 그만 주기)
+        </button>
+      ) : null}
+      {canHold ? (
+        <button type="button" className={BTN_V} disabled={busy} onClick={() => setOpen("hold")}>
+          보류
+        </button>
+      ) : null}
+      {/* 🔵 [보류 해제]는 상자를 열지 않는다 — 푸는 것은 「다시 진행한다」는 뜻뿐이라 적을 것이 없다(`releaseRequestHold` 주석). */}
+      {canRelease ? (
+        <button type="button" className={BTN_V} disabled={busy} onClick={() => startTransition(() => releaseAction(fd()))}>
+          {releasing ? "푸는 중" : "보류 해제"}
         </button>
       ) : null}
       {canCancel ? (
@@ -231,6 +282,7 @@ export function RequestActions({
           }}
           className="flex flex-col gap-3"
         >
+          {returnToField}
           <h3 className="text-base font-semibold">이 신청을 반려하겠습니까?</h3>
           <p className="text-xs text-zinc-500">수량은 바뀌지 않습니다. 신청한 사람에게 사유가 보입니다.</p>
           <label className="flex flex-col gap-1 text-xs text-zinc-500">
@@ -260,6 +312,7 @@ export function RequestActions({
           }}
           className="flex flex-col gap-3"
         >
+          {returnToField}
           <h3 className="text-base font-semibold">남은 수량을 마감하겠습니까?</h3>
           <p className="text-sm text-zinc-700">
             이미 나간 <b className="tabular">{issuedTotal}</b>개는 그대로 두고, 아직 안 나간 <b className="tabular">{remainingTotal}</b>개는 <b>주지 않는 것으로</b> 닫습니다.
@@ -276,6 +329,40 @@ export function RequestActions({
             </button>
             <button type="submit" className="rounded-md bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-50" disabled={closing}>
               {closing ? "마감 중" : "마감"}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* ④ 보류 — 멈춰 둔다. 🔴 반려도 마감도 아니다: 풀면 멈추기 전 자리로 돌아간다 (2026-10-15, 조각 10b) */}
+      <Modal open={open === "hold"} onClose={() => setOpen(null)}>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            const f = new FormData(e.currentTarget);
+            f.set("requestId", requestId);
+            startTransition(() => holdAction(f));
+          }}
+          className="flex flex-col gap-3"
+        >
+          {returnToField}
+          <h3 className="text-base font-semibold">이 신청을 보류하겠습니까?</h3>
+          <p className="text-sm text-zinc-700">수량은 바뀌지 않습니다. 이미 나간 기록도 그대로입니다.</p>
+          <p className="text-xs text-zinc-500">
+            보류하는 동안에는 <b>확인·반려·마감이 되지 않습니다.</b> 신청은 확인 대기 목록에 그대로 남고, 머리말의 「대기」 숫자에서만 빠집니다. [보류 해제]를 누르면 멈추기 전 자리로 돌아갑니다.
+          </p>
+          <label className="flex flex-col gap-1 text-xs text-zinc-500">
+            {/* 🔴 사유를 꼭 받는다 — 왜 멈췄는지가 안 남으면 나중에 아무도 풀지 못한다. */}
+            사유 *
+            <input name="reason" required minLength={2} maxLength={500} className={FIELD} placeholder="예: 부품 입고 대기, 신청자 확인 필요" />
+          </label>
+          {holdState.error ? <p className="text-sm text-red-600">{holdState.error}</p> : null}
+          <div className="flex justify-end gap-2">
+            <button type="button" className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-100" onClick={() => setOpen(null)} disabled={holding}>
+              돌아가기
+            </button>
+            <button type="submit" className="rounded-md bg-violet-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50" disabled={holding}>
+              {holding ? "보류 중" : "보류"}
             </button>
           </div>
         </form>

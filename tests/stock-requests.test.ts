@@ -3,33 +3,55 @@ import { describe, it } from "node:test";
 import { REQUEST_STATUSES } from "../src/db/schema/stock-requests";
 import {
   ACTIONABLE_REQUEST_STATUSES,
+  ADMIN_ONLY_TYPES,
   CLAIMABLE_REQUEST_STATUSES,
+  CLOSED_REQUEST_LABEL,
   CONFIRMATION_TYPES,
   DECIDED_REQUEST_STATUSES,
   ENTRY_TYPES,
   PENDING_REQUEST_STATUSES,
+  REQUEST_STATUS_BADGE,
+  REQUEST_STATUS_LABEL,
+  REQUEST_STATUS_ORDER,
   isClaimableRequest,
   isClosedRequest,
   needsConfirmation,
+  requestStatusBadge,
+  requestStatusLabel,
 } from "../src/lib/stock/codes";
 
-describe("담당자 확인 단계 (2026-10-06)", () => {
+/**
+ * 담당자 확인 단계 (2026-10-06) — 🔴 **2026-10-15 에 규칙이 바뀌어 이 묶음을 다시 적었다.**
+ *
+ * 옛 규칙은 「기록 권한자가 적으면 대기, **관리자가 적으면 바로**」였고 그것을 못 박는 시험이 여기 있었다.
+ * 새 규칙은 「**누가 적든** 반출은 요청으로 올라간다」이다 — 관리자가 적은 반출이 신청으로 남지 않아
+ * 부품 요청 관리 화면에 안 뜬 것이 바꾼 까닭이다(`src/lib/stock/codes.ts` 의 `needsConfirmation` 주석).
+ * 🔵 단언을 **약하게 만든 것이 아니라** 바뀐 규칙을 그대로 다시 못 박은 것이다. 역할 매개변수는 사라졌으므로
+ *    「관리자면 false」는 이제 적을 수조차 없다 — tsc 가 먼저 잡는다.
+ */
+describe("담당자 확인 단계 (2026-10-06 → 2026-10-15 에 역할 조건을 없앴다)", () => {
   it("반출 계열(사용·대여·폐기)만 확인을 거친다", () => {
     assert.deepEqual([...CONFIRMATION_TYPES].sort(), ["DISPOSE", "LOAN", "USE"]);
   });
 
-  it("기록 권한자가 적으면 대기, 관리자가 적으면 바로", () => {
-    assert.equal(needsConfirmation("USE", false), true);
-    assert.equal(needsConfirmation("LOAN", false), true);
-    assert.equal(needsConfirmation("DISPOSE", false), true);
-    assert.equal(needsConfirmation("USE", true), false);
+  it("🔴 반출 셋은 역할과 무관하게 확인을 거친다 — 관리자가 적어도 요청으로 올라간다 (2026-10-15 사용자 결정)", () => {
+    for (const t of CONFIRMATION_TYPES) assert.equal(needsConfirmation(t), true, t);
+    assert.equal(needsConfirmation("USE"), true);
+    assert.equal(needsConfirmation("LOAN"), true);
+    assert.equal(needsConfirmation("DISPOSE"), true);
   });
 
-  it("입고·반환·조정·소유 옮김·처음 수량·기록 취소는 확인을 거치지 않는다", () => {
+  it("그 밖의 종류는 언제나 바로 기록된다 (입고·반환·조정·소유 옮김·처음 수량·기록 취소)", () => {
     for (const t of ENTRY_TYPES) {
       if (CONFIRMATION_TYPES.has(t)) continue;
-      assert.equal(needsConfirmation(t, false), false, t);
+      assert.equal(needsConfirmation(t), false, t);
     }
+  });
+
+  it("🔵 「누가 적을 수 있나」는 바뀌지 않았다 — ADMIN_ONLY_TYPES 는 그대로이고 확인을 거치지도 않는다", () => {
+    assert.deepEqual([...ADMIN_ONLY_TYPES].sort(), ["ADJUST", "CORRECTION", "OPENING", "TRANSFER"]);
+    for (const t of ADMIN_ONLY_TYPES) assert.equal(needsConfirmation(t), false, t);
+    for (const t of CONFIRMATION_TYPES) assert.ok(!ADMIN_ONLY_TYPES.has(t), t);
   });
 });
 
@@ -147,5 +169,62 @@ describe("마감된 신청 가리기 — isClosedRequest (2026-10-14, 조각 4d)
 
   it("줄이 없는 신청(조정·소유 옮김)은 마감일 수 없다", () => {
     assert.equal(isClosedRequest("CONFIRMED", []), false);
+  });
+});
+
+/**
+ * 상태 글자와 배지 색 — **두 화면이 같은 표를 본다** (2026-10-15, 조각 10b).
+ *
+ * 🔴 `Record<RequestStatus, …>` 라 상태를 더하면 tsc 가 빠진 칸을 잡는다. 이 시험은 그 위에 **글자가 비어 있지
+ *    않다**는 것까지 지킨다 — 빈 글자는 컴파일을 통과하고 화면에서만 사라진다.
+ */
+describe("신청 상태의 글자와 색 (2026-10-15, 조각 10b)", () => {
+  it("일곱 상태를 빠짐없이 덮고 글자가 비어 있지 않다", () => {
+    assert.deepEqual(Object.keys(REQUEST_STATUS_LABEL).sort(), [...REQUEST_STATUSES].sort());
+    for (const s of REQUEST_STATUSES) assert.ok(REQUEST_STATUS_LABEL[s].trim().length > 0, s);
+  });
+
+  it("거르개가 도는 차례도 일곱 상태를 빠짐없이 덮는다 (글자 표에서 뽑으므로 저절로 따라온다)", () => {
+    assert.deepEqual([...REQUEST_STATUS_ORDER].sort(), [...REQUEST_STATUSES].sort());
+    assert.equal(new Set(REQUEST_STATUS_ORDER).size, REQUEST_STATUS_ORDER.length);
+  });
+
+  it("배지 색표도 일곱 상태를 빠짐없이 덮는다", () => {
+    assert.deepEqual(Object.keys(REQUEST_STATUS_BADGE).sort(), [...REQUEST_STATUSES].sort());
+    for (const s of REQUEST_STATUSES) assert.ok(REQUEST_STATUS_BADGE[s].trim().length > 0, s);
+  });
+
+  it("🔵 기록 내역 화면이 쓰던 글자 그대로다 — 두 화면이 같은 신청을 다르게 부르지 않는다", () => {
+    assert.equal(REQUEST_STATUS_LABEL.CONFIRMING, "처리 중");
+    assert.equal(REQUEST_STATUS_LABEL.PARTIAL, "일부 나감");
+    assert.equal(REQUEST_STATUS_LABEL.REJECTED, "반려");
+    assert.equal(REQUEST_STATUS_LABEL.CANCELLED, "취소");
+  });
+
+  it("🔴 보류는 대기와 **다른 색**이다 — 「멈춰 있다」가 한눈에 보여야 한다", () => {
+    assert.notEqual(REQUEST_STATUS_BADGE.ON_HOLD, REQUEST_STATUS_BADGE.PENDING);
+  });
+
+  it("🔴 「마감」은 상태가 아니라 isClosedRequest 로 가른다 — 마감된 신청의 글자는 「확인됨」이 아니다", () => {
+    const lines = [{ quantity: 8, issued: 5 }];
+    const closed = isClosedRequest("CONFIRMED", lines);
+    assert.equal(closed, true, "일부만 나간 채 닫힌 신청");
+    assert.equal(requestStatusLabel("CONFIRMED", closed), CLOSED_REQUEST_LABEL);
+    assert.notEqual(requestStatusLabel("CONFIRMED", closed), REQUEST_STATUS_LABEL.CONFIRMED);
+    assert.notEqual(requestStatusBadge("CONFIRMED", closed), REQUEST_STATUS_BADGE.CONFIRMED);
+  });
+
+  it("다 나간 신청은 그냥 「확인됨」이다 — 마감 글자가 아무 데나 붙지 않는다", () => {
+    const closed = isClosedRequest("CONFIRMED", [{ quantity: 8, issued: 8 }]);
+    assert.equal(closed, false);
+    assert.equal(requestStatusLabel("CONFIRMED", closed), REQUEST_STATUS_LABEL.CONFIRMED);
+    assert.equal(requestStatusBadge("CONFIRMED", closed), REQUEST_STATUS_BADGE.CONFIRMED);
+  });
+
+  it("마감이 아닌 상태는 글자도 색도 표 그대로다", () => {
+    for (const s of REQUEST_STATUSES) {
+      assert.equal(requestStatusLabel(s, false), REQUEST_STATUS_LABEL[s], s);
+      assert.equal(requestStatusBadge(s, false), REQUEST_STATUS_BADGE[s], s);
+    }
   });
 });

@@ -10,6 +10,7 @@ import { parseEntryForm, type EntryFieldErrors } from "@/lib/stock/form";
 import { parseIssueQuantities } from "@/lib/stock/issue";
 import { LOOKUP_MESSAGES, lookupIntake, type IntakeInfo } from "@/lib/stock/intake-lookup";
 import { correctTransaction, ledgerErrorMessage, recordEntry, reverifyIntake } from "@/lib/stock/ledger";
+import { RETURN_TO_FIELD, safeReturnTo } from "@/lib/stock/return-to";
 
 /**
  * 수량 변경 기록 서버 액션 (기록·관리자). 🔴 역할은 액션에서 다시 검사한다 (CLAUDE.md 8-4절).
@@ -35,8 +36,9 @@ export async function saveEntryAction(_prev: EntryFormState, formData: FormData)
     return { errors: { form: "이 종류의 기록은 관리자만 할 수 있습니다." }, lookup: null, saved: null };
   }
 
-  // 반출 계열을 기록 권한자가 적으면 확인 대기로 (2026-10-06 확인 단계). 관리자는 바로 원장에.
-  if (needsConfirmation(parsed.value.type, roleAtLeast(session.user.role, "ADMIN"))) {
+  // 반출 계열은 **누가 적든** 확인 대기로 (2026-10-15 사용자 결정. 10-06 의 「관리자는 바로 원장에」를 뒤집은 것 —
+  // 그 까닭은 codes.ts 의 needsConfirmation 주석에). 관리자가 낸 요청은 본인이 확인하게 되고, 그래도 괜찮다.
+  if (needsConfirmation(parsed.value.type)) {
     try {
       await createRequest(parsed.value, actor);
     } catch (e) {
@@ -117,6 +119,14 @@ export async function reverifyIntakeAction(_prev: ReverifyState, formData: FormD
 
 /* ───────────── 확인 대기 신청 (2026-10-06 확인 단계) ───────────── */
 
+/**
+ * 🔴 **아래 여섯은 끝나고 「누른 자리」로 돌아간다** (2026-10-15, 조각 10c). 같은 단추 묶음을 기록 내역(`/entries`)과
+ *    부품 요청 관리(`/requests`)가 같이 쓰므로, 늘 기록 내역으로 보내면 `/requests` 에서 누른 사람은 보던 목록을 잃는다.
+ *    화면이 숨은 칸으로 실어 보낸 자리를 **그대로 믿지 않고** `safeReturnTo` 로 거른다 — 그 울타리와 까닭은
+ *    `src/lib/stock/return-to.ts` 한 곳에 있다. 붙이는 꼬리표는 돌아간 화면이 읽어 한 줄로 말해 준다
+ *    (`src/lib/stock/request-notice.ts`).
+ */
+
 export interface RequestActionState {
   error: string | null;
 }
@@ -150,7 +160,7 @@ export async function confirmRequestAction(_prev: RequestActionState, formData: 
   const flag = r.result.intakeUnverified ? "&unverified=1" : "";
   // 🔵 아직 남은 수량이 있으면 화면이 「신청은 확인 대기에 그대로 남아 있다」를 말해 준다 (조각 4d).
   const left = r.done ? "" : `&remaining=${r.remaining}`;
-  redirect(`/entries?saved=${sheetNoText(r.result.type, r.result.sheetYear, r.result.sheetNo)}&type=${r.result.type}${flag}${left}`);
+  redirect(`${safeReturnTo(formData.get(RETURN_TO_FIELD))}?saved=${sheetNoText(r.result.type, r.result.sheetYear, r.result.sheetNo)}&type=${r.result.type}${flag}${left}`);
 }
 
 /**
@@ -175,7 +185,7 @@ export async function closeRequestAction(_prev: RequestActionState, formData: Fo
   if (!r.ok) return { error: r.message ?? "마감하지 못했습니다." };
   revalidatePath("/entries");
   revalidatePath("/", "layout");
-  redirect("/entries?closed=1");
+  redirect(`${safeReturnTo(formData.get(RETURN_TO_FIELD))}?closed=1`);
 }
 
 export async function rejectRequestAction(_prev: RequestActionState, formData: FormData): Promise<RequestActionState> {
@@ -190,7 +200,7 @@ export async function rejectRequestAction(_prev: RequestActionState, formData: F
   if (!r.ok) return { error: r.message ?? "반려하지 못했습니다." };
   revalidatePath("/entries");
   revalidatePath("/", "layout");
-  redirect("/entries?rejected=1");
+  redirect(`${safeReturnTo(formData.get(RETURN_TO_FIELD))}?rejected=1`);
 }
 
 /**
@@ -216,7 +226,7 @@ export async function holdRequestAction(_prev: RequestActionState, formData: For
   revalidatePath("/entries");
   // 🔵 머리말 「대기 N」 배지와 알림 종이 줄어든다 — 보류는 재촉하는 숫자에서 빠진다(stock/codes.ts 의 ACTIONABLE_REQUEST_STATUSES).
   revalidatePath("/", "layout");
-  redirect("/entries?held=1");
+  redirect(`${safeReturnTo(formData.get(RETURN_TO_FIELD))}?held=1`);
 }
 
 /** 보류 풀기. 🔵 **사유를 받지 않는다** — 「다시 진행한다」는 뜻뿐이라 적을 것이 없다(`releaseRequestHold` 주석). */
@@ -234,7 +244,7 @@ export async function releaseHoldAction(_prev: RequestActionState, formData: For
   if (!r.ok) return { error: r.message ?? "보류를 풀지 못했습니다." };
   revalidatePath("/entries");
   revalidatePath("/", "layout");
-  redirect("/entries?holdReleased=1");
+  redirect(`${safeReturnTo(formData.get(RETURN_TO_FIELD))}?holdReleased=1`);
 }
 
 export async function cancelRequestAction(_prev: RequestActionState, formData: FormData): Promise<RequestActionState> {
@@ -245,5 +255,5 @@ export async function cancelRequestAction(_prev: RequestActionState, formData: F
   if (!r.ok) return { error: r.message ?? "취소하지 못했습니다." };
   revalidatePath("/entries");
   revalidatePath("/", "layout");
-  redirect("/entries?cancelled=1");
+  redirect(`${safeReturnTo(formData.get(RETURN_TO_FIELD))}?cancelled=1`);
 }

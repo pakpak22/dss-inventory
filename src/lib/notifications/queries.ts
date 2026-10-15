@@ -2,7 +2,7 @@ import "server-only";
 import type { Role } from "@/db/schema/users";
 import { env } from "@/lib/env";
 import { listRejectedRequestsFor, summarizePendingRequests } from "@/lib/stock/requests";
-import { buildInventoryNotificationItems, NOTIFICATION_MAX_ITEMS, receivesPendingNotification, rejectionCutoff, type InventoryNotificationFeed } from "./bell-items";
+import { buildInventoryNotificationItems, NOTIFICATION_MAX_ITEMS, receivesPendingNotification, receivesRejectedNotification, rejectionCutoff, type InventoryNotificationFeed } from "./bell-items";
 
 /**
  * ============================================================================
@@ -39,16 +39,24 @@ export type NotificationViewer = {
 /**
  * 이 사람의 알림 — 줄과 **진짜 개수**.
  *
- * 두 질의는 **나란히** 나간다. 대기 요약은 ADMIN 일 때만 묻는다 — 다른 역할에게는
- * 어차피 줄이 만들어지지 않으므로(bell-items.ts) 왕복 한 번이 그대로 낭비다.
+ * 두 질의는 **나란히** 나간다. 둘 다 **자격이 있을 때만** 묻는다 — 자격이 없으면 어차피
+ * 줄이 만들어지지 않으므로(bell-items.ts) 왕복 한 번이 그대로 낭비다. 대기 요약은 ADMIN
+ * 에게만, 반려 줄은 기록 권한(STAFF) 이상에게만 묻는다.
+ *
+ * 🔴 「누가 받는가」를 이 파일에 손으로 적지 않는다 — 조립이 쓰는 `receives*` 를 **그대로
+ * 부른다.** 조립이 한 번 더 거르므로 여기서 안 묻는 것은 **답을 바꾸는 일이 아니라 질의를
+ * 아끼는 일**이고, 두 자리가 같은 함수를 보므로 갈라질 수 없다.
  */
 export async function listInventoryNotifications(viewer: NotificationViewer, now = new Date()): Promise<InventoryNotificationFeed> {
   try {
     const [pending, rejected] = await Promise.all([
       // 🔴 「누가 받는가」를 여기서 다시 적지 않는다 — 조립이 쓰는 그 함수를 그대로 본다.
       receivesPendingNotification(viewer.role) ? summarizePendingRequests() : Promise.resolve({ count: 0, oldestAt: null }),
+      // 🔴 기록 권한(STAFF) 아래면 **묻지도 않는다.** 그 줄이 가리키는 `/requests` 는
+      //    `requireRole("STAFF")` 라 자격이 없는 사람에게는 눌러도 못 여는 줄이 되고
+      //    (bell-items.ts 의 ②), 그 줄은 포털을 거쳐 남의 종에도 실린다.
       // 🔴 「7일」을 여기서 손으로 적지 않는다 — 조립과 **같은 함수**로 선을 긋는다.
-      listRejectedRequestsFor(viewer.id, rejectionCutoff(now), NOTIFICATION_MAX_ITEMS),
+      receivesRejectedNotification(viewer.role) ? listRejectedRequestsFor(viewer.id, rejectionCutoff(now), NOTIFICATION_MAX_ITEMS) : Promise.resolve({ rows: [], total: 0 }),
     ]);
 
     if (pending.count === 0 && rejected.rows.length === 0) return EMPTY;

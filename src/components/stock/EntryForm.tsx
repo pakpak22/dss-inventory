@@ -114,8 +114,10 @@ export function EntryForm({ parts, initialType, initialPartNo, isAdmin, today, r
   const returnPart = returnPartNo === null ? null : parts.find((p) => p.no === returnPartNo) ?? null;
 
   const typeOptions = RECORDABLE_TYPES.filter((t) => isAdmin || (t !== "ADJUST" && t !== "TRANSFER"));
-  // 반출 계열을 기록 권한자가 적으면 바로 수량이 바뀌지 않고 담당자 확인을 기다린다 (2026-10-06 확인 단계)
-  const confirmLater = needsConfirmation(type, isAdmin);
+  // 반출 계열은 **누가 적든** 바로 수량이 바뀌지 않고 담당자 확인을 기다린다 (2026-10-15 사용자 결정 —
+  // 10-06 의 「관리자는 바로」를 뒤집었다. 까닭은 codes.ts 의 needsConfirmation 주석에).
+  // 🔵 위 `isAdmin` 은 여전히 쓰인다 — 「누가 **적을 수 있나**」(조정·소유 옮김)는 그대로이기 때문이다.
+  const confirmLater = needsConfirmation(type);
 
   function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -470,7 +472,8 @@ export function EntryForm({ parts, initialType, initialPartNo, isAdmin, today, r
 
       {confirmLater ? (
         <p className="rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-700">
-          저장하면 <b>확인 대기</b>로 올라갑니다. 담당자(관리자)가 확인하면 그때 수량이 바뀝니다. 기록 내역에서 진행을 볼 수 있습니다.
+          {/* 🔵 쓰는 분이 쓰는 낱말은 「요청」이다(머리말 단추도 「부품 요청」) — 사람이 보는 글자를 거기 맞춘다 (2026-10-15). */}
+          요청하면 <b>확인 대기</b>로 올라갑니다. 담당자(관리자)가 확인하면 그때 수량이 바뀝니다. 부품 요청에서 진행을 볼 수 있습니다.
         </p>
       ) : null}
       <dialog
@@ -484,25 +487,36 @@ export function EntryForm({ parts, initialType, initialPartNo, isAdmin, today, r
         {popup ? (
           <div className="flex flex-col gap-3">
             <p className="text-base font-semibold">
-              {popup.kind === "request" ? `${ENTRY_TYPE_LABEL[popup.type as RecordableType] ?? popup.type} 신청이 올라갔습니다.` : `${ENTRY_TYPE_LABEL[popup.type as RecordableType] ?? popup.type} 기록 ${popup.sheetYear !== null && popup.sheetNo !== null ? sheetNoText(popup.type as RecordableType, popup.sheetYear, popup.sheetNo) : ""} 저장되었습니다.`}
+              {popup.kind === "request" ? `${ENTRY_TYPE_LABEL[popup.type as RecordableType] ?? popup.type} 요청이 올라갔습니다.` : `${ENTRY_TYPE_LABEL[popup.type as RecordableType] ?? popup.type} 기록 ${popup.sheetYear !== null && popup.sheetNo !== null ? sheetNoText(popup.type as RecordableType, popup.sheetYear, popup.sheetNo) : ""} 저장되었습니다.`}
             </p>
             {popup.kind === "request" ? <p className="text-sm text-zinc-600">담당자(관리자)가 확인하면 그때 수량이 바뀝니다.</p> : null}
             {popup.intakeUnverified ? <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">A/S 가 응답하지 않아 「인수번호 확인 안 됨」으로 남았습니다. 기록 내역에서 나중에 [확인]을 누르십시오.</p> : null}
             <div className="flex justify-center gap-2">
+              {/* 🔵 [계속 기록]은 그대로 둔다 — 같은 날 여러 건을 잇달아 적는 흐름이다(위 saved.key 주석). */}
               <button type="button" className={BTN} onClick={() => setPopup(null)}>
                 계속 기록
               </button>
-              <Link href="/entries" className={BTN}>
-                기록 내역으로
-              </Link>
+              {/* 🔴 가는 곳이 갈린다 (2026-10-15): 요청으로 올라간 것은 `/requests` 에서 보고, **바로 기록된 것**
+                  (입고·반환 등)은 거기에 아예 없으므로 기록 내역으로 보낸다. */}
+              {popup.kind === "request" ? (
+                <Link href="/requests" className={BTN}>
+                  부품 요청으로
+                </Link>
+              ) : (
+                <Link href="/entries" className={BTN}>
+                  기록 내역으로
+                </Link>
+              )}
             </div>
           </div>
         ) : null}
       </dialog>
 
       <div className="flex flex-col gap-2">
+        {/* 🔵 반출이면 「사용 요청」·「요청 중」, 그 밖(입고·반환·조정·소유 옮김)은 그대로 「입고 저장」·「저장 중」.
+            단추 글자가 그 자리에서 무슨 일이 일어나는지를 말한다 — 반출은 저장이 아니라 요청이다 (2026-10-15). */}
         <button type="submit" className={BTN_PRIMARY} disabled={pending}>
-          {pending ? (confirmLater ? "신청 중" : "저장 중") : confirmLater ? `${ENTRY_TYPE_LABEL[type]} 신청` : `${ENTRY_TYPE_LABEL[type]} 저장`}
+          {pending ? (confirmLater ? "요청 중" : "저장 중") : confirmLater ? `${ENTRY_TYPE_LABEL[type]} 요청` : `${ENTRY_TYPE_LABEL[type]} 저장`}
         </button>
         <Link href="/" className={`${BTN} text-center`}>
           취소
