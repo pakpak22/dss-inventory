@@ -3,6 +3,8 @@ import { ROLE_LABEL } from "@/lib/auth/role";
 import {
   NOTIFICATION_KINDS,
   NOTIFICATION_KIND_LABELS,
+  receivesIssueApprovalDecidedNotification,
+  receivesIssueApprovalToDecideNotification,
   receivesPendingNotification,
   receivesRejectedNotification,
   REJECTED_VISIBLE_DAYS,
@@ -79,16 +81,28 @@ export type PortalNotificationSettings = {
 
 export type PortalSettingsResult<T> = { ok: true; value: T } | { ok: false; status: 403; message: string };
 
-/** 종류마다 「누가 받는가」. 🔴 종이 쓰는 그 함수를 그대로 부른다(위 머리말). */
+/**
+ * 종류마다 「누가 받는가」. 🔴 종이 쓰는 그 함수를 그대로 부른다(위 머리말).
+ *
+ * 🔵 불출 결재 둘은 **매개변수를 받지 않는 함수**다 — 역할이 그 판정에 들어가지 않기 때문이고,
+ * 그래서 포털 표에서는 **세 역할 칸이 모두 ✓** 로 그려진다. 그것이 참말이다: `/approvals` 의
+ * 문이 `requireSession` 이라 보기(VIEWER) 권한인 결재자도 자기 차례를 눌러서 연다.
+ * 실제로 줄을 받는 사람을 가르는 것은 역할이 아니라 질의의 열쇠(`approver_sub` · `requested_by`)다.
+ */
 const RECEIVES: Record<NotificationKind, (role: Role) => boolean> = {
   [NOTIFICATION_KINDS.pending]: receivesPendingNotification,
   [NOTIFICATION_KINDS.rejected]: receivesRejectedNotification,
+  [NOTIFICATION_KINDS.issueApprovalToDecide]: receivesIssueApprovalToDecideNotification,
+  [NOTIFICATION_KINDS.issueApprovalDecided]: receivesIssueApprovalDecidedNotification,
 };
 
 /** 종이 무엇을 언제 보여 주는가. 포털 화면이 종류 줄 밑에 그대로 그린다. */
 const DESCRIPTIONS: Record<NotificationKind, string> = {
   [NOTIFICATION_KINDS.pending]: "확인을 기다리는 반출 신청이 있으면 건수를 종에 띄웁니다. 다 내주거나 반려하면 사라집니다. 일부만 내준 신청은 남은 수량이 있어 그대로 남습니다.",
   [NOTIFICATION_KINDS.rejected]: `자기가 낸 반출 신청이 반려되면 종에 띄웁니다. 반려된 지 ${REJECTED_VISIBLE_DAYS}일이 지나면 사라집니다. 확인된 신청은 수량이 바뀌어 화면에 바로 보이므로 알리지 않습니다.`,
+  [NOTIFICATION_KINDS.issueApprovalToDecide]:
+    "부품 불출 결재가 지금 자기 차례이면 건수를 한 줄로 묶어 종에 띄웁니다. 결재하면 사라집니다. 결재자는 역할과 상관없이 결재선에 든 사람이므로 역할로 가르지 않습니다.",
+  [NOTIFICATION_KINDS.issueApprovalDecided]: `자기가 올린 부품 불출 결재가 승인되거나 반려되면 종에 띄웁니다. 승인된 건은 기간 제한 없이 남고 담당자가 실제로 내주면 사라집니다. 반려된 건은 ${REJECTED_VISIBLE_DAYS}일이 지나면 사라집니다.`,
 };
 
 /**

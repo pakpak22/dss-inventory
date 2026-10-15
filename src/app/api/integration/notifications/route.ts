@@ -26,8 +26,10 @@ import { listInventoryNotifications } from "@/lib/notifications/queries";
  * 쿼리가 접근 로그에 그대로 남기 때문이다.
  *
  * ⚠️ 포털은 이 왕복을 **1.5초**만 기다린다(그쪽 READ_TIMEOUT_MS). 여기서 하는 일은
- * 색인을 타는 질의 셋뿐이다 — 사람 되짚기(users_auth_sub_uq) · 대기 집계
- * (stock_requests_status_idx) · 내 반려 목록(stock_requests_requester_idx).
+ * 색인을 타는 질의 다섯뿐이고, 뒤 넷은 **나란히** 나간다 — 사람 되짚기(users_auth_sub_uq) ·
+ * 대기 집계(stock_requests_status_idx) · 내 반려 목록(stock_requests_requester_idx) ·
+ * 내 결재 차례 집계(stock_issue_approval_steps_approver_sub_idx) · 결정된 내 결재건
+ * (stock_issue_approvals_requester_idx).
  * ============================================================================
  */
 
@@ -55,7 +57,11 @@ export async function GET(request: Request): Promise<Response> {
     // 🔵 어떤 실패도 삼키고 빈 목록을 돌려주므로(그 파일 머리말) 여기서 따로 받아 낼
     //    것이 없다. 🔴 역할은 **DB 의 값**을 쓴다 — 개발용 「역할 바꿔 보기」는 쿠키라
     //    여기까지 따라오지 않고, 따라와서도 안 된다.
-    const feed = await listInventoryNotifications({ id: user.id, role: user.role });
+    // 🔴 **포털 번호도 DB 의 값**(`user.auth_sub`)을 쓴다 — 방금 그 번호로 찾아낸 바로 그 줄이라
+    //    토큰의 `sub` 와 같은 값이고, 「지금 내 차례인 불출 결재」가 이 번호로만 갈린다
+    //    (notifications/queries.ts 의 `NotificationViewer.sub`). **users 를 다시 읽지 않는다** —
+    //    위에서 이미 통째로 읽어 두었다.
+    const feed = await listInventoryNotifications({ id: user.id, role: user.role, sub: user.authSub });
     return Response.json(feed, { headers: NO_STORE });
   } catch (e) {
     // 설정값이 빠졌거나(env 의 getter 가 던진다) 포털의 JWKS 를 못 읽었거나 DB 가 멎었다.

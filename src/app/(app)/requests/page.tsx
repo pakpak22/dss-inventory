@@ -1,4 +1,7 @@
 import { RequestManagerScreen } from "@/components/stock/RequestManagerScreen";
+import { isPartIssueApprovalRouteInForce, partIssueLockFor, type PartIssueLock } from "@/lib/approval/part-issue-gate";
+import { listOpenPartIssueStatusesByRequest } from "@/lib/approval/part-issue";
+import { getCurrentApprovalRoute } from "@/lib/approval/queries";
 import { roleAtLeast } from "@/lib/auth/role";
 import { requireRole } from "@/lib/auth/session";
 import { requestDecisionNotice, requestSavedNotice, type RequestNotice } from "@/lib/stock/request-notice";
@@ -36,6 +39,31 @@ export default async function RequestsPage({ searchParams }: { searchParams: Pro
    * 🔵 문구는 기록 내역과 **같은 한 벌**에서 온다(`request-notice.ts`) — 두 화면이 같은 일을 다르게 말하지 않게.
    */
   const notices = [requestSavedNotice(sp, "requests"), requestDecisionNotice(sp, "requests")].filter((n): n is RequestNotice => n !== null);
+
+  /**
+   * 🔴 **부품 불출 결재의 문 — 판정은 여기(서버)서 하고 화면은 받은 대로 그린다** (2026-10-15, 조각 11c).
+   *    화면이 다시 판정하면 「단추는 보이는데 누르면 거절」이나 그 반대가 되고, **후자는 화면에 아무 표시도
+   *    남기지 않아 더 나쁘다**(A/S 원본 `PartRequestManagerScreen` 의 까닭 그대로). 판을 읽는 것도 여기서
+   *    한다 — 클라이언트가 DB 를 읽게 두지 않는다.
+   *
+   * ① **절차가 지금 쓰이고 있는가** — 판이 없거나 단계가 0개면 거짓이고, 그때 이 화면은 지금까지와
+   *    **한 글자도 다르지 않다**(`isPartIssueApprovalRouteInForce`).
+   *    🔵 포털 번호가 **빠진** 조회(`getCurrentApprovalRoute`)를 쓴다 — 여기서 필요한 것은 단계 수뿐이고,
+   *       번호가 든 모양을 집어 오면 다음 사람이 그대로 화면에 실어 보낼 수 있다(`queries.ts` 머리말).
+   * ② **신청마다 살아 있는 결재건이 있는가, 있다면 어느 자리인가** — 신청 묶음으로 **한 번에** 읽고
+   *    (`listOpenPartIssueStatusesByRequest`), 「승인 대기인가 · 실행 대기인가」 판정은 `partIssueLockFor`
+   *    한 곳에서 한다. **잠긴 신청만** 담는다.
+   *    🔴 ①과 **따로 간다.** 절차를 꺼도 이미 올라간 결재건은 살아 있어 결재·실행될 수 있고, 그 사이
+   *       [확인]으로 한 번 더 내보내면 **같은 부품이 두 번 나간다.**
+   */
+  const [route, openApprovals] = await Promise.all([getCurrentApprovalRoute("PART_ISSUE"), listOpenPartIssueStatusesByRequest(requests.map((r) => r.id))]);
+  const approvalRequired = isPartIssueApprovalRouteInForce(route);
+  const issueLocks: Record<string, PartIssueLock> = {};
+  for (const [requestId, statuses] of openApprovals) {
+    const lock = partIssueLockFor(statuses);
+    if (lock !== null) issueLocks[requestId] = lock;
+  }
+
   /**
    * 🔴 **지금 보는 사람의 id** — 화면이 「내가 낸 신청인가」를 가려 [신청 취소]를 그린다 (2026-10-15).
    *    기록 내역에 있던 그 단추를 여기로 옮긴 것이고, 비교는 `requestedBy` 와의 **id 대조**다(이름이 아니다 —
@@ -43,5 +71,7 @@ export default async function RequestsPage({ searchParams }: { searchParams: Pro
    * 🔵 **이 값은 울타리가 아니다.** 실제로 막는 자리는 `cancelRequestAction` → `cancelRequest` 의 WHERE 이고,
    *    거기서 **「본인이 낸, 아직 PENDING 인 것」만** 받는다. 화면은 눌러도 거절당할 단추를 안 내미는 것뿐이다.
    */
-  return <RequestManagerScreen requests={requests} notices={notices} isAdmin={isAdmin} currentUserId={session.user.id} />;
+  return (
+    <RequestManagerScreen requests={requests} notices={notices} isAdmin={isAdmin} currentUserId={session.user.id} approvalRequired={approvalRequired} issueLocks={issueLocks} />
+  );
 }

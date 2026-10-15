@@ -1,8 +1,22 @@
 "use client";
 
+import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { startTransition, useActionState, useEffect, useRef, useState, type ReactNode } from "react";
+import { requestPartIssueAction, type PartIssueActionState } from "@/app/actions/part-issue";
 import { cancelRequestAction, closeRequestAction, confirmRequestAction, holdRequestAction, rejectRequestAction, releaseHoldAction, type RequestActionState } from "@/app/actions/stock";
+import {
+  partIssueConfirmLabel,
+  PART_ISSUE_APPROVALS_LINK_LABEL,
+  PART_ISSUE_APPROVALS_PATH,
+  PART_ISSUE_LOCK_LABELS,
+  PART_ISSUE_LOCK_TITLES,
+  PART_ISSUE_REASON_LABEL,
+  PART_ISSUE_REASON_PLACEHOLDER,
+  PART_ISSUE_REQUEST_DIALOG_NOTICE,
+  PART_ISSUE_REQUEST_SUBMIT_LABEL,
+  type PartIssueLock,
+} from "@/lib/approval/part-issue-gate";
 import type { ClaimableRequestStatus } from "@/lib/stock/codes";
 import { RETURN_TO_FIELD } from "@/lib/stock/return-to";
 
@@ -83,6 +97,15 @@ export type RequestActionStatus = ClaimableRequestStatus | "ON_HOLD";
  * 🔵 **쓰는 화면은 부품 요청 관리(`/requests`) 하나다** (2026-10-15 사용자 결정으로 기록 내역의 「확인 대기」 구역을
  *    걷어내면서 그렇게 됐다). 그래도 단추를 그 화면 파일에 녹여 넣지 않는다 — 상태별로 무엇을 그릴지 가르는 규칙이
  *    여기 모여 있고(`canReject`·`canClose`·`canHold`…), 화면에 풀어 놓으면 서버가 받는 조건과 어긋나는 날이 온다.
+ *
+ * ── 🔴 [확인] 자리에 문이 달린다 (2026-10-15, 조각 11c) ────────────────────────────────────
+ * 「부품 불출」 승인 절차가 쓰이고 있으면 이 자리는 그 자리에서 재고를 빼지 않고 **[불출 신청]**(결재 올리기)이
+ * 되고, 이미 올라간 결재건이 있으면 **누를 수 없는 단추**가 된다. 절차가 없으면 **지금까지와 한 글자도 다르지 않다.**
+ *
+ * 🔴 **판정은 전부 서버가 해서 내려보낸 값이다**(`approvalRequired` · `issueLock`). 여기서 다시 판정하지 않는다.
+ * 🔴 **잠금은 그리는 단계에서만 건다** — [반려]·[마감]·[보류]·[신청 취소]는 **손대지 않는다**(A/S 원본
+ *    `PartRequestManagerScreen` 이 그렇게 했다). 결재가 돌고 있어도 담당자는 그 신청을 반려하거나 멈춰 둘 수 있어야
+ *    하고, 그 길까지 막으면 결재 중인 신청에 아무도 손을 못 대는 자리가 생긴다.
  */
 export function RequestActions({
   requestId,
@@ -90,6 +113,8 @@ export function RequestActions({
   lines,
   canDecide,
   canCancel,
+  approvalRequired,
+  issueLock,
 }: {
   requestId: string;
   /** 지금 상태 — 🔵 **셋 중 하나임이 타입으로 보증된다**(`isClaimableRequest` 가 좁혀 주고, 보류는 부르는 쪽이 따로 가린다). */
@@ -97,6 +122,10 @@ export function RequestActions({
   lines: readonly RequestActionLine[];
   canDecide: boolean;
   canCancel: boolean;
+  /** 「부품 불출」 승인 절차가 **지금 쓰이고 있는가** — 서버 판정(`/requests` 서버 컴포넌트). */
+  approvalRequired: boolean;
+  /** 살아 있는 결재건이 이 신청을 붙들고 있으면 그 까닭, 아니면 `null` — 서버 판정. */
+  issueLock: PartIssueLock | null;
 }) {
   const [confirmState, confirmAction, confirming] = useActionState<RequestActionState, FormData>(confirmRequestAction, EMPTY);
   const [rejectState, rejectAction, rejecting] = useActionState<RequestActionState, FormData>(rejectRequestAction, EMPTY);
@@ -104,11 +133,18 @@ export function RequestActions({
   const [closeState, closeAction, closing] = useActionState<RequestActionState, FormData>(closeRequestAction, EMPTY);
   const [holdState, holdAction, holding] = useActionState<RequestActionState, FormData>(holdRequestAction, EMPTY);
   const [releaseState, releaseAction, releasing] = useActionState<RequestActionState, FormData>(releaseHoldAction, EMPTY);
+  /**
+   * 🔴 **[확인]과 같은 상자, 다른 액션** (조각 11c). 절차가 쓰이고 있으면 같은 상자에서 받은 수량이 원장이 아니라
+   *    결재건으로 간다 — 상자를 두 벌 만들면 「요청 8 중 5 나감」을 그리는 셈이 두 곳에 흩어진다.
+   */
+  const [issueRequestState, issueRequestAction, requestingIssue] = useActionState<PartIssueActionState, FormData>(requestPartIssueAction, EMPTY);
   const [open, setOpen] = useState<null | "issue" | "reject" | "close" | "hold">(null);
   /** 보내기 전에 화면에서 거른 것(서버도 같은 것을 다시 본다 — `buildIssueInput`). */
   const [issueError, setIssueError] = useState<string | null>(null);
 
-  const busy = confirming || rejecting || cancelling || closing || holding || releasing;
+  const busy = confirming || rejecting || cancelling || closing || holding || releasing || requestingIssue;
+  /** 상자를 띄운 채 보내는 중인가 — 절차가 있으면 결재를 올리는 중이고, 없으면 내주는 중이다. */
+  const submitting = approvalRequired ? requestingIssue : confirming;
   /** 🔴 멈춰 둔 신청에는 확인·반려·마감을 **그리지 않는다** — 서버가 받지 않는다(requests.ts 의 `holdRequest` 주석). */
   const held = status === "ON_HOLD";
   const canClose = canDecide && status === "PARTIAL";
@@ -118,7 +154,7 @@ export function RequestActions({
   const canRelease = canDecide && held;
   const issuedTotal = lines.reduce((a, l) => a + Math.min(l.quantity, l.issued), 0);
   const remainingTotal = lines.reduce((a, l) => a + remainingOf(l), 0);
-  const error = confirmState.error ?? rejectState.error ?? cancelState.error ?? closeState.error ?? holdState.error ?? releaseState.error;
+  const error = confirmState.error ?? rejectState.error ?? cancelState.error ?? closeState.error ?? holdState.error ?? releaseState.error ?? issueRequestState.error;
 
   /**
    * 🔴 **지금 있는 자리를 함께 싣는다** (2026-10-15, 조각 10c). 액션은 끝나고 이 값이 가리키는 자리로 돌려보낸다 —
@@ -143,33 +179,62 @@ export function RequestActions({
   const returnToField = <input type="hidden" name={RETURN_TO_FIELD} value={returnTo} />;
 
   /**
-   * 「이번에 줄 수량」 보내기.
+   * 칸에 적힌 「이번에 줄 수량」을 줄별로 읽는다. 거르다 막히면 문구를 세우고 `null`.
    *
-   * 🔴 **칸을 하나도 안 적었으면 `quantities` 를 아예 안 보낸다** — 서버가 그때 「남은 수량 전부」로 읽고(조각 4b),
-   *    그것이 화면이 생기기 전의 동작 그대로다. 한 칸이라도 적었으면 **빈 칸은 그 줄의 남은 수량**으로 채워 보낸다
-   *    (상자 머리말에 적은 뜻과 같다). 안 줄 줄에는 사람이 0 을 적는다.
+   * 🔴 한 칸이라도 적었으면 **빈 칸은 그 줄의 남은 수량**으로 채운다(상자 머리말에 적은 뜻과 같다).
+   *    안 줄 줄에는 사람이 0 을 적는다.
+   */
+  const readQuantities = (form: FormData): Array<{ partId: string; quantity: number }> | null => {
+    const quantities: Array<{ partId: string; quantity: number }> = [];
+    for (const line of lines) {
+      const raw = String(form.get(`q:${line.partId}`) ?? "").trim();
+      const left = remainingOf(line);
+      const n = raw === "" ? left : Number(raw);
+      if (!Number.isInteger(n) || n < 0 || n > left) {
+        setIssueError(`${labelOf(line)}: 0 부터 ${left} 까지 적을 수 있습니다.`);
+        return null;
+      }
+      quantities.push({ partId: line.partId, quantity: n });
+    }
+    if (quantities.every((q) => q.quantity === 0)) {
+      setIssueError("이번에 내줄 수량이 없습니다. 적어도 한 줄에 1 이상을 적으십시오.");
+      return null;
+    }
+    return quantities;
+  };
+
+  /**
+   * 「이번에 줄 수량」 보내기 — 🔴 **가는 곳이 둘로 갈린다.**
+   *
+   * ① 절차가 없으면 **지금까지 그대로**: 칸을 하나도 안 적었으면 `quantities` 를 **아예 안 보낸다** — 서버가 그때
+   *    「남은 수량 전부」로 읽고(조각 4b), 그것이 화면이 생기기 전의 동작 그대로다.
+   * ② 절차가 쓰이고 있으면 **결재를 올린다**: 이때는 **언제나 줄별 수량을 보낸다**(빈 칸은 남은 수량). 결재는
+   *    「무엇을 얼마나 내보내겠다」는 약속이라, 「남은 것 전부」처럼 **나중에 값이 달라지는 말**로 올리면 결재자가
+   *    승인한 것과 실행되는 것이 달라진다. 🔵 사유도 함께 보내지만 **선택이다**(2026-10-15 결정) —
+   *    비어 있으면 빈 글자가 그대로 간다(DB 칸이 `NOT NULL DEFAULT ''`). 🔴 거르는 자리를 여기만
+   *    풀면 서버가 거절하므로 서버 쪽 울타리도 같이 풀었다(`requestPartIssueAction`).
    */
   const submitIssue = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
-    const typed = lines.map((l) => ({ line: l, raw: String(form.get(`q:${l.partId}`) ?? "").trim() }));
     const out = fd();
+
+    if (approvalRequired) {
+      const quantities = readQuantities(form);
+      if (quantities === null) return;
+      // 🔵 사유는 선택이다 — 비면 빈 글자를 그대로 보낸다(거르지 않는다).
+      const reason = String(form.get("reason") ?? "").trim();
+      out.set("quantities", JSON.stringify(quantities));
+      out.set("reason", reason);
+      setIssueError(null);
+      startTransition(() => issueRequestAction(out));
+      return;
+    }
+
     out.set("issueNote", String(form.get("issueNote") ?? ""));
-    if (typed.some((t) => t.raw !== "")) {
-      const quantities: Array<{ partId: string; quantity: number }> = [];
-      for (const { line, raw } of typed) {
-        const left = remainingOf(line);
-        const n = raw === "" ? left : Number(raw);
-        if (!Number.isInteger(n) || n < 0 || n > left) {
-          setIssueError(`${labelOf(line)}: 0 부터 ${left} 까지 적을 수 있습니다.`);
-          return;
-        }
-        quantities.push({ partId: line.partId, quantity: n });
-      }
-      if (quantities.every((q) => q.quantity === 0)) {
-        setIssueError("이번에 내줄 수량이 없습니다. 적어도 한 줄에 1 이상을 적으십시오.");
-        return;
-      }
+    if (lines.some((l) => String(form.get(`q:${l.partId}`) ?? "").trim() !== "")) {
+      const quantities = readQuantities(form);
+      if (quantities === null) return;
       out.set("quantities", JSON.stringify(quantities));
     }
     setIssueError(null);
@@ -179,18 +244,32 @@ export function RequestActions({
   return (
     <div className="flex flex-wrap items-center gap-1.5 no-print">
       {canDecide && !held ? (
-        <button
-          type="button"
-          className={BTN_P}
-          disabled={busy}
-          onClick={() => {
-            // 🔵 지난번에 거른 문구를 지우고 연다 — 상자를 다시 열었을 때 옛 오류가 남아 있으면 안 된다.
-            setIssueError(null);
-            setOpen("issue");
-          }}
-        >
-          {confirming ? "내주는 중" : "확인"}
-        </button>
+        issueLock !== null ? (
+          /* 🔴 누를 수 없는 자리 — 상자를 여는 길이 아예 없다. **왜 못 누르는지는 `title` 로** 말하고,
+             🔵 **갈 곳을 옆에 세운다**(「승인 요청건」). 막다른 길을 만들지 않는다. */
+          <span className="flex items-center gap-1.5">
+            <button type="button" className={BTN_P} disabled title={PART_ISSUE_LOCK_TITLES[issueLock]}>
+              {PART_ISSUE_LOCK_LABELS[issueLock]}
+            </button>
+            <Link href={PART_ISSUE_APPROVALS_PATH} className="text-xs text-zinc-600 underline hover:text-zinc-900">
+              {PART_ISSUE_APPROVALS_LINK_LABEL}
+            </Link>
+          </span>
+        ) : (
+          <button
+            type="button"
+            className={BTN_P}
+            disabled={busy}
+            onClick={() => {
+              // 🔵 지난번에 거른 문구를 지우고 연다 — 상자를 다시 열었을 때 옛 오류가 남아 있으면 안 된다.
+              setIssueError(null);
+              setOpen("issue");
+            }}
+          >
+            {/* 🔴 절차가 쓰이고 있으면 이 단추는 **재고를 빼지 않는다** — 이름도 그렇게 말한다(`part-issue-gate.ts`). */}
+            {submitting ? (approvalRequired ? "올리는 중" : "내주는 중") : partIssueConfirmLabel(approvalRequired)}
+          </button>
+        )
       ) : null}
       {canReject ? (
         <button type="button" className={BTN} disabled={busy} onClick={() => setOpen("reject")}>
@@ -220,12 +299,15 @@ export function RequestActions({
       ) : null}
       {error ? <span className="text-xs text-red-600">{error}</span> : null}
 
-      {/* ① 확인 = 이번 회차 불출 — 줄별 수량 */}
+      {/* ① 확인 = 이번 회차 불출 — 줄별 수량. 🔴 절차가 쓰이고 있으면 **같은 상자가 결재를 올린다**(조각 11c) */}
       <Modal open={open === "issue"} onClose={() => setOpen(null)}>
         <form onSubmit={submitIssue} className="flex flex-col gap-3">
-          <h3 className="text-base font-semibold">이번에 내줄 수량</h3>
+          <h3 className="text-base font-semibold">{approvalRequired ? "이번에 내보낼 수량" : "이번에 내줄 수량"}</h3>
+          {/* 🔴 **무엇이 달라졌는지 먼저 말한다** — 단추 이름만 바뀌면 사람은 눌러 보고 나서야 재고가 안 빠진다는 것을 안다. */}
+          {approvalRequired ? <p className="rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs text-blue-900">{PART_ISSUE_REQUEST_DIALOG_NOTICE}</p> : null}
           <p className="text-xs text-zinc-500">
-            칸을 <b>비워 두면 그 줄의 남은 수량 전부</b>를 내줍니다. 이번에 안 줄 줄에는 <b>0</b> 을 적으십시오. 남은 수량이 있으면 이 신청은 <b>확인 대기에 그대로 남습니다.</b>
+            칸을 <b>비워 두면 그 줄의 남은 수량 전부</b>를 {approvalRequired ? "올립니다" : "내줍니다"}. 이번에 안 줄 줄에는 <b>0</b> 을 적으십시오. 남은 수량이 있으면 이 신청은{" "}
+            <b>확인 대기에 그대로 남습니다.</b>
           </p>
           <ul className="flex flex-col gap-1.5">
             {lines.map((l) => (
@@ -254,18 +336,30 @@ export function RequestActions({
               </li>
             ))}
           </ul>
-          <label className="flex flex-col gap-1 text-xs text-zinc-500">
-            이번 회차에 남길 말 (선택)
-            <input name="issueNote" maxLength={500} className={FIELD} placeholder="예: 2개는 다음 주에" />
-          </label>
+          {/* 🔵 절차가 쓰이고 있을 때의 사유는 **선택**이다(2026-10-15 결정) — 별표도 `required` 도 `minLength` 도 없다.
+              🔴 서버 쪽 두 글자 울타리도 함께 풀었다(`requestPartIssueAction`). 한쪽만 풀면 눌러도 거절당하거나 아예 못 누른다.
+              🔵 절차가 없을 때의 「이번 회차에 남길 말」도 **그대로 선택**이다. 두 칸은 뜻이 달라 한 칸으로 합치지 않는다:
+              사유는 결재자에게 하는 말이고, 회차 메모는 기록에 남기는 말이다. */}
+          {approvalRequired ? (
+            <label className="flex flex-col gap-1 text-xs text-zinc-500">
+              {PART_ISSUE_REASON_LABEL}
+              <input name="reason" maxLength={500} className={FIELD} placeholder={PART_ISSUE_REASON_PLACEHOLDER} />
+            </label>
+          ) : (
+            <label className="flex flex-col gap-1 text-xs text-zinc-500">
+              이번 회차에 남길 말 (선택)
+              <input name="issueNote" maxLength={500} className={FIELD} placeholder="예: 2개는 다음 주에" />
+            </label>
+          )}
           {issueError ? <p className="text-sm text-red-600">{issueError}</p> : null}
-          {confirmState.error ? <p className="text-sm text-red-600">{confirmState.error}</p> : null}
+          {/* 🔴 서버가 돌려준 문구를 **그대로** 보인다(뭉개지 않는다) — 절차가 그 사이 꺼졌는지, 이미 올라간 건이 있는지가 여기서만 보인다. */}
+          {(approvalRequired ? issueRequestState.error : confirmState.error) ? <p className="text-sm text-red-600">{approvalRequired ? issueRequestState.error : confirmState.error}</p> : null}
           <div className="flex justify-end gap-2">
-            <button type="button" className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-100" onClick={() => setOpen(null)} disabled={confirming}>
+            <button type="button" className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-100" onClick={() => setOpen(null)} disabled={submitting}>
               돌아가기
             </button>
-            <button type="submit" className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50" disabled={confirming}>
-              {confirming ? "내주는 중" : "내주기"}
+            <button type="submit" className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50" disabled={submitting}>
+              {submitting ? (approvalRequired ? "올리는 중" : "내주는 중") : approvalRequired ? PART_ISSUE_REQUEST_SUBMIT_LABEL : "내주기"}
             </button>
           </div>
         </form>

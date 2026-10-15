@@ -1,11 +1,13 @@
 import "server-only";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, min, or, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { db } from "@/db/client";
 import { approvalRouteSteps } from "@/db/schema/approval-routes";
 import { auditLogs } from "@/db/schema/audit-logs";
 import { stockIssueApprovalSteps, stockIssueApprovals } from "@/db/schema/stock-issue-approvals";
 import { stockRequests } from "@/db/schema/stock-requests";
 import { auditValues } from "@/lib/audit";
+import { DECIDED_ISSUE_APPROVAL_STATUSES, type DecidedIssueApprovalStatus } from "@/lib/notifications/bell-items";
 import { isClaimableRequest } from "@/lib/stock/codes";
 import type { IssueQuantity } from "@/lib/stock/issue";
 import type { Actor } from "@/lib/stock/ledger";
@@ -119,7 +121,9 @@ export type RequestPartIssueResult =
  *
  * @param requestId 반출 신청(`stock_requests.id`)
  * @param quantities 줄별 「이번에 줄 수량」. 실행 때 이 값 그대로 `confirmRequest` 에 넘어간다
- * @param reason 왜 이만큼 빼야 하는가 — 결재자가 읽는 글
+ * @param reason 왜 이만큼 빼야 하는가 — 결재자가 읽는 글. 🔵 **선택이라 빈 글자가 올 수 있다**
+ *   (2026-10-15 결정). 칸이 `text NOT NULL DEFAULT ''` 라 그대로 들어가고, 거르는 자리는
+ *   화면·서버 액션 양쪽에서 함께 걷어냈다.
  */
 export async function requestPartIssueApproval(
   requestId: string,
@@ -241,6 +245,10 @@ export type DecidePartIssueResult =
  *
  * 🔴 **내 차례일 때만** 받는다 — 단계 줄을 `(결재건, status = 'REQUESTED', 결재자 = 나)` 로
  * 집는다. 「관리자면 대신 누를 수 있다」는 길을 두지 않는다(규칙 파일의 `mayDecidePartIssueStep`).
+ *
+ * 🔵 `note` 는 **반려 사유**다. 승인에는 한마디를 받지 않으므로(2026-10-15 결정, 화면에 칸이
+ * 없고 서버 액션도 승인일 때는 읽지 않는다) 승인으로 올 때는 언제나 빈 글자다 — 표의
+ * CHECK 도 그것을 허락한다(`APPROVED` 는 `decided_at` 만 본다).
  *
  * 🔴 **반려되면 결재건을 `REJECTED` 로 닫는다.** 되살리는 길을 만들지 않는다 — 결재선 설계가
  * 「반려되면 처음 단계부터 다시 올린다」이기 때문이다(`approval-routes.ts` 머리말). 되살리는
@@ -607,4 +615,163 @@ export async function getPartIssueApproval(approvalId: string): Promise<PartIssu
   }));
 
   return { ...toView(row), steps: stepViews };
+}
+
+/* ------------------------------------------------------------------ */
+/* 6. 조회 하나 더 — 「이 신청에 살아 있는 결재건이 있나」 (11c 가 쓴다)   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 반출 신청 묶음에 달린 **살아 있는** 결재건의 상태를 한 번에 읽는다. 없는 신청은 아예 키가
+ * 없다(빈 배열을 넣지 않는다 — 「잠글 것 없음」은 키가 없는 것으로 말한다).
+ *
+ * 🔴 **신청마다 묻지 않는다.** 부품 요청 관리는 목록을 통째로 그리는 화면이라, 신청마다 물으면
+ * 대기 30건이 질의 30번이 된다 — 이 저장소가 `issuedQuantitiesOf`(`src/lib/stock/requests.ts`)
+ * 에서 쓰는 방식 그대로다. 빈 입력이면 DB 를 부르지 않는다.
+ *
+ * 🔴 **좁히는 묶음은 `OPEN_PART_ISSUE_STATUSES` 다** — 표의 부분 유니크 색인
+ * (`stock_issue_approvals_request_open_uq`)이 보는 그 묶음이고, 잠금 규칙
+ * (`./part-issue-gate.ts` 의 `partIssueLockFor`)이 세는 묶음과도 같아야 한다. 셋이 갈라지면
+ * 조회에 걸려 온 줄을 보고도 「잠글 것 없음」이라 답해 **문이 열린다.**
+ *
+ * 🔵 돌려주는 것이 목록인 까닭은 `partIssueLockFor` 머리말에 있다(색인 때문에 오늘은 0개 아니면
+ *    1개다). 차례를 **오래된 것부터**로 두는 것은 뒷사람이 눈으로 볼 때의 편의일 뿐이다 —
+ *    판정은 차례를 보지 않는다.
+ */
+export async function listOpenPartIssueStatusesByRequest(requestIds: readonly string[]): Promise<Map<string, PartIssueStatus[]>> {
+  const out = new Map<string, PartIssueStatus[]>();
+  const ids = [...new Set(requestIds)];
+  if (ids.length === 0) return out;
+
+  const rows = await db()
+    .select({ requestId: stockIssueApprovals.requestId, status: stockIssueApprovals.status })
+    .from(stockIssueApprovals)
+    .where(and(inArray(stockIssueApprovals.requestId, ids), inArray(stockIssueApprovals.status, [...OPEN_PART_ISSUE_STATUSES])))
+    .orderBy(asc(stockIssueApprovals.requestedAt));
+
+  for (const r of rows) {
+    const list = out.get(r.requestId);
+    if (list) list.push(r.status);
+    else out.set(r.requestId, [r.status]);
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------------ */
+/* 7. 머리말 알림 종이 쓰는 조회 둘 (2026-10-15, 조각 11d)                */
+/* 🔴 위의 함수들은 화면이 쓰고 있다 — 동작을 바꾸지 않고 **더하기만** 한다. */
+/* ------------------------------------------------------------------ */
+
+/**
+ * ⑤ **지금 내 차례인 결재의 요약** — 건수와 가장 오래 기다린 시각.
+ *
+ * 🔴 **집계만 한다.** 종은 모든 화면에 딸려 오고 포털도 1.5초 안에 받아 가야 하므로, 줄을
+ * 통째로 끌어오는 ①(`listPartIssueApprovalsToDecide`)을 종이 그대로 쓰지 않는다 — 종에 필요한
+ * 것은 숫자 둘뿐이다.
+ *
+ * 🔴 **①과 똑같은 묶음을 세야 한다**: (가) 결재건이 `PENDING_APPROVAL` (나) 단계가
+ * `REQUESTED` (다) 그 단계의 `approver_sub` 가 나. 셋이 갈리면 「종에는 N건인데 눌러 보면
+ * 다른 수」가 된다. ①은 (나)를 `leftJoin` 의 ON 에 걸고 여기는 WHERE 에 거는데, 여기는
+ * `innerJoin` 이라 **같은 줄만 남는다**(열린 단계가 없는 건은 애초에 빠진다).
+ *
+ * 🔵 **색인**: `stock_issue_approval_steps_approver_sub_idx` 가 `(approver_sub, status)` 라
+ * (나)·(다) 둘 다 **등호**로 그 색인에 그대로 얹힌다. 거기서 남는 줄은 보통 한 자릿수이고,
+ * 결재건은 기본 키(`stock_issue_approvals.id`)로 하나씩 되짚는다. ①이 타는 길과 같다.
+ *
+ * @param approverSub 🔴 **포털 번호**(`users.auth_sub` · 세션의 `sub`). `users.id` 를 넘기면
+ *   **영원히 0건**이다(①의 주석 — 실제로 있었던 결함이다).
+ */
+export async function summarizePartIssueApprovalsToDecide(approverSub: string): Promise<{ count: number; oldestAt: Date | null }> {
+  const [r] = await db()
+    .select({ n: count(), oldest: min(stockIssueApprovals.requestedAt) })
+    .from(stockIssueApprovalSteps)
+    .innerJoin(stockIssueApprovals, eq(stockIssueApprovals.id, stockIssueApprovalSteps.approvalId))
+    .where(and(eq(stockIssueApprovalSteps.approverSub, approverSub), eq(stockIssueApprovalSteps.status, "REQUESTED"), eq(stockIssueApprovals.status, "PENDING_APPROVAL")));
+  // 드라이버가 timestamptz 를 Date 로 주지만 집계는 글자로 올 수도 있다 — 둘 다 받는다
+  // (`stock/requests.ts` 의 `summarizePendingRequests` 와 같은 모양).
+  const oldest = (r?.oldest ?? null) as Date | string | null;
+  return { count: r?.n ?? 0, oldestAt: oldest === null ? null : oldest instanceof Date ? oldest : new Date(oldest) };
+}
+
+/** 종에 실을 「결정된 내 결재건」 한 줄. 사유 본문·수량은 싣지 않는다 — 화면에서 본다. */
+export interface DecidedPartIssueApprovalRow {
+  id: string;
+  status: DecidedIssueApprovalStatus;
+  summary: string;
+  requestedAt: Date;
+  /** 🔴 반려 줄에만 값이 있다(반려한 결재자). 승인 줄은 `null`. */
+  decidedByName: string | null;
+  /** 🔴 반려 줄에만 값이 있다. 승인 줄은 `null`. */
+  decidedAt: Date | null;
+}
+
+/**
+ * ⑥ **내가 올린 결재건 중 결정된 것** — 승인(아직 실행 전) · 반려(`rejectedSince` 이후).
+ *
+ * - 🔴 **승인에는 기간 제한이 없다**(2026-10-15 사용자 결정). 가려 주는 것은 날짜가 아니라
+ *   **상태**다: 실행되면 `EXECUTED` 가 되어 이 묶음에서 빠지고, 오래 묵은 건일수록 더 보여야 한다.
+ * - 🔴 **반려의 「7일」을 여기에 적지 않는다** — 부르는 쪽이 `rejectedSince` 로 건네준다. 그
+ *   값은 반출 신청 반려 알림과 **똑같이** `notifications/bell-items.ts` 의 `rejectionCutoff`
+ *   하나에서 나온다(`listRejectedRequestsFor` 와 같은 약속).
+ * - 🔴 **반려 시각은 머리에 없다.** `stock_issue_approvals` 에는 결정 시각 칸이 없고, 반려는
+ *   **단계 줄**(`stock_issue_approval_steps.decided_at`)에 적힌다. 그래서 반려된 단계를
+ *   `leftJoin` 한다. 한 결재건에 `REJECTED` 단계는 많아야 하나다 — 반려되는 순간 결재건이
+ *   닫혀(`decidePartIssueApproval`) 다음 단계가 열리지 않기 때문이다. 그래서 줄이 불어나지 않는다.
+ * - 🔵 **승인 줄은 `leftJoin` 이 비어 온다**(반려된 단계가 없으므로). 차례를 `requested_at` 으로
+ *   두는 것이 그래서 자연스럽고, 「언제 올린 건인가」가 종에 적을 수 있는 유일한 시각이다
+ *   (`DecidedIssueApprovalSource.requestedAt` 주석).
+ * - 🔴 `total` 은 **상한에 걸리기 전의 전체 개수**다(배지 숫자가 참말이어야 한다). 창 함수는
+ *   WHERE 뒤·LIMIT 앞에 계산되므로 세는 질의를 따로 보내지 않는다.
+ * - 🔵 **색인**: `stock_issue_approvals_requester_idx` 가 `(requested_by, status)` 라 사람과
+ *   상태 묶음이 그대로 얹힌다. 단계 쪽은 `(approval_id, step_order)` 유니크 색인의 앞칸으로
+ *   되짚는다. 한 사람이 올려 둔 미결·반려 건은 보통 한 자릿수다.
+ *
+ * @param requesterUserId 🔵 **이 시스템의 `users.id`** 다 — 결재건의 `requested_by` 가 그 번호다
+ *   (③ `listMyOpenPartIssueApprovals` 와 같은 열쇠). 포털 번호가 열쇠인 것은 **결재자** 쪽이다.
+ */
+export async function listDecidedPartIssueApprovalsFor(requesterUserId: string, rejectedSince: Date, limit: number): Promise<{ rows: DecidedPartIssueApprovalRow[]; total: number }> {
+  const rejectedStep = alias(stockIssueApprovalSteps, "rejected_step");
+  const rows = await db()
+    .select({
+      id: stockIssueApprovals.id,
+      status: stockIssueApprovals.status,
+      summary: stockRequests.summary,
+      requestedAt: stockIssueApprovals.requestedAt,
+      decidedByName: rejectedStep.approverName,
+      decidedAt: rejectedStep.decidedAt,
+      total: sql<number>`count(*) over ()`.mapWith(Number),
+    })
+    .from(stockIssueApprovals)
+    .innerJoin(stockRequests, eq(stockRequests.id, stockIssueApprovals.requestId))
+    .leftJoin(rejectedStep, and(eq(rejectedStep.approvalId, stockIssueApprovals.id), eq(rejectedStep.status, "REJECTED")))
+    .where(
+      and(
+        eq(stockIssueApprovals.requestedBy, requesterUserId),
+        // 🔴 상태 묶음을 먼저 좁힌다 — 색인 `(requested_by, status)` 를 타는 자리다.
+        //    🔴 묶음을 **여기에 손으로 적지 않는다**: `DECIDED_ISSUE_APPROVAL_STATUSES` 가
+        //    유일한 자리이고, 조립이 같은 목록으로 한 번 더 거른다. 「실행되면 종에서 사라진다」가
+        //    이 한 줄에 걸려 있다 — `EXECUTED` 가 거기 없기 때문이다.
+        inArray(stockIssueApprovals.status, [...DECIDED_ISSUE_APPROVAL_STATUSES]),
+        // 🔴 7일 선은 **반려에만** 걸린다. 승인에 걸면 오래 묵은 건이 조용히 사라진다.
+        or(eq(stockIssueApprovals.status, "APPROVED"), gte(rejectedStep.decidedAt, rejectedSince)),
+      ),
+    )
+    // 🔵 **최신이 위** — 「내가 올린 것이 어떻게 됐나」를 보는 자리다(③과 같은 까닭).
+    //    반려는 결정 시각, 승인은 올린 시각으로 줄을 세운다.
+    .orderBy(desc(sql`coalesce(${rejectedStep.decidedAt}, ${stockIssueApprovals.requestedAt})`), desc(stockIssueApprovals.id))
+    .limit(limit);
+
+  if (rows.length === 0) return { rows: [], total: 0 };
+  return {
+    rows: rows.map((r) => ({
+      id: r.id,
+      // 🔵 WHERE 가 둘로 좁혔지만 drizzle 의 타입은 enum 전체다 — 좁혀 둔다.
+      status: r.status as DecidedIssueApprovalStatus,
+      summary: r.summary,
+      requestedAt: r.requestedAt,
+      decidedByName: r.decidedByName,
+      decidedAt: r.decidedAt,
+    })),
+    total: rows[0].total,
+  };
 }

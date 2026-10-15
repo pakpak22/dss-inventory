@@ -13,7 +13,7 @@ const ADMIN: PortalActor = { id: "u-admin", role: "ADMIN" };
 const found = (actor: PortalActor | null) => async () => actor;
 
 describe("내주는 표", () => {
-  it("종류는 종이 실제로 쓰는 그 둘이다 — 손으로 적지 않는다", () => {
+  it("종류는 종이 실제로 쓰는 그 넷이다 — 손으로 적지 않는다", () => {
     const { kinds } = inventoryNotificationSettings();
     assert.deepEqual(
       kinds.map((k) => k.kind).sort(),
@@ -54,6 +54,38 @@ describe("내주는 표", () => {
         ["ADMIN", true],
       ],
     );
+  });
+
+  /**
+   * 🔴 2026-10-15(조각 11d). 불출 결재 둘이 포털 표에 실린다 — 실리지 않으면 포털 관리 화면에서
+   * 켜고 끌 수조차 없다. 🔵 **세 역할 칸이 모두 ✓ 인 것이 참말이다**: `/approvals` 의 문이
+   * `requireSession` 이라 역할이 자격을 가르지 않고, 실제로 줄을 받는 사람은 질의의 열쇠
+   * (`approver_sub` · `requested_by`)가 가른다.
+   */
+  it("🔴 불출 결재 둘도 표에 실리고, 세 역할이 모두 받는다 — 역할로 가르지 않는다", () => {
+    const { kinds } = inventoryNotificationSettings();
+    for (const kind of [NOTIFICATION_KINDS.issueApprovalToDecide, NOTIFICATION_KINDS.issueApprovalDecided]) {
+      const row = kinds.find((k) => k.kind === kind);
+      assert.ok(row, kind);
+      assert.deepEqual(
+        Object.entries(row.roles).map(([code, cell]) => [code, cell.receives]),
+        [
+          ["VIEWER", true],
+          ["STAFF", true],
+          ["ADMIN", true],
+        ],
+        kind,
+      );
+      assert.notEqual(row.label, "", kind);
+      assert.notEqual(row.description, "", kind);
+    }
+  });
+
+  it("🔴 승인 줄에 기간 제한이 없다는 것이 설명에 적혀 있다 — 반려만 7일이다", () => {
+    const decided = inventoryNotificationSettings().kinds.find((k) => k.kind === NOTIFICATION_KINDS.issueApprovalDecided);
+    assert.ok(decided);
+    assert.ok(decided.description.includes("기간 제한 없이"), decided.description);
+    assert.ok(decided.description.includes("7일"), decided.description);
   });
 
   it("지금 값과 기본값이 같다 — 바꾼 적이 없으니 그것이 참말이다", () => {

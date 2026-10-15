@@ -2,6 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { isPartIssueApprovalRouteInForce, PART_ISSUE_APPROVAL_REQUIRED_MESSAGE } from "@/lib/approval/part-issue-gate";
+import { getCurrentApprovalRoute } from "@/lib/approval/queries";
 import { roleAtLeast } from "@/lib/auth/role";
 import { requireRole } from "@/lib/auth/session";
 import { ADMIN_ONLY_TYPES, needsConfirmation, sheetNoText, todaySeoul } from "@/lib/stock/codes";
@@ -135,11 +137,35 @@ export interface RequestActionState {
  * 신청 확인 = 불출. 🔵 줄별 「이번에 줄 수량」을 **받을 자리**가 있다 (2026-10-14, 조각 4b).
  * 🔵 조각 4d 에서 화면이 그 자리를 쓴다 — 다만 **칸을 다 비우면 아무것도 안 보낸다.**
  *    안 보내면 `quantities` 가 `null` 이라 **남은 수량 전부**이고, 그것이 조각 4b 까지의 동작 그대로다.
+ *
+ * ── 🔴 「부품 불출」 승인 절차가 쓰이고 있으면 이 길은 막힌다 (2026-10-15, 조각 11c) ──
+ * 화면만 바꾸면 **옛 화면을 띄워 둔 탭에서 그대로 나간다.** 그래서 서버에서도 같은 판정으로
+ * 한 번 더 막는다.
+ *
+ * 🔴 **문은 여기(서버 액션)에만 단다 — `confirmRequest` 안에 달면 안 된다.** 그 함수를 부르는
+ *    곳이 둘이기 때문이다:
+ *      ① 사람이 [확인]을 누르는 길 = 이 액션
+ *      ② **결재를 다 받은 건을 실행하는 길** = `executePartIssueApproval`
+ *    ②까지 막으면 **결재를 다 받고도 부품이 영영 안 나간다.** ②는 이 액션을 지나지 않고
+ *    `src/lib/stock/requests.ts` 의 `confirmRequest` 를 바로 부르므로, 문을 겉에만 달면 두 길이
+ *    깨끗이 갈린다(A/S 도 같은 모양이다 — 겉 함수에만 문을 달고 실행은 안쪽 `*Core` 를 직접
+ *    부른다). 판정과 문구가 적힌 곳은 `src/lib/approval/part-issue-gate.ts` 하나다.
+ *
+ * 🔵 **판은 누를 때마다 다시 읽는다.** 미리 읽어 두면 그 사이 관리자가 절차를 만든 순간에 문이
+ *    열린 채로 재고가 나간다. 질의 하나가 느는 것은 관리자가 [확인]을 누를 때뿐이다.
+ *    🔵 트랜잭션 **밖**이라 아주 좁은 틈은 남는다(읽은 뒤 `confirmRequest` 가 집기 전에 절차가
+ *    켜지는 경우). 그 틈은 `confirmRequest` 안으로 끌고 들어가야 없앨 수 있는데, 그러면 ②도
+ *    같은 문을 지나게 되어 **더 나쁜 것을 얻는다.** 틈이 열리는 조건은 「관리자가 절차를 켜는
+ *    바로 그 순간에 다른 관리자가 [확인]을 누른다」이고, 그때 잃는 것은 **그 한 건이 결재 없이
+ *    나가는 것**뿐이다(원장 기록은 남는다).
  */
 export async function confirmRequestAction(_prev: RequestActionState, formData: FormData): Promise<RequestActionState> {
   const session = await requireRole("ADMIN", "/entries");
   const id = String(formData.get("requestId") ?? "");
   if (!id) return { error: "신청이 정해지지 않았습니다." };
+  if (isPartIssueApprovalRouteInForce(await getCurrentApprovalRoute("PART_ISSUE"))) {
+    return { error: PART_ISSUE_APPROVAL_REQUIRED_MESSAGE };
+  }
   const parsed = parseIssueQuantities(formData.get("quantities"));
   if (!parsed.ok) return { error: parsed.message };
   const note = String(formData.get("issueNote") ?? "")

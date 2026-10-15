@@ -15,6 +15,29 @@ describe("돌아온 자리에서 하는 한 줄 (request-notice)", () => {
     assert.equal(requestDecisionNotice({ held: "0" }, "requests"), null);
   });
 
+  /**
+   * [불출 신청]으로 결재를 올린 뒤 (2026-10-15, 조각 11c).
+   * 🔴 지금까지 그 자리는 [확인]이었고 누르면 부품이 나갔다 — **「아직 안 빠졌다」를 말하지 않으면** 사람은 나간 줄 안다.
+   */
+  it("🔴 결재를 올린 뒤에는 「아직 재고가 안 빠졌다」와 「어디로 가면 되는지」를 말한다", () => {
+    const n = requestDecisionNotice({ issueRequested: "1" }, "requests");
+    assert.ok(n);
+    assert.equal(n.tone, "info");
+    assert.ok(n.text.includes("아직 재고는 빠지지 않았습니다"));
+    assert.ok(n.text.includes("승인 요청건"));
+  });
+
+  it("🔴 결재할 사람이 없어 **바로 승인된** 건은 다른 말을 한다 — 아니면 아무도 [실행]을 누르지 않는다", () => {
+    const auto = requestDecisionNotice({ issueRequested: "1", autoApproved: "1" }, "requests");
+    const normal = requestDecisionNotice({ issueRequested: "1" }, "requests");
+    assert.ok(auto);
+    assert.ok(normal);
+    assert.notEqual(auto.text, normal.text);
+    assert.equal(auto.tone, "warn");
+    assert.ok(auto.text.includes("바로 승인됐습니다"));
+    assert.ok(auto.text.includes("실행"));
+  });
+
   it("반려·마감·보류 해제·신청 취소는 두 화면이 같은 글자로 말한다", () => {
     for (const tag of ["rejected", "closed", "holdReleased", "cancelled"]) {
       const atEntries = requestDecisionNotice({ [tag]: "1" }, "entries");

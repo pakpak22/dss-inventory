@@ -99,6 +99,15 @@ export function AppHeader({ user, portalUrl, services, currentServiceId, isAdmin
                 <PendingBadge count={pendingRequests} />
               </Link>
             )}
+            {/* 🔴 「승인 요청건」은 **로그인한 모두**에게 보인다 (2026-10-15, 조각 11b) — 결재자는 역할과 무관하게
+                누구나 될 수 있고(결재선은 A/S 명부에서 고른다), 역할로 가리면 결재선에 든 보기 권한자가 자기
+                차례를 못 찾는다. 막는 자리는 그 화면의 requireSession 과 각 서버 액션이다.
+                🔴 **배지(「N건」)를 달지 않는다.** 머리말은 모든 화면에 딸려 오므로 질의가 하나 늘면 **모든 화면이**
+                그만큼 느려진다. 「내가 결재할 건이 있다」를 알리는 것은 **알림 종의 일**이고, 종에 싣는 것은
+                다음 조각이다(종은 이미 한 번에 모아 읽는 자리라 질의가 늘지 않는다). */}
+            <Link href="/approvals" className={NAV_LINK}>
+              승인 요청건
+            </Link>
             {isAdmin && (
               /* 🔵 「변경 이력」(/audit)은 설정의 탭으로 옮겼다 (2026-10-15 사용자 요청). 주소는 그대로다 —
                  옮기면 열려 있는 탭·즐겨찾기가 깨지고 얻는 것이 없다. */

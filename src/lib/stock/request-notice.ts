@@ -55,6 +55,21 @@ const UNVERIFIED: Record<RequestNoticeScreen, string> = {
  * (서버 액션이 한 번에 하나만 붙이므로 둘이 겹칠 일은 없다 — 겹치면 위에서부터 하나만 보인다.)
  */
 export function requestDecisionNotice(sp: Params, screen: RequestNoticeScreen): RequestNotice | null {
+  /**
+   * [불출 신청]으로 **결재를 올린** 뒤 (2026-10-15, 조각 11c).
+   *
+   * 🔴 **「재고가 아직 안 빠졌다」를 반드시 말한다.** 지금까지 그 자리는 [확인]이었고 누르면 부품이 나갔다 —
+   *    같은 자리에서 아무 말 없이 돌아오면 사람은 나간 줄 안다.
+   * 🔴 **갈 곳을 말한다.** 올린 건이 보이는 자리는 「승인 요청건」(`/approvals`)뿐이다. 막다른 길을 만들지 않는다.
+   * 🔴 **곧바로 승인된 건은 다른 말을 한다** — 결재선이 전부 신청자 본인이면 기다릴 사람이 없어 그 자리에서
+   *    승인된다(`planPartIssueApproval` 의 `AUTO_APPROVED`). 「올렸습니다」로만 말하면 결재를 기다리는 줄 알고
+   *    아무도 [실행]을 누르지 않는다.
+   */
+  if (one(sp.issueRequested)) {
+    return one(sp.autoApproved)
+      ? { tone: "warn", text: "불출 신청을 올렸습니다. 결재할 분이 없어 바로 승인됐습니다 — 「승인 요청건」 화면에서 [실행]을 눌러야 부품이 나갑니다." }
+      : { tone: "info", text: "불출 신청을 올렸습니다. 아직 재고는 빠지지 않았습니다 — 결재가 끝나면 「승인 요청건」 화면에서 실행합니다." };
+  }
   if (one(sp.rejected)) return { tone: "info", text: "신청을 반려했습니다." };
   if (one(sp.closed)) return { tone: "info", text: "남은 수량을 마감했습니다. 이미 나간 기록과 수량은 그대로입니다." };
   if (one(sp.held)) {

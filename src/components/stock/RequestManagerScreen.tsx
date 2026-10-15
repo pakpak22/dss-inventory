@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { RequestActions, type RequestActionLine, type RequestActionStatus } from "./RequestActions";
 import type { RequestStatus } from "@/db/schema/stock-requests";
+import { partIssueConfirmLabel, type PartIssueLock } from "@/lib/approval/part-issue-gate";
 import { OWNER_LABEL, formatQuantity, type Owner } from "@/lib/parts/codes";
 import { ENTRY_TYPE_LABEL, REQUEST_STATUS_LABEL, REQUEST_STATUS_ORDER, isClaimableRequest, requestStatusBadge, requestStatusLabel, type EntryType } from "@/lib/stock/codes";
 import type { RequestNotice } from "@/lib/stock/request-notice";
@@ -197,8 +198,29 @@ function RequestItems({ lines }: { lines: readonly ManagerRequestLine[] }) {
  *    **[신청 취소]는 `requireRole("STAFF", …)` 에 더해 `cancelRequest` 의 WHERE 가
  *    「본인이 낸, 아직 PENDING 인 것」만** 받는다(`src/lib/stock/requests.ts`). 여기를 고쳐 불러도 남의 신청은
  *    거둬지지 않는다. 화면 조건을 「막는 자리」로 읽지 않게 적어 둔다.
+ *
+ * @param approvalRequired 「부품 불출」 승인 절차가 **지금 쓰이고 있는가** (2026-10-15, 조각 11c).
+ * @param issueLocks 살아 있는 결재건이 붙들고 있는 신청 → 그 까닭. **잠긴 신청만 들어 있다.**
+ *
+ * 🔴 **이 둘은 서버가 판정해 내려보낸 값이다**(`src/app/(app)/requests/page.tsx`). 화면이 다시 판정하지
+ *    않는다 — 두 벌이 되면 「단추는 보이는데 누르면 거절」이나 그 반대가 되고, 후자는 화면에 아무 표시도
+ *    남기지 않아 더 나쁘다(A/S 원본 `PartRequestManagerScreen` 의 까닭 그대로).
  */
-export function RequestManagerScreen({ requests, notices, isAdmin, currentUserId }: { requests: ManagerRequestRow[]; notices: RequestNotice[]; isAdmin: boolean; currentUserId: string }) {
+export function RequestManagerScreen({
+  requests,
+  notices,
+  isAdmin,
+  currentUserId,
+  approvalRequired,
+  issueLocks,
+}: {
+  requests: ManagerRequestRow[];
+  notices: RequestNotice[];
+  isAdmin: boolean;
+  currentUserId: string;
+  approvalRequired: boolean;
+  issueLocks: Record<string, PartIssueLock>;
+}) {
   // 🔵 거르기는 **화면에서** 한다(A/S 원본과 같고, 이 저장소의 `PartsList` 관례와도 같다) — 목록이 한 번에 다 와 있다.
   const [statusFilter, setStatusFilter] = useState<RequestStatus | "ALL">("ALL");
   const filtered = requests.filter((r) => statusFilter === "ALL" || r.status === statusFilter);
@@ -242,8 +264,10 @@ export function RequestManagerScreen({ requests, notices, isAdmin, currentUserId
       {/* 🔵 안내도 갈린다 — 신청자에게 없는 단추의 쓰는 법을 적어 두면 거짓이 된다 (2026-10-15). */}
       {isAdmin ? (
         <p className="text-xs text-zinc-500">
-          올라온 반출 신청을 전부 봅니다(최신이 위). <b>[확인]</b>에서 줄별로 이번에 내줄 수량을 정하고, 더 줄 것이 없으면 <b>[마감]</b>으로 닫습니다. 지금 처리하지 않을 것은 <b>[보류]</b>로 사유를 적어 멈춰
-          둡니다 — 보류한 신청은 목록에 그대로 남고 머리말의 「대기」 숫자에서만 빠집니다.
+          올라온 반출 신청을 전부 봅니다(최신이 위). <b>[{partIssueConfirmLabel(approvalRequired)}]</b>에서 줄별로 이번에 내줄 수량을 정하고, 더 줄 것이 없으면 <b>[마감]</b>으로 닫습니다. 지금 처리하지
+          않을 것은 <b>[보류]</b>로 사유를 적어 멈춰 둡니다 — 보류한 신청은 목록에 그대로 남고 머리말의 「대기」 숫자에서만 빠집니다.
+          {/* 🔴 절차가 쓰이고 있으면 **그 자리에서 재고가 빠지지 않는다** — 단추 이름만 바뀌면 사람은 눌러 보고 나서야 안다. */}
+          {approvalRequired ? <> 지금은 부품 불출 승인 절차가 있어 <b>[불출 신청]</b>이 결재를 올리고, 결재가 끝난 뒤 「승인 요청건」 화면에서 실행합니다.</> : null}
         </p>
       ) : (
         <p className="text-xs text-zinc-500">
@@ -321,7 +345,16 @@ export function RequestManagerScreen({ requests, notices, isAdmin, currentUserId
                               `RequestActions` 는 빈 상자만 그린다. 「처리할 것 없음」은 처리하는 사람(관리자)에게만 뜻이 있는 말이라
                               신청자에게는 빈 칸으로 둔다. */}
                           {actionStatus !== null && (isAdmin || canCancel) ? (
-                            <RequestActions requestId={r.id} status={actionStatus} lines={r.lines} canDecide={isAdmin} canCancel={canCancel} />
+                            /* 🔵 잠금은 **잠긴 신청만** 내려온다 — 없으면 `null` 이고 그때 [확인] 자리는 지금까지 그대로다. */
+                            <RequestActions
+                              requestId={r.id}
+                              status={actionStatus}
+                              lines={r.lines}
+                              canDecide={isAdmin}
+                              canCancel={canCancel}
+                              approvalRequired={approvalRequired}
+                              issueLock={issueLocks[r.id] ?? null}
+                            />
                           ) : isAdmin ? (
                             <span className="text-xs text-zinc-400">처리할 것 없음</span>
                           ) : null}

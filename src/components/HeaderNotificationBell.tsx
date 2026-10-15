@@ -43,7 +43,10 @@ import { listInventoryNotifications } from "@/lib/notifications/queries";
  * ============================================================================
  */
 export async function HeaderNotificationBell({ userId, role, subject }: { userId: string; role: Role; subject: string }) {
-  const [mine, others] = await Promise.all([listInventoryNotifications({ id: userId, role }), fetchPortalNotifications(subject)]);
+  // 🔴 `subject` 는 **포털 번호**(`session.user.authSub`)다. 포털에 남의 알림을 물을 때 쓰던
+  //    그 값을 우리 질의에도 그대로 넘긴다 — 「지금 내 차례인 불출 결재」가 그 번호로만 갈린다
+  //    (notifications/queries.ts 의 `NotificationViewer.sub`). **users 를 다시 읽지 않는다.**
+  const [mine, others] = await Promise.all([listInventoryNotifications({ id: userId, role, sub: subject }), fetchPortalNotifications(subject)]);
 
   const items = [...mine.items, ...others.items];
 
