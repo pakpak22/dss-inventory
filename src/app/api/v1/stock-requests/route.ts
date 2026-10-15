@@ -3,11 +3,11 @@ import { NextResponse, type NextRequest } from "next/server";
 import { db } from "@/db/client";
 import { parts } from "@/db/schema/parts";
 import { NO_STORE, checkApiToken, checkApiWriteToken } from "@/lib/api/auth";
-import { buildStatusResponse, parseStatusKeys } from "@/lib/api/stock-request-status";
+import { buildIntakeStatusResponse, buildStatusResponse, parseStatusQuery } from "@/lib/api/stock-request-status";
 import { buildApiUseRequest, parseApiStockRequest, resolveApiRequestLines, toApiStockRequest } from "@/lib/api/stock-requests";
 import { findActiveUserByAuthSub } from "@/lib/auth/users";
 import { todaySeoul } from "@/lib/stock/codes";
-import { createRequest, listRequestsByExternalKeys } from "@/lib/stock/requests";
+import { createRequest, listRequestsByExternalKeys, listRequestsByIntakeNumbers } from "@/lib/stock/requests";
 
 /**
  * POST /api/v1/stock-requests — A/S 가 올리는 **부품 반출 신청**. 설명은 API.md 4절.
@@ -76,29 +76,45 @@ export async function POST(request: NextRequest) {
 }
 
 /**
- * GET /api/v1/stock-requests?key=…&key=… — A/S 가 **제가 올린 신청의 지금 상태를 물어 간다**.
+ * GET /api/v1/stock-requests?key=…  또는  ?intake=… — A/S 가 **신청이 지금 어떻게 됐는지 물어 간다**.
  * 설명은 API.md 4-7절, 규칙과 모양은 전부 `src/lib/api/stock-request-status.ts`(순수 함수).
  *
  * 🔴 **읽기 토큰이다**(`INVENTORY_API_TOKEN`). 바로 위 POST 와 **같은 주소인데 토큰이 다르다** — 가르는 것은
  *    주소가 아니라 **하는 일**이다. 읽기 토큰은 부품 목록을 가져가는 여러 시스템이 나눠 쓰는 값이라 재고를
  *    움직이는 신청을 만들 수 없어야 하고, 거꾸로 **읽기만 하는 이 통로에 쓰기 토큰을 요구할 까닭은 없다.**
  *    (쓰기 토큰으로 두드리면 401 이다 — 두 값이 다르기 때문이고, 그것을 시험이 지킨다.)
- * 🔴 **열쇠는 A/S 쪽 요청 번호**(`requestKey`)다. 우리 내부 번호로 묻게 하지 않는다.
- * 🔴 **못 찾은 열쇠를 조용히 빠뜨리지 않는다** — 응답의 `notFound` 에 그대로 적어 돌려준다.
+ * 🔵 **묻는 법이 둘이다** (2026-10-15 에 인수번호를 더했다. 열쇠로 묻는 길은 한 글자도 바뀌지 않았다):
+ *   - `key` **A/S 쪽 요청 번호**(`requestKey`). 물어본 차례 그대로, 못 찾은 열쇠는 `notFound` 에.
+ *   - `intake` **인수번호**. 🔴 그 수리 건의 반출 신청을 **누가 올렸든** 최근 것부터. A/S 는 제 요청 번호를
+ *     저장하지 않아서(2026-10-15 사용자 결정) 열쇠로만 물을 수 있으면 되읽을 길이 사실상 없다.
+ * 🔴 **둘을 함께 보내면 400** 이고, **둘 다 없어도 400** 이다(까닭은 `parseStatusQuery` 주석).
  *
- * 여기서 하는 일은 둘뿐이다: 열쇠 읽기 · 그 열쇠들로 신청 되읽기.
+ * 여기서 하는 일은 둘뿐이다: 묻는 법 가리기 · 그것으로 신청 되읽기.
  */
 export async function GET(request: NextRequest) {
   const denied = checkApiToken(request);
   if (denied) return denied;
 
-  const parsed = parseStatusKeys(request.nextUrl.searchParams);
+  const parsed = parseStatusQuery(request.nextUrl.searchParams);
   if (!parsed.ok) return bad(parsed.message);
+  const generatedAt = new Date().toISOString();
 
-  const found = await listRequestsByExternalKeys(parsed.keys);
+  if (parsed.query.mode === "intake") {
+    // 🔵 열쇠가 없는 신청(재고 관리에서 직접 올린 것)도 함께 온다 — 차례와 `notFound` 는 순수 함수가 정한다.
+    const rows = await listRequestsByIntakeNumbers(parsed.query.intakeNumbers);
+    return NextResponse.json(
+      buildIntakeStatusResponse(
+        rows.map((r) => ({ requestKey: r.externalKey, request: r.request })),
+        generatedAt,
+      ),
+      { headers: NO_STORE },
+    );
+  }
+
+  const found = await listRequestsByExternalKeys(parsed.query.keys);
   // 🔵 찾은 것을 열쇠로 묶어 순수 함수에 넘긴다 — 「물어본 차례 그대로」와 「못 찾은 열쇠」를 거기서 가린다.
   const byKey = new Map(found.map((f) => [f.externalKey, f.request]));
-  return NextResponse.json(buildStatusResponse(parsed.keys, byKey, new Date().toISOString()), { headers: NO_STORE });
+  return NextResponse.json(buildStatusResponse(parsed.query.keys, byKey, generatedAt), { headers: NO_STORE });
 }
 
 function bad(message: string) {

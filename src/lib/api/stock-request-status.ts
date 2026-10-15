@@ -1,5 +1,5 @@
 import type { RequestStatus } from "@/db/schema/stock-requests";
-import { isClosedRequest, requestStatusLabel, type EntryType } from "@/lib/stock/codes";
+import { INTAKE_NUMBER_RE, isClosedRequest, requestStatusLabel, type EntryType } from "@/lib/stock/codes";
 import { MAX_KEY } from "./stock-requests";
 
 /**
@@ -21,6 +21,14 @@ import { MAX_KEY } from "./stock-requests";
  *     가릴 수 없다 — 돌아온 줄 수만 세어 보고 「덜 왔네」로 끝난다.
  *  5. 🔴 **마감은 상태값이 아니라 세어서 가린다.** 규칙이 적힌 자리는 `lib/stock/codes.ts` 의
  *     `isClosedRequest` 하나뿐이고, 여기서도 **그 함수를 그대로 부른다**(손으로 다시 적으면 언젠가 갈린다).
+ *
+ * 🔵 **묻는 법이 둘이다 (2026-10-15 에 인수번호를 더했다).**
+ *    열쇠(`key`)로 묻는 길은 위 그대로이고, **인수번호(`intake`)로 묻는 길**이 옆에 섰다. 까닭은 하나다 —
+ *    🔴 **A/S 는 열쇠를 들고 있지 않다.** 「A/S 는 재고에 관한 것을 제 표에 저장하지 않는다」가 설계라
+ *    (2026-10-15 사용자 결정), 올릴 때 지어 보낸 `requestKey` 를 저쪽 어디에도 적어 두지 않는다. 열쇠로만
+ *    물을 수 있으면 **되읽는 통로가 사실상 닫혀 있는 것**과 같다. 저쪽이 언제나 아는 값은 **인수번호**이고,
+ *    우리 신청은 그 번호를 이미 들고 있다(`payload.intakeNumber`).
+ *    🔵 그래서 이 통로는 「누가 올렸든 **그 수리 건에 나간 부품**」을 돌려준다 — 아래 `buildIntakeStatusResponse`.
  */
 
 /**
@@ -65,6 +73,115 @@ export function parseStatusKeys(params: URLSearchParams): ParseStatusKeysResult 
   return { ok: true, keys };
 }
 
+/* ------------------------------------------------------------------ */
+/* 묻는 법 둘째 — **인수번호로** (2026-10-15)                            */
+/* 🔴 위의 열쇠 길은 한 글자도 바꾸지 않았다. 더하기만 한다.              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 인수번호를 받는 쿼리 이름.
+ *
+ * 🔵 올릴 때의 칸 이름은 `intakeNumber` 인데(API.md 4-2절) 여기서는 **`intake`** 다 — 이 통로가 이미
+ *    `requestKey` 를 `key` 로 줄여 받고 있어서, 한 통로 안에서 한쪽만 긴 이름을 쓰면 그것이 더 헷갈린다.
+ *    주소에 여러 번 붙는 값이기도 하다(`?intake=D260701&intake=D260702`).
+ */
+export const INTAKE_PARAM = "intake";
+
+/**
+ * 한 번에 물을 수 있는 인수번호 수 — **10**. 🔴 열쇠 상한(50)과 **일부러 다른 눈금**이다.
+ *
+ * 🔴 까닭: **열쇠 하나는 신청 하나지만, 인수번호 하나는 신청 여러 건이다.** 한 수리 건에 반출 신청이 몇 건
+ *    붙는지는 우리가 정하는 값이 아니라서, 열쇠와 같은 50을 쓰면 한 번에 읽는 양에 뚜껑이 없어진다
+ *    (50 × 신청 N건 × 부품 50줄).
+ * 🔵 10 으로 잡으면 한 수리 건에 신청이 다섯 건씩 붙어도 열쇠 50개와 비슷한 양이다. 그리고 이 통로를 쓰는
+ *    화면(수리 건 상세)은 **한 번에 수리 건 하나**를 열므로 보통은 1 이다 — 10 은 「건 목록에서 한꺼번에
+ *    물어보고 싶다」가 생겼을 때의 여유이지, 지금 필요해서 둔 숫자가 아니다.
+ */
+export const MAX_STATUS_INTAKES = 10;
+
+export type ParseStatusIntakesResult = { ok: true; intakeNumbers: string[] } | { ok: false; message: string };
+
+/**
+ * `?intake=D260701&intake=D260702` 를 읽는다.
+ *
+ * 🔴 **모양 검사는 이 저장소의 그 정규식을 그대로 쓴다**(`lib/stock/codes.ts` 의 `INTAKE_NUMBER_RE`).
+ *    여기서 새로 적으면 화면·올리는 통로·엑셀 가져오기가 보는 모양과 갈린다.
+ * 🔵 **대문자로 올려서 본다** — 올리는 통로도 화면 폼도 저장 전에 대문자로 바꾸므로(`lib/api/stock-requests.ts`
+ *    의 `parseApiStockRequest`, `lib/stock/form.ts`), 소문자로 물었다고 못 찾으면 거짓말이 된다.
+ * 🔴 **모양이 틀리면 거절한다** — 열쇠와 다른 점이다. 열쇠는 저쪽이 지은 글자라 우리가 옳고 그름을 모르지만,
+ *    인수번호는 **모양이 정해진 값**이다. 조용히 못 찾은 것으로 돌려주면 「없는 건」인지 「오타」인지 못 가린다.
+ * 🔵 빈 값은 없는 것으로 보고, 같은 번호가 두 번 오면 한 번만 묻는다(열쇠와 같은 관례).
+ */
+export function parseStatusIntakes(params: URLSearchParams): ParseStatusIntakesResult {
+  const intakeNumbers: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of params.getAll(INTAKE_PARAM)) {
+    const value = raw.trim().toUpperCase();
+    if (!value) continue;
+    if (!INTAKE_NUMBER_RE.test(value)) {
+      return { ok: false, message: `${INTAKE_PARAM} 는 인수번호(D 와 숫자 6자리, 예: D260701)입니다. 받은 값: ${JSON.stringify(raw)}` };
+    }
+    if (seen.has(value)) continue;
+    seen.add(value);
+    intakeNumbers.push(value);
+  }
+  if (intakeNumbers.length === 0) {
+    return { ok: false, message: `${INTAKE_PARAM} 에 인수번호를 하나 이상 보내십시오. 예: ?${INTAKE_PARAM}=D260701` };
+  }
+  if (intakeNumbers.length > MAX_STATUS_INTAKES) {
+    return { ok: false, message: `인수번호는 한 번에 ${MAX_STATUS_INTAKES}개까지입니다 (받은 인수번호: ${intakeNumbers.length}개). 인수번호 하나에 신청이 여러 건 걸리므로 열쇠(${MAX_STATUS_KEYS}개)보다 적습니다. 나누어 보내십시오.` };
+  }
+  return { ok: true, intakeNumbers };
+}
+
+/** 어느 길로 물었나. 🔵 돌려주는 모양은 둘이 같고(아래 `ApiRequestStatusResponse`), 가르는 것은 **읽는 법**뿐이다. */
+export type StatusQuery = { mode: "key"; keys: string[] } | { mode: "intake"; intakeNumbers: string[] };
+
+export type ParseStatusQueryResult = { ok: true; query: StatusQuery } | { ok: false; message: string };
+
+/** 그 이름으로 **빈 값이 아닌** 값이 하나라도 왔는가. 🔵 섞어 보냈는지를 **다듬기 전에** 가리는 데 쓴다. */
+function sentAny(params: URLSearchParams, name: string): boolean {
+  return params.getAll(name).some((v) => v.trim() !== "");
+}
+
+/**
+ * 묻는 법을 가린다 — **열쇠로** 또는 **인수번호로**.
+ *
+ * 🔴 **둘을 함께 보내면 거절한다**(400). 까닭 셋이다:
+ *   1. **돌려줄 차례가 모호해진다.** 열쇠로 물으면 **물어본 차례 그대로**(저쪽 목록과 짝짓는 길)이고,
+ *      인수번호로 물으면 **최근 신청이 위**(그 수리 건을 훑는 화면)다. 섞으면 어느 차례를 줄지 정할 수 없고,
+ *      어느 쪽으로 정하든 부르는 쪽의 한 가지 기대는 말없이 깨진다.
+ *   2. **`notFound` 의 뜻이 섞인다.** 그 칸은 열쇠에만 뜻이 있다(아래 `buildIntakeStatusResponse` 주석).
+ *      함께 받으면 한 응답 안에서 그 칸이 반만 참말이 된다.
+ *   3. **같은 신청이 두 번 실린다.** 열쇠로 물은 신청이 인수번호에도 걸리면 한 화면에 같은 줄이 둘 뜬다.
+ * 🔵 섞였는지는 **다듬기 전에** 본다 — 인수번호 모양이 틀린 채로 섞여 왔을 때 「모양이 틀렸다」가 아니라
+ *    「섞어 보냈다」를 말해 주어야 부르는 쪽이 진짜 잘못을 고친다.
+ * 🔴 **둘 다 없으면 지금까지처럼 400 이다.** 조건이 빠졌을 때 조용히 전부를 내주지 않는다.
+ */
+export function parseStatusQuery(params: URLSearchParams): ParseStatusQueryResult {
+  const byKey = sentAny(params, "key");
+  const byIntake = sentAny(params, INTAKE_PARAM);
+
+  if (byKey && byIntake) {
+    return {
+      ok: false,
+      message: `key 와 ${INTAKE_PARAM} 를 함께 보낼 수 없습니다. 한 번에 한 가지로만 물으십시오 — 열쇠는 물어본 차례 그대로, 인수번호는 최근 신청이 위로 돌아가서 섞으면 차례의 뜻이 사라집니다.`,
+    };
+  }
+  if (byIntake) {
+    const parsed = parseStatusIntakes(params);
+    return parsed.ok ? { ok: true, query: { mode: "intake", intakeNumbers: parsed.intakeNumbers } } : parsed;
+  }
+  if (byKey) {
+    const parsed = parseStatusKeys(params);
+    return parsed.ok ? { ok: true, query: { mode: "key", keys: parsed.keys } } : parsed;
+  }
+  return {
+    ok: false,
+    message: `무엇을 물을지 보내십시오 — key 에 A/S 쪽 요청 번호(requestKey), 또는 ${INTAKE_PARAM} 에 인수번호입니다. 예: ?key=AS-REQ-2026-0007 · ?${INTAKE_PARAM}=D260701`,
+  };
+}
+
 /**
  * 줄 하나 — **요청 수량과 이미 나간 수량**.
  *
@@ -89,10 +206,26 @@ export interface ApiRequestStatusLine {
  *    (API.md 머리말).
  */
 export interface ApiRequestStatus {
-  /** 물어본 열쇠를 **그대로** 돌려준다 — 부르는 쪽이 제 목록과 짝지을 수 있게 */
-  requestKey: string;
+  /**
+   * 물어본 열쇠를 **그대로** 돌려준다 — 부르는 쪽이 제 목록과 짝지을 수 있게.
+   *
+   * 🔴 **`null` 일 수 있다** (2026-10-15, 인수번호로 묻는 길이 생기면서). 인수번호로 물으면 **재고 관리에서
+   *    직접 올린 신청**도 함께 돌아가는데, 그런 신청에는 A/S 쪽 요청 번호가 아예 없다. 지어내지 않는다.
+   * 🔵 **열쇠로 물었을 때는 언제나 글자**다 — 열쇠가 적힌 신청만 걸리기 때문이다.
+   */
+  requestKey: string | null;
   /** 재고 쪽 신청 번호. 올릴 때 돌려받은 `request.id` 와 같은 값이다(사람에게 물을 때 쓴다) */
   id: string;
+  /**
+   * 이 신청이 붙어 있는 **인수번호** (2026-10-15 에 더한 칸).
+   *
+   * 🔴 인수번호 **여러 개를 한 번에** 물을 수 있어서 둔 칸이다 — 없으면 돌아온 줄이 어느 수리 건의 것인지
+   *    부르는 쪽이 가릴 수 없다(신청 번호로는 못 가린다. 그 짝을 아는 것이 우리뿐이다).
+   * 🔵 열쇠로 물었을 때도 **같이 간다** — 돌려주는 모양을 둘로 가르지 않으려는 것이다(머리말).
+   *    반출 신청은 인수번호가 필수라 A/S 에서 올라온 신청에는 언제나 들어 있다. 재고 관리 화면에서
+   *    「수리 건 없음」으로 적은 신청은 빈 글자다.
+   */
+  intakeNumber: string;
   type: EntryType;
   /**
    * 상태 코드와 **사람이 읽을 글자**.
@@ -140,6 +273,8 @@ export interface RequestStatusSource {
   id: string;
   type: EntryType;
   status: RequestStatus;
+  /** 🔵 `PendingRequestRow` 가 이미 들고 있는 칸이다(USE 가 아니면 빈 글자). 위 `ApiRequestStatus.intakeNumber` */
+  intakeNumber: string;
   requestedAt: string;
   lines: readonly { partNo: number | null; partName: string; quantity: number; issued: number }[];
   decidedByName: string | null;
@@ -148,12 +283,13 @@ export interface RequestStatusSource {
   hold: { reason: string; heldByName: string; heldAt: string } | null;
 }
 
-export function toApiRequestStatus(requestKey: string, r: RequestStatusSource): ApiRequestStatus {
+export function toApiRequestStatus(requestKey: string | null, r: RequestStatusSource): ApiRequestStatus {
   // 🔴 마감 판정은 **이 저장소의 그 함수**를 그대로 부른다 (머리말 5번). 「CONFIRMED 인데 덜 나갔다」를 손으로 적지 않는다.
   const closed = isClosedRequest(r.status, r.lines);
   return {
     requestKey,
     id: r.id,
+    intakeNumber: r.intakeNumber,
     type: r.type,
     status: { code: r.status, label: requestStatusLabel(r.status, closed) },
     closed,
@@ -190,4 +326,38 @@ export function buildStatusResponse(keys: readonly string[], found: ReadonlyMap<
     else notFound.push(key);
   }
   return { generatedAt, count: requests.length, requests, notFound };
+}
+
+/** 인수번호로 찾은 신청 한 줄 — 🔵 **열쇠가 없을 수 있다**(재고 관리 화면에서 직접 올린 신청). */
+export interface IntakeStatusRow {
+  requestKey: string | null;
+  request: RequestStatusSource;
+}
+
+/**
+ * 인수번호로 찾은 신청을 돌려줄 모양으로 빚는다.
+ *
+ * 🔴 **차례는 신청한 시각이 늦은 것이 위**다. 이 통로를 쓰는 자리가 **그 수리 건의 최근 요청부터 보는 화면**
+ *    이기 때문이다 — 「방금 뭘 더 달라고 했지」가 맨 위에 와야 한다. 열쇠로 물을 때의 「물어본 차례 그대로」를
+ *    여기 쓸 수 없는 것도 까닭이다: 인수번호 하나가 신청 여러 건을 끌고 와서 **짝지을 차례 자체가 없다.**
+ *    🔵 시각이 같으면 신청 번호 역순으로 가른다 — 같은 초에 두 건이 서면 차례가 호출마다 달라져, 화면이
+ *       새로고침할 때마다 줄이 바뀐다. DB 가 주는 차례에 기대지 않고 **여기서** 정한다(그래야 시험이 덮는다).
+ * 🔴 **열쇠 없이 올라온 신청도 함께 돌려준다**(`requestKey: null`). 재고 관리 화면에서 직접 적은 반출도 그
+ *    수리 건에 나간 부품이고, 빼면 A/S 쪽 화면이 **「이 건에 나간 부품」을 반만 보여 준다.** 그 화면의 뜻은
+ *    「누가 적었나」가 아니라 「이 건에 무엇이 나갔나」다.
+ * 🔴 **`notFound` 는 언제나 빈 목록이다.** 그 칸은 **열쇠로 물었을 때만** 뜻이 있다 — 열쇠는 우리가 받아
+ *    적어 둔 값이라 「없다」가 이상한 일(안 올라갔거나 지워졌거나)이지만, 인수번호는 A/S 가 매긴 값이라
+ *    **「그 수리 건에 아직 반출 신청이 없다」가 보통 일**이다. 거기 적어 돌려주면 A/S 화면이 평범한 건마다
+ *    경고를 띄운다. 🔵 그런데도 **칸을 빼지 않는 것**은 받는 쪽이 모양 두 벌을 다루지 않게 하려는 것이고,
+ *    어느 인수번호가 비었는지는 돌아온 줄의 `intakeNumber` 로 부르는 쪽이 바로 센다.
+ */
+export function buildIntakeStatusResponse(rows: readonly IntakeStatusRow[], generatedAt: string): ApiRequestStatusResponse {
+  const sorted = [...rows].sort((a, b) => compareDesc(a.request.requestedAt, b.request.requestedAt) || compareDesc(a.request.id, b.request.id));
+  const requests = sorted.map((r) => toApiRequestStatus(r.requestKey, r.request));
+  return { generatedAt, count: requests.length, requests, notFound: [] };
+}
+
+/** 늦은 것이 앞. 🔵 시각은 전부 `toISOString()` 이라 글자 비교로 시각 비교가 된다. */
+function compareDesc(a: string, b: string): number {
+  return a < b ? 1 : a > b ? -1 : 0;
 }

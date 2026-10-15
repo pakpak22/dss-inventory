@@ -699,6 +699,37 @@ export async function listRequestsByExternalKeys(keys: readonly string[]): Promi
 }
 
 /**
+ * **인수번호**로 신청을 되읽는다 — 그 수리 건의 반출 신청을 **누가 올렸든** (2026-10-15,
+ * `GET /api/v1/stock-requests?intake=…`. 설명은 API.md 4-7절).
+ *
+ * 🔴 **까닭**: A/S 는 제가 올릴 때 지어 보낸 요청 번호(`external_key`)를 **들고 있지 않다** — 재고에 관한
+ *    것을 저쪽 표에 저장하지 않기로 했기 때문이다(2026-10-15 사용자 결정). 저쪽이 언제나 아는 값은
+ *    **인수번호**이고, 우리 신청은 그것을 payload 에 이미 들고 있다.
+ * 🔵 **읽기만 더한 함수다** — 위의 `listRequestsByExternalKeys` 와 **같은 길**(`attachNames` → `toRow`)로
+ *    줄을 빚는다. 이 파일의 어떤 동작도 바뀌지 않는다.
+ * 🔴 **열쇠가 없는 신청도 걸린다**(재고 관리 화면에서 직접 올린 반출). 일부러 그렇게 둔다 — 그 수리 건에
+ *    나간 부품을 A/S 쪽에서 **빠짐없이** 보는 것이 이 통로의 뜻이다. 그때 `externalKey` 는 `null` 이다.
+ * 🔵 인수번호는 **payload 안**에 있다(칸이 따로 없다. `stock_requests` 스키마). 그래서 `payload->>'intakeNumber'`
+ *    로 읽는다 — 🔴 **표를 고치지 않으려는 것**이고, 신청은 많아야 몇천 건이라 훑어도 된다. 느려지면 그때
+ *    그 식에 색인을 두면 되고(표 모양은 그대로다), 그 전에 칸을 더해 같은 사실을 두 곳에 적지 않는다.
+ * 🔵 대문자로 받는다 — 저장된 값이 언제나 대문자다(올리는 통로와 화면 폼이 저장 전에 올린다). 다듬는 자리는
+ *    부르는 쪽 순수 함수(`lib/api/stock-request-status.ts` 의 `parseStatusIntakes`) 하나다.
+ * 🔵 차례를 여기서 정하지 않는다 — 돌려줄 차례는 순수 함수 한 곳에서 정한다(`buildIntakeStatusResponse`).
+ *    그래야 시험이 DB 없이 그 규칙을 덮는다.
+ */
+export async function listRequestsByIntakeNumbers(intakeNumbers: readonly string[]): Promise<Array<{ externalKey: string | null; request: PendingRequestRow }>> {
+  const unique = [...new Set(intakeNumbers)];
+  if (unique.length === 0) return [];
+  const rows = await db()
+    .select()
+    .from(stockRequests)
+    .where(inArray(sql`${stockRequests.payload}->>'intakeNumber'`, unique));
+  const keyById = new Map(rows.map((r) => [r.id, r.externalKey]));
+  const views = await attachNames(rows);
+  return views.map((request) => ({ externalKey: keyById.get(request.id) ?? null, request }));
+}
+
+/**
  * 🔵 부품 정보와 「이미 나간 수량」을 각각 **한 번씩**만 묻는다(신청 수와 무관하게 질의 둘).
  * 🔴 목록을 만드는 길은 여기 하나뿐이다 — 신청 줄을 읽는 자리가 늘어도 **같은 줄 모양**을 받는다.
  *    화면마다 따로 채우면 언젠가 한쪽에만 칸이 생겨 갈린다.

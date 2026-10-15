@@ -1,9 +1,21 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { MAX_STATUS_KEYS, buildStatusResponse, parseStatusKeys, toApiRequestStatus, type RequestStatusSource } from "../src/lib/api/stock-request-status";
+import {
+  INTAKE_PARAM,
+  MAX_STATUS_INTAKES,
+  MAX_STATUS_KEYS,
+  buildIntakeStatusResponse,
+  buildStatusResponse,
+  parseStatusIntakes,
+  parseStatusKeys,
+  parseStatusQuery,
+  toApiRequestStatus,
+  type IntakeStatusRow,
+  type RequestStatusSource,
+} from "../src/lib/api/stock-request-status";
 import { checkBearerToken } from "../src/lib/api/token-gate";
 import { env } from "../src/lib/env";
-import { CLOSED_REQUEST_LABEL, REQUEST_STATUS_LABEL } from "../src/lib/stock/codes";
+import { CLOSED_REQUEST_LABEL, INTAKE_NUMBER_RE, REQUEST_STATUS_LABEL } from "../src/lib/stock/codes";
 
 /**
  * A/S 가 **올린 신청의 지금 상태를 물어 가는 통로**의 울타리 (2026-10-15, `GET /api/v1/stock-requests`).
@@ -19,6 +31,7 @@ const SOURCE: RequestStatusSource = {
   id: "0c0f1111-1111-4111-8111-111111111111",
   type: "USE",
   status: "PENDING",
+  intakeNumber: "D260701",
   requestedAt: "2026-10-15T01:00:00.000Z",
   lines: [LINE],
   decidedByName: null,
@@ -132,7 +145,14 @@ describe("🔴 없는 열쇠 — 조용히 빠뜨리지 않는다 (2026-10-15)",
 
 describe("돌려주는 모양 — 화면이 그릴 수 있을 만큼 (2026-10-15)", () => {
   it("칸은 이것뿐이다 — 약속이라 이름을 바꾸거나 빼지 않는다", () => {
-    assert.deepEqual(Object.keys(toApiRequestStatus("AS-1", source())).sort(), ["closed", "decision", "hold", "id", "lines", "requestKey", "requestedAt", "status", "type"].sort());
+    assert.deepEqual(
+      Object.keys(toApiRequestStatus("AS-1", source())).sort(),
+      ["closed", "decision", "hold", "id", "intakeNumber", "lines", "requestKey", "requestedAt", "status", "type"].sort(),
+    );
+  });
+
+  it("🔵 인수번호가 함께 간다 — 열쇠로 물었을 때도 같은 모양이다 (2026-10-15 에 더한 칸)", () => {
+    assert.equal(toApiRequestStatus("AS-1", source({ intakeNumber: "D260701" })).intakeNumber, "D260701");
   });
 
   it("🔴 상태는 코드와 **사람이 읽을 글자**를 함께 — 글자는 화면이 쓰는 표에서 온다", () => {
@@ -203,6 +223,219 @@ describe("🔴 마감 — 상태가 아니라 세어서 가린다 (2026-10-15)",
       assert.equal(q.closed, false, status);
       assert.equal(q.status.label, REQUEST_STATUS_LABEL[status], status);
     }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 묻는 법 둘째 — **인수번호로** (2026-10-15)                            */
+/* 🔴 A/S 는 제 요청 번호를 저장하지 않는다. 열쇠로만 물 수 있으면       */
+/*    되읽는 통로가 사실상 닫혀 있는 것과 같다.                          */
+/* ------------------------------------------------------------------ */
+
+const intakes = (qs: string): string[] => {
+  const r = parseStatusIntakes(new URLSearchParams(qs));
+  assert.ok(r.ok, `받을 줄 알았는데 거절했다: ${r.ok ? "" : r.message}`);
+  return r.intakeNumbers;
+};
+
+const intakeRejection = (qs: string): string => {
+  const r = parseStatusIntakes(new URLSearchParams(qs));
+  assert.equal(r.ok, false, "거절할 조건인데 통과했다");
+  return r.ok ? "" : r.message;
+};
+
+const queryOf = (qs: string) => {
+  const r = parseStatusQuery(new URLSearchParams(qs));
+  assert.ok(r.ok, `받을 줄 알았는데 거절했다: ${r.ok ? "" : r.message}`);
+  return r.query;
+};
+
+const queryRejection = (qs: string): string => {
+  const r = parseStatusQuery(new URLSearchParams(qs));
+  assert.equal(r.ok, false, "거절할 조건인데 통과했다");
+  return r.ok ? "" : r.message;
+};
+
+describe("묻는 법 — 인수번호로도 묻는다 (2026-10-15)", () => {
+  it("쿼리 이름은 intake 다 — 주소에 적히는 글자라 바꾸면 약속이 깨진다", () => {
+    assert.equal(INTAKE_PARAM, "intake");
+  });
+
+  it("여러 개를 한 번에 묻는다", () => {
+    assert.deepEqual(intakes("intake=D260701&intake=D260702"), ["D260701", "D260702"]);
+  });
+
+  it("🔵 소문자로 보내도 찾는다 — 저장된 값이 언제나 대문자다(올리는 통로·화면 폼이 올려 둔다)", () => {
+    assert.deepEqual(intakes("intake=d260701"), ["D260701"]);
+  });
+
+  it("앞뒤 공백은 떼고, 빈 값은 없는 것으로 본다", () => {
+    assert.deepEqual(intakes("intake=++D260701++&intake=&intake=D260702"), ["D260701", "D260702"]);
+  });
+
+  it("같은 번호가 두 번 오면 한 번만 묻는다", () => {
+    assert.deepEqual(intakes("intake=D260701&intake=d260701"), ["D260701"]);
+  });
+
+  it("🔴 모양이 틀리면 거절한다 — 조용히 「못 찾음」으로 돌리면 오타인지 없는 건인지 못 가린다", () => {
+    for (const bad of ["D26070", "D2607011", "X260701", "D26070A", "260701", "홍길동", "D-260701"]) {
+      const m = intakeRejection(`intake=${encodeURIComponent(bad)}`);
+      assert.match(m, /인수번호/, bad);
+      assert.ok(m.includes(bad), `무엇을 받았는지 문구에 적어야 고칠 수 있다: ${bad}`);
+    }
+  });
+
+  /**
+   * 🔴 모양을 **여기서 새로 적지 않았다** — `lib/stock/codes.ts` 의 `INTAKE_NUMBER_RE` 를 그대로 쓴다.
+   *    그것을 글자로 베껴 두면 화면·올리는 통로·엑셀 가져오기가 보는 모양과 언젠가 갈린다.
+   *    🔵 그래서 이 시험은 **그 정규식과 받고 거절하는 것이 한 글자도 어긋나지 않는지**를 잰다.
+   */
+  it("🔴 받고 거절하는 경계가 `INTAKE_NUMBER_RE` 와 똑같다", () => {
+    for (const sample of ["D260701", "d260701", "D000000", "D26070", "D2607012", "E260701", "D26070 1", "", "  "]) {
+      const value = sample.trim().toUpperCase();
+      const r = parseStatusIntakes(new URLSearchParams([["intake", sample]]));
+      // 빈 값은 「안 보낸 것」이라 모양 거절이 아니라 「하나 이상 보내라」로 떨어진다.
+      if (value === "") {
+        assert.equal(r.ok, false, sample);
+        continue;
+      }
+      assert.equal(r.ok, INTAKE_NUMBER_RE.test(value), `정규식과 어긋난다: ${JSON.stringify(sample)}`);
+    }
+  });
+
+  it("🔴 인수번호가 하나도 없으면 전체를 주지 않고 거절한다", () => {
+    assert.match(intakeRejection(""), /인수번호/);
+    assert.match(intakeRejection("intake=&intake=++"), /intake=D260701/);
+  });
+});
+
+describe("🔴 인수번호 상한 — 열쇠와 다른 눈금을 쓴다 (2026-10-15)", () => {
+  const many = (n: number) => Array.from({ length: n }, (_, i) => `intake=D2607${String(i + 1).padStart(2, "0")}`).join("&");
+
+  it("상한은 10 — 열쇠(50)보다 적다. 열쇠 하나는 신청 하나지만 인수번호 하나는 신청 여러 건이다", () => {
+    assert.equal(MAX_STATUS_INTAKES, 10);
+    assert.ok(MAX_STATUS_INTAKES < MAX_STATUS_KEYS, "인수번호 상한이 열쇠 상한보다 작아야 한다");
+  });
+
+  it("딱 상한까지는 받는다", () => {
+    assert.equal(intakes(many(MAX_STATUS_INTAKES)).length, MAX_STATUS_INTAKES);
+  });
+
+  it("🔴 넘으면 거절한다 — 몇 개까지인지와 몇 개를 받았는지를 적는다", () => {
+    const m = intakeRejection(many(MAX_STATUS_INTAKES + 1));
+    assert.match(m, new RegExp(`${MAX_STATUS_INTAKES}개까지`));
+    assert.match(m, new RegExp(`${MAX_STATUS_INTAKES + 1}개`));
+  });
+
+  it("중복을 걷어낸 뒤의 수로 센다 — 실제로 읽는 양이 그것이다", () => {
+    const repeated = Array.from({ length: MAX_STATUS_INTAKES + 20 }, () => "intake=D260701").join("&");
+    assert.deepEqual(intakes(repeated), ["D260701"]);
+  });
+});
+
+describe("🔴 묻는 법 가리기 — 섞어 보내면 거절한다 (2026-10-15)", () => {
+  it("열쇠만 보내면 열쇠 길이다", () => {
+    assert.deepEqual(queryOf("key=AS-1&key=AS-2"), { mode: "key", keys: ["AS-1", "AS-2"] });
+  });
+
+  it("인수번호만 보내면 인수번호 길이다", () => {
+    assert.deepEqual(queryOf("intake=D260701"), { mode: "intake", intakeNumbers: ["D260701"] });
+  });
+
+  it("🔴 둘을 함께 보내면 400 — 돌려줄 차례의 뜻이 섞이고 같은 신청이 두 번 실린다", () => {
+    const m = queryRejection("key=AS-1&intake=D260701");
+    assert.match(m, /함께 보낼 수 없습니다/);
+    assert.match(m, /key/);
+    assert.match(m, /intake/);
+  });
+
+  it("🔵 섞였는지는 **다듬기 전에** 본다 — 인수번호가 틀린 모양이어도 「섞어 보냈다」를 말해 준다", () => {
+    assert.match(queryRejection("key=AS-1&intake=XXX"), /함께 보낼 수 없습니다/);
+  });
+
+  it("🔴 둘 다 없으면 400 — 조용히 전부를 주지 않고, 두 가지 묻는 법을 문구에 적는다", () => {
+    const m = queryRejection("");
+    assert.match(m, /key=AS-REQ/);
+    assert.match(m, /intake=D260701/);
+  });
+
+  it("빈 값만 보낸 쪽은 **안 보낸 것**으로 본다 — 섞었다고 거절하지 않는다", () => {
+    assert.deepEqual(queryOf("key=AS-1&intake="), { mode: "key", keys: ["AS-1"] });
+    assert.deepEqual(queryOf("intake=D260701&key=++"), { mode: "intake", intakeNumbers: ["D260701"] });
+  });
+
+  it("한 가지 길로만 보냈어도 그 길의 울타리는 그대로 선다 (상한·모양)", () => {
+    assert.match(queryRejection(Array.from({ length: MAX_STATUS_KEYS + 1 }, (_, i) => `key=AS-${i}`).join("&")), new RegExp(`${MAX_STATUS_KEYS}개까지`));
+    assert.match(queryRejection("intake=D26070"), /인수번호/);
+  });
+});
+
+describe("🔴 인수번호로 물었을 때 돌려주는 것 (2026-10-15)", () => {
+  const row = (over: Partial<RequestStatusSource>, requestKey: string | null = "AS-1"): IntakeStatusRow => ({ requestKey, request: source(over) });
+
+  const older = row({ id: "0c0f1111-1111-4111-8111-111111111111", requestedAt: "2026-10-13T01:00:00.000Z" }, "AS-1");
+  const newer = row({ id: "0c0f2222-2222-4222-8222-222222222222", requestedAt: "2026-10-15T09:00:00.000Z" }, "AS-2");
+  const middle = row({ id: "0c0f3333-3333-4333-8333-333333333333", requestedAt: "2026-10-14T05:00:00.000Z" }, null);
+
+  it("🔴 신청한 시각이 **늦은 것이 위**다 — 그 수리 건의 최근 요청부터 보는 화면이다", () => {
+    const r = buildIntakeStatusResponse([older, newer, middle], "2026-10-15T10:00:00.000Z");
+    assert.deepEqual(
+      r.requests.map((q) => q.requestedAt),
+      ["2026-10-15T09:00:00.000Z", "2026-10-14T05:00:00.000Z", "2026-10-13T01:00:00.000Z"],
+    );
+  });
+
+  it("🔵 시각이 같으면 신청 번호로 갈라 **늘 같은 차례**다 — 안 그러면 새로고침마다 줄이 바뀐다", () => {
+    const a = row({ id: "0c0faaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", requestedAt: "2026-10-15T09:00:00.000Z" });
+    const b = row({ id: "0c0fbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", requestedAt: "2026-10-15T09:00:00.000Z" });
+    for (const given of [[a, b], [b, a]]) {
+      assert.deepEqual(
+        buildIntakeStatusResponse(given, "2026-10-15T10:00:00.000Z").requests.map((q) => q.id),
+        ["0c0fbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "0c0faaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"],
+      );
+    }
+  });
+
+  it("준 목록을 **제자리에서 뒤집지 않는다** — 부르는 쪽 배열을 건드리면 안 된다", () => {
+    const given = [older, newer];
+    buildIntakeStatusResponse(given, "2026-10-15T10:00:00.000Z");
+    assert.deepEqual(
+      given.map((g) => g.request.id),
+      [older.request.id, newer.request.id],
+    );
+  });
+
+  it("🔴 **열쇠 없이 올라온 신청도 함께** 온다 — 그 건에 나간 부품을 반만 보여 주면 안 된다", () => {
+    const r = buildIntakeStatusResponse([older, middle], "2026-10-15T10:00:00.000Z");
+    assert.equal(r.count, 2);
+    const noKey = r.requests.find((q) => q.id === "0c0f3333-3333-4333-8333-333333333333");
+    assert.ok(noKey, "재고 관리에서 직접 올린 신청이 빠졌다");
+    assert.equal(noKey.requestKey, null, "없는 열쇠를 지어내지 않는다");
+    assert.equal(r.requests.filter((q) => q.requestKey === "AS-1").length, 1, "열쇠가 있는 신청은 그대로 달고 온다");
+  });
+
+  it("🔴 `notFound` 는 **언제나 빈 목록**이다 — 그 칸은 열쇠로 물었을 때만 뜻이 있다", () => {
+    assert.deepEqual(buildIntakeStatusResponse([], "2026-10-15T10:00:00.000Z").notFound, []);
+    assert.deepEqual(buildIntakeStatusResponse([older], "2026-10-15T10:00:00.000Z").notFound, []);
+  });
+
+  it("아무 신청도 없는 인수번호는 오류가 아니다 — 빈 목록과 count 0", () => {
+    const r = buildIntakeStatusResponse([], "2026-10-15T10:00:00.000Z");
+    assert.deepEqual(r.requests, []);
+    assert.equal(r.count, 0);
+    assert.equal(r.generatedAt, "2026-10-15T10:00:00.000Z");
+  });
+
+  it("🔴 **열쇠로 물었을 때와 같은 모양**이다 — 받는 쪽이 두 벌을 다루지 않게", () => {
+    const byIntake = buildIntakeStatusResponse([older], "2026-10-15T10:00:00.000Z");
+    const byKey = buildStatusResponse(["AS-1"], new Map([["AS-1", source()]]), "2026-10-15T10:00:00.000Z");
+    assert.deepEqual(Object.keys(byIntake).sort(), Object.keys(byKey).sort());
+    assert.deepEqual(Object.keys(byIntake.requests[0]).sort(), Object.keys(byKey.requests[0]).sort());
+  });
+
+  it("🔵 어느 수리 건의 것인지 줄마다 적혀 온다 — 인수번호를 여러 개 물을 수 있기 때문이다", () => {
+    const r = buildIntakeStatusResponse([row({ intakeNumber: "D260701" }), row({ id: "0c0f4444-4444-4444-8444-444444444444", intakeNumber: "D260702" })], "2026-10-15T10:00:00.000Z");
+    assert.deepEqual(new Set(r.requests.map((q) => q.intakeNumber)), new Set(["D260701", "D260702"]));
   });
 });
 
