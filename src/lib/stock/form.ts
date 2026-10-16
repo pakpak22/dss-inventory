@@ -244,19 +244,23 @@ export function parseEntryForm(fd: FormLike, todayIso: string): ParseEntryResult
 }
 
 /**
- * 기록 내역 「부품 찾기」의 찾을 곳. 주소에는 짧은 키로 (n No. · a 품명 · b 품명2 · d 도번 · p 교산 품번 · c 고객사 품명).
+ * 기록 내역 「부품 찾기」의 찾을 곳. 주소에는 짧은 키로 (n No. · c 고객사 품명 · a 품명 · b 품명2 · p 교산 품번 · d 도번).
  * 키는 **이 목록 안에서만** 안 겹치면 된다 — 재고 현황의 찾을 곳(list-state.ts SEARCH_FIELDS)과는 별개의 주소 칸(`pf`)이다.
  *
  * 🔴 「고객사 품명」은 **부품**의 칸(`parts.customer_name`)이다. 아래 「내용」 찾기가 보는
  * 그 건의 **고객사 이름**(`stock_entries.customer_name`)과 다른 것이다 — 이름이 비슷하니 주의.
+ *
+ * 🔴 **보이는 차례는 `src/lib/parts/field-order.ts` 의 `PART_FIELDS` 를 따른다**(2026-10-16):
+ * No. 뒤에 고객사 품명 · 품명 · 품명2 · 교산 품번 · 도번. 키는 글자에 묶여 있으므로(`d` = 도번)
+ * 차례만 바뀌고 옛 주소는 그대로 읽힌다. 라벨로 맞물린 것을 `tests/part-field-order.test.ts` 가 잰다.
  */
 export const PART_SEARCH_FIELDS = [
   { key: "n", label: "No." },
+  { key: "c", label: "고객사 품명" },
   { key: "a", label: "품명" },
   { key: "b", label: "품명2" },
-  { key: "d", label: "도번" },
   { key: "p", label: "교산 품번" },
-  { key: "c", label: "고객사 품명" },
+  { key: "d", label: "도번" },
 ] as const;
 export type PartSearchField = (typeof PART_SEARCH_FIELDS)[number]["key"];
 export const ALL_PART_SEARCH_FIELDS: readonly PartSearchField[] = PART_SEARCH_FIELDS.map((f) => f.key);

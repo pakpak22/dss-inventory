@@ -9,9 +9,12 @@
  * 여기서 못 박는 것 셋:
  *  1. **무엇을 보이나** — 고객사 품명 · 품명2 · 교산 품번 · 도번(`REQUEST_ITEM_DETAIL_FIELDS`).
  *     소유·수량은 전부터 있던 자리라 그대로 두고, 이 넷이 더해진다.
+ *     🔴 **차례는 `src/lib/parts/field-order.ts` 가 쥔다** — 여기서 다시 적지 않는다(2026-10-16).
  *  2. **빈 칸은 안 그린다** — 아래 `requestItemDetails`.
  *  3. 🔴 **지워진 부품에는 링크가 없다** — 아래 `partDetailHref`.
  */
+
+import { PART_FIELDS_WITHOUT_NAME } from "@/lib/parts/field-order";
 
 /** 신청 항목 한 줄이 들고 있는 **부품 쪽 값**. 🔵 화면 줄(`ManagerRequestLine`)이 이 모양을 그대로 만족한다. */
 export interface RequestItemPart {
@@ -33,14 +36,15 @@ export interface RequestItemDetail {
  * 것이 「고객사가 부르는 이름」이고(견적서·서류에 나가는 값), 2026-10-16 에 A/S 가 **바깥에서 채우는**
  * 칸이 된 것도 이 칸이다. 나머지 셋은 같은 품명이 여럿일 때 **어느 부품인지 가르는** 값이라 뒤에 선다.
  *
- * 🔵 품명 자체는 여기 없다 — 줄의 머리(`No. 165 AMP-…`)가 이미 그 값이다.
+ * 🔴 **차례를 여기 적지 않는다**(2026-10-16): `src/lib/parts/field-order.ts` 의 `PART_FIELDS` 한 표가
+ * 쥐고, 재고 현황 목록·인쇄·기록 내역도 **같은 표를 돌면서** 그린다. 두 곳에 적으면 언젠가 갈린다.
+ *
+ * 🔵 품명 자체는 여기 없다 — 줄의 머리(`No. 165 AMP-…`)가 이미 그 값이다. 머리줄은 눈으로 훑는 줄이라
+ * 그 자리를 옮기지 않는다(그 까닭은 `field-order.ts` 머리말).
+ *
+ * 🔵 타입을 적어 두는 까닭: 이 넷이 `RequestItemPart` 의 칸과 **맞물려 있다**는 것을 tsc 가 재게 한다.
  */
-export const REQUEST_ITEM_DETAIL_FIELDS = [
-  { key: "customerName", label: "고객사 품명" },
-  { key: "name2", label: "품명2" },
-  { key: "kyosanPartNo", label: "교산 품번" },
-  { key: "drawingNo", label: "도번" },
-] as const satisfies ReadonlyArray<{ key: keyof Omit<RequestItemPart, "partNo">; label: string }>;
+export const REQUEST_ITEM_DETAIL_FIELDS: ReadonlyArray<{ key: keyof Omit<RequestItemPart, "partNo">; label: string }> = PART_FIELDS_WITHOUT_NAME;
 
 /**
  * 그 부품의 **자세한 내용** — 값이 있는 칸만, 위 차례대로.

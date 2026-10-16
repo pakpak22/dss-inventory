@@ -12,6 +12,7 @@ import {
   formatMoney,
   formatQuantity,
 } from "@/lib/parts/codes";
+import { PART_FIELDS, type PartFieldKey } from "@/lib/parts/field-order";
 import {
   ALL_FIELD_KEYS,
   PAGE_SIZES,
@@ -76,12 +77,9 @@ const COLUMNS: ReadonlyArray<{
   numeric?: boolean;
 }> = [
   { key: "no", label: "No.", numeric: true },
-  // 🔴 여기를 고치면 아래 `<tbody>` 도 같이 고쳐야 한다 — 본문은 이 배열을 안 쓰고 손으로 쓴 고정 순서다.
-  { key: "customerName", label: "고객사 품명" },
-  { key: "name", label: "품명" },
-  { key: "name2", label: "품명2" },
-  { key: "kyosanPartNo", label: "교산 품번" },
-  { key: "drawingNo", label: "도번" },
+  // 🔴 부품을 가리키는 다섯 칸은 **차례를 여기 적지 않는다**(2026-10-16) — `PART_FIELDS` 한 표가 쥐고,
+  //    아래 `<tbody>` 도 **같은 표를 돌면서** 그린다. 머리글과 본문이 따로 적혀 한 칸씩 밀리던 자리였다.
+  ...PART_FIELDS,
   { key: "quantity", label: "수량", numeric: true },
   { key: "supplyPrice", label: "공급가", numeric: true },
   { key: "quotePrice", label: "견적가", numeric: true },
@@ -90,6 +88,21 @@ const COLUMNS: ReadonlyArray<{
   { key: "category", label: "분류" },
   { key: "owner", label: "소유" },
 ];
+
+/**
+ * 다섯 칸의 **그리는 법**. 🔴 차례는 여기 없다 — `PART_FIELDS` 를 돌면서 이 표를 찾아 쓴다.
+ * `search` 는 찾은 글자에 노란 칠을 할 때 쓰는 「찾을 곳」 키(`SEARCH_FIELDS` 의 짧은 키)다.
+ * 키가 하나라도 빠지면 tsc 가 잡는다(`Record<PartFieldKey, …>`).
+ */
+const PART_CELL: Record<PartFieldKey, { td: string; inner?: string; search: SearchFieldKey }> = {
+  // 고객사 품명은 한 줄로 둔다(두 줄로 접혀 보기 나빴다). 아주 긴 이름이 와도 표가 가로로 터지지 않게
+  // 안쪽 칸에 상한을 두고 넘치면 … 로 줄인다 — 비고 칸이 쓰는 방식과 같고, 전체는 제목(title)과 상세 창에서 보인다.
+  customerName: { td: "px-2.5 py-1.5", inner: "block max-w-56 truncate", search: "c" },
+  name: { td: "px-2.5 py-1.5 font-medium text-zinc-900", search: "a" },
+  name2: { td: "px-2.5 py-1.5", search: "b" },
+  kyosanPartNo: { td: "px-2.5 py-1.5 font-mono text-xs whitespace-nowrap", search: "p" },
+  drawingNo: { td: "px-2.5 py-1.5 font-mono text-xs whitespace-nowrap", search: "d" },
+};
 
 const INPUT =
   "rounded-md border border-zinc-200 bg-white px-2 py-1 text-sm text-zinc-900";
@@ -673,42 +686,25 @@ export function PartsList({
                       <td className="tabular px-2.5 py-1.5 text-right text-zinc-500">
                         {p.no}
                       </td>
-                      {/* 고객사 품명 — 머리글은 위 COLUMNS 배열에 있다. 둘의 차례가 어긋나면 값이 한 칸씩 밀린다.
-                          한 줄로 둔다(두 줄로 접혀 보기 나빴다). 아주 긴 이름이 와도 표가 가로로 터지지 않게
-                          안쪽 칸에 상한을 두고 넘치면 … 로 줄인다 — 비고 칸이 쓰는 방식과 같고, 전체는 제목(title)과 상세 창에서 보인다. */}
-                      <td className="px-2.5 py-1.5" title={p.customerName}>
-                        <span className="block max-w-56 truncate">
-                          {p.customerName ? (
-                            <Marked text={p.customerName} toks={tk("c")} />
-                          ) : (
-                            <span className="text-zinc-400">-</span>
-                          )}
-                        </span>
-                      </td>
-                      <td className="px-2.5 py-1.5 font-medium text-zinc-900">
-                        <Marked text={p.name} toks={tk("a")} />
-                      </td>
-                      <td className="px-2.5 py-1.5">
-                        {p.name2 ? (
-                          <Marked text={p.name2} toks={tk("b")} />
+                      {/* 🔴 다섯 칸은 머리글(위 COLUMNS)과 **같은 표**(PART_FIELDS)를 돈다 — 둘을 따로 적어
+                          두었더니 차례가 어긋나면 값이 한 칸씩 밀리는 자리였다. 꼴은 PART_CELL. */}
+                      {PART_FIELDS.map((f) => {
+                        const cell = PART_CELL[f.key];
+                        const body = p[f.key] ? (
+                          <Marked text={p[f.key]} toks={tk(cell.search)} />
                         ) : (
                           <span className="text-zinc-400">-</span>
-                        )}
-                      </td>
-                      <td className="px-2.5 py-1.5 font-mono text-xs whitespace-nowrap">
-                        {p.kyosanPartNo ? (
-                          <Marked text={p.kyosanPartNo} toks={tk("p")} />
-                        ) : (
-                          <span className="text-zinc-400">-</span>
-                        )}
-                      </td>
-                      <td className="px-2.5 py-1.5 font-mono text-xs whitespace-nowrap">
-                        {p.drawingNo ? (
-                          <Marked text={p.drawingNo} toks={tk("d")} />
-                        ) : (
-                          <span className="text-zinc-400">-</span>
-                        )}
-                      </td>
+                        );
+                        return (
+                          <td
+                            key={f.key}
+                            className={cell.td}
+                            title={f.key === "customerName" ? p.customerName : undefined}
+                          >
+                            {cell.inner ? <span className={cell.inner}>{body}</span> : body}
+                          </td>
+                        );
+                      })}
                       <td className="tabular px-2.5 py-1.5 text-right font-semibold whitespace-nowrap">
                         {formatQuantity(p.quantity)}
                       </td>

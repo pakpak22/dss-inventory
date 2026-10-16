@@ -12,7 +12,11 @@ import type { PartRow } from "./types";
 
 /**
  * 찾을 곳. 표에 보이는 글자 칸들. 키는 주소에 들어가므로 짧게 — **이미 쓰는 글자와 겹치면 안 된다**
- * (겹치면 주소에 담긴 옛 설정이 엉뚱한 칸으로 읽힌다). 차례는 표의 칸 차례와 맞춘다.
+ * (겹치면 주소에 담긴 옛 설정이 엉뚱한 칸으로 읽힌다).
+ *
+ * 🔴 **차례는 `src/lib/parts/field-order.ts` 의 `PART_FIELDS` 를 따른다**(2026-10-16) — 표의 열 차례도
+ * 그 표가 쥐고 있어 둘이 저절로 맞는다. 비고는 그 다섯에 없는 칸이라 뒤에 따로 선다.
+ * 라벨로 맞물린 것을 `tests/part-field-order.test.ts` 가 잰다.
  */
 export const SEARCH_FIELDS = [
   { key: "c", field: "customerName", label: "고객사 품명" },

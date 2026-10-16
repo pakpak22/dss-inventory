@@ -2,6 +2,7 @@ import { PrintActions } from "@/components/parts/PrintActions";
 import { requireSession } from "@/lib/auth/session";
 import { listPartItems } from "@/lib/parts/queries";
 import { CATEGORY_LABEL, OWNER_LABEL, formatMoney, formatQuantity } from "@/lib/parts/codes";
+import { PART_FIELDS, type PartFieldKey } from "@/lib/parts/field-order";
 import { SEARCH_FIELDS, ALL_FIELD_KEYS } from "@/lib/parts/list-state";
 import { selectPartsForState } from "@/lib/parts/selection";
 import { todaySeoul } from "@/lib/stock/codes";
@@ -17,6 +18,14 @@ export const metadata = { title: "재고 현황 인쇄" };
 
 const TH = "border border-zinc-400 bg-zinc-100 px-1.5 py-1 text-left text-[10px] font-semibold whitespace-nowrap";
 const TD = "border border-zinc-300 px-1.5 py-0.5 align-top text-[10px]";
+/** 다섯 칸의 **꼴**만. 차례는 `PART_FIELDS` 가 쥔다(2026-10-16). */
+const PRINT_CELL: Record<PartFieldKey, string> = {
+  customerName: "",
+  name: "font-medium",
+  name2: "",
+  kyosanPartNo: "font-mono",
+  drawingNo: "font-mono",
+};
 
 export default async function PrintPartsPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const session = await requireSession("/print/parts");
@@ -50,11 +59,12 @@ export default async function PrintPartsPage({ searchParams }: { searchParams: P
           <thead>
             <tr>
               <th className={`${TH} text-right`}>No.</th>
-              <th className={TH}>고객사 품명</th>
-              <th className={TH}>품명</th>
-              <th className={TH}>품명2</th>
-              <th className={TH}>교산 품번</th>
-              <th className={TH}>도번</th>
+              {/* 🔴 다섯 칸의 차례는 `PART_FIELDS` 한 표가 쥔다 — 본문 <td> 도 같은 표를 돈다(2026-10-16). */}
+              {PART_FIELDS.map((f) => (
+                <th key={f.key} className={TH}>
+                  {f.label}
+                </th>
+              ))}
               <th className={`${TH} text-right`}>수량</th>
               <th className={`${TH} text-right`}>공급가</th>
               <th className={`${TH} text-right`}>견적가</th>
@@ -69,11 +79,11 @@ export default async function PrintPartsPage({ searchParams }: { searchParams: P
             {rows.map((p) => (
               <tr key={p.id} className="break-inside-avoid">
                 <td className={`${TD} tabular text-right`}>{p.no}</td>
-                <td className={TD}>{p.customerName || "-"}</td>
-                <td className={`${TD} font-medium`}>{p.name}</td>
-                <td className={TD}>{p.name2 || "-"}</td>
-                <td className={`${TD} font-mono`}>{p.kyosanPartNo || "-"}</td>
-                <td className={`${TD} font-mono`}>{p.drawingNo || "-"}</td>
+                {PART_FIELDS.map((f) => (
+                  <td key={f.key} className={`${TD} ${PRINT_CELL[f.key]}`}>
+                    {p[f.key] || "-"}
+                  </td>
+                ))}
                 <td className={`${TD} tabular text-right font-semibold`}>{formatQuantity(p.quantity)}</td>
                 <td className={`${TD} tabular text-right whitespace-nowrap`}>{formatMoney(p.supplyPrice, p.supplyCurrency)}</td>
                 <td className={`${TD} tabular text-right whitespace-nowrap`}>{formatMoney(p.quotePrice, "KRW")}</td>

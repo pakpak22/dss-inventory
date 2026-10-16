@@ -3,10 +3,11 @@ import { CorrectButton, ReverifyButton } from "@/components/stock/EntryActions";
 import { roleAtLeast } from "@/lib/auth/role";
 import { requireSession } from "@/lib/auth/session";
 import { OWNER_LABEL, formatQuantity } from "@/lib/parts/codes";
+import { PART_FIELDS, type PartFieldKey } from "@/lib/parts/field-order";
 import { CHARGE_LABEL, ENTRY_TYPES, ENTRY_TYPE_LABEL, PURPOSE_LABEL, formatDelta, sheetNoText, sheetOf } from "@/lib/stock/codes";
 import { ALL_PART_SEARCH_FIELDS, PART_SEARCH_FIELDS, parseEntryListFilter } from "@/lib/stock/form";
 import { requestSavedNotice, type RequestNotice } from "@/lib/stock/request-notice";
-import { listEntries, type EntryRow } from "@/lib/stock/queries";
+import { listEntries, type EntryLineRow, type EntryRow } from "@/lib/stock/queries";
 
 /**
  * 기록 내역 `/entries` (모두, DESIGN 2-5절). 날짜 역순, 종류·기간·부품·담당·인수번호·「인수번호 확인 안 됨」으로 거르기.
@@ -24,6 +25,18 @@ const FLABEL = "flex flex-col gap-1.5 text-sm font-medium text-zinc-700";
 const FINPUT = "rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900";
 const BTN = "rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-100";
 const BADGE = "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap";
+/**
+ * 다섯 칸의 **값과 꼴**. 🔴 차례는 여기 없다 — `PART_FIELDS` 를 돌면서 이 표를 찾아 쓴다(2026-10-16).
+ * 줄이 들고 있는 칸 이름은 `part` 가 앞에 붙어(`partName2`) 부품 쪽 칸 이름과 다르므로 여기서 잇는다.
+ */
+const ENTRY_PART_CELL: Record<PartFieldKey, { td: string; of: (l: EntryLineRow) => string }> = {
+  customerName: { td: "", of: (l) => l.partCustomerName },
+  name: { td: "font-medium whitespace-nowrap text-zinc-900", of: (l) => l.partName },
+  name2: { td: "whitespace-nowrap", of: (l) => l.partName2 },
+  kyosanPartNo: { td: "font-mono whitespace-nowrap", of: (l) => l.partKyosanPartNo },
+  drawingNo: { td: "font-mono whitespace-nowrap", of: (l) => l.partDrawingNo },
+};
+
 /** 저장 결과 한 줄. 회색은 알림, 주황은 **아직 남은 것이 있다**는 뜻 (부품 요청 관리 화면과 같은 모양). */
 const NOTICE: Record<RequestNotice["tone"], string> = {
   info: "rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700",
@@ -258,12 +271,13 @@ export default async function EntriesPage({ searchParams }: { searchParams: Prom
                           <th className={TH}>날짜</th>
                           {sheet === "USE" ? <th className={TH}>인수번호</th> : null}
                           {sheet === "CHANGE" ? <th className={TH}>종류</th> : null}
-                          {/* 🔴 머리글을 고치면 아래 본문 <td> 도 같은 자리에 함께 고친다. 자리는 재고 현황 표와 같게 품명 왼쪽. */}
-                          <th className={TH}>고객사 품명</th>
-                          <th className={TH}>품명</th>
-                          <th className={TH}>품명2</th>
-                          <th className={TH}>도번</th>
-                          <th className={TH}>교산 품번</th>
+                          {/* 🔴 다섯 칸의 차례는 `PART_FIELDS` 한 표가 쥔다 — 본문 <td> 도 같은 표를 돈다.
+                              2026-10-16 까지 이 표만 **교산 품번과 도번이 뒤바뀌어** 있었다. */}
+                          {PART_FIELDS.map((f) => (
+                            <th key={f.key} className={TH}>
+                              {f.label}
+                            </th>
+                          ))}
                           <th className={`${TH} text-right`}>현 재고</th>
                           <th className={`${TH} text-right`}>{sheet === "USE" ? "사용 재고" : sheet === "RECEIVE" ? "입고" : "변동"}</th>
                           <th className={`${TH} text-right`}>이후 재고</th>
@@ -284,18 +298,25 @@ export default async function EntriesPage({ searchParams }: { searchParams: Prom
                             <td className={`${TD} tabular whitespace-nowrap`}>{e.occurredOn}</td>
                             {sheet === "USE" ? <td className={`${TD} font-mono whitespace-nowrap`}>{e.noRepairCase ? "-" : e.intakeNumber}</td> : null}
                             {sheet === "CHANGE" ? <td className={`${TD} whitespace-nowrap`}>{ENTRY_TYPE_LABEL[e.type]}</td> : null}
-                            {/* 고객사 품명 — 머리글과 짝. 비면 품명2·도번처럼 `-`. 아주 긴 이름이 와도 이미 넓은 이 표가 더 밀리지 않게 상한을 두고 넘치면 …(전체는 마우스로). */}
-                            <td className={TD} title={l.partCustomerName}>
-                              <span className="block max-w-48 truncate">{l.partCustomerName || "-"}</span>
-                            </td>
-                            <td className={`${TD} font-medium whitespace-nowrap text-zinc-900`}>
-                              <Link href={`/?part=${l.partNo}`} className="underline decoration-zinc-300">
-                                <span className="font-normal text-zinc-500">No. {l.partNo}</span> {l.partName}
-                              </Link>
-                            </td>
-                            <td className={`${TD} whitespace-nowrap`}>{l.partName2 || "-"}</td>
-                            <td className={`${TD} font-mono whitespace-nowrap`}>{l.partDrawingNo || "-"}</td>
-                            <td className={`${TD} font-mono whitespace-nowrap`}>{l.partKyosanPartNo || "-"}</td>
+                            {/* 🔴 머리글과 **같은 표**(PART_FIELDS)를 돈다. 값과 꼴은 ENTRY_PART_CELL.
+                                품명 칸만 부품 상세로 가는 링크가 되고, 고객사 품명은 아주 긴 이름이 와도 이미
+                                넓은 이 표가 더 밀리지 않게 상한을 두고 넘치면 …(전체는 마우스로). */}
+                            {PART_FIELDS.map((f) => {
+                              const cell = ENTRY_PART_CELL[f.key];
+                              return (
+                                <td key={f.key} className={`${TD} ${cell.td}`} title={f.key === "customerName" ? l.partCustomerName : undefined}>
+                                  {f.key === "name" ? (
+                                    <Link href={`/?part=${l.partNo}`} className="underline decoration-zinc-300">
+                                      <span className="font-normal text-zinc-500">No. {l.partNo}</span> {l.partName}
+                                    </Link>
+                                  ) : f.key === "customerName" ? (
+                                    <span className="block max-w-48 truncate">{l.partCustomerName || "-"}</span>
+                                  ) : (
+                                    cell.of(l) || "-"
+                                  )}
+                                </td>
+                              );
+                            })}
                             <td className={`${TD} tabular text-right whitespace-nowrap`}>{formatQuantity(l.quantityBefore)}</td>
                             <td className={`${TD} tabular text-right whitespace-nowrap font-semibold`}>{sheet === "CHANGE" ? formatDelta(l.delta) : formatQuantity(Math.abs(l.delta))}</td>
                             <td className={`${TD} tabular text-right whitespace-nowrap`}>{formatQuantity(l.quantityAfter)}</td>

@@ -107,8 +107,10 @@ export function PartPicker<T extends PartPickerOption>({
                       <span className="text-zinc-500">No. {p.no}</span> {p.name}
                       {p.name2 ? <span className="font-normal text-zinc-500"> · {p.name2}</span> : null}
                     </span>
-                    {meta ? <span className="text-xs text-zinc-500">{meta}</span> : null}
+                    {/* 🔴 고객사 품명이 **도번보다 먼저** 선다 — 부품 칸의 차례는 `PART_FIELDS` 가 쥔다(2026-10-16).
+                        품명·품명2 는 머리줄(위)이라 그 자리를 옮기지 않는다(그 까닭은 field-order.ts 머리말). */}
                     {p.customerName ? <span className="text-xs text-zinc-500">고객사 품명 · {p.customerName}</span> : null}
+                    {meta ? <span className="text-xs text-zinc-500">{meta}</span> : null}
                   </button>
                 </li>
               );
