@@ -1,11 +1,13 @@
 import { and, eq } from "drizzle-orm";
 import { NextResponse, type NextRequest } from "next/server";
 import { db } from "@/db/client";
+import { partOverhaulUnitPrices } from "@/db/schema/oh-templates";
 import { partItems } from "@/db/schema/part-items";
 import { parts } from "@/db/schema/parts";
 import { stockBalances } from "@/db/schema/stock-balances";
 import { NO_STORE, checkApiToken } from "@/lib/api/auth";
 import { toApiPart } from "@/lib/api/parts";
+import { API_PART_BALANCE_JOIN, API_PART_COLUMNS, API_PART_ITEM_JOIN, API_PART_OVERHAUL_PRICE_JOIN } from "@/lib/api/parts-query";
 
 /** GET /api/v1/parts/{no} — 부품 하나 (No. 로). 없거나 숨긴 것은 404. 설명은 API.md. */
 export async function GET(request: NextRequest, { params }: { params: Promise<{ no: string }> }) {
@@ -17,27 +19,12 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   const no = Number(raw);
 
   const [r] = await db()
-    .select({
-      no: parts.no,
-      name: parts.name,
-      name2: parts.name2,
-      customerName: parts.customerName,
-      kyosanPartNo: parts.kyosanPartNo,
-      drawingNo: parts.drawingNo,
-      supplyPrice: parts.supplyPrice,
-      supplyCurrency: parts.supplyCurrency,
-      quotePrice: parts.quotePrice,
-      note: parts.note,
-      itemCode: partItems.code,
-      itemName: partItems.name,
-      category: parts.category,
-      owner: parts.owner,
-      updatedAt: parts.updatedAt,
-      quantity: stockBalances.quantity,
-    })
+    // 🔵 칸 한 벌과 잇는 법을 목록과 **함께 쓴다** — 따로 적으면 칸을 더하는 날 한쪽만 고쳐진다.
+    .select(API_PART_COLUMNS)
     .from(parts)
-    .innerJoin(partItems, eq(parts.itemId, partItems.id))
-    .leftJoin(stockBalances, eq(stockBalances.partId, parts.id))
+    .innerJoin(partItems, API_PART_ITEM_JOIN)
+    .leftJoin(stockBalances, API_PART_BALANCE_JOIN)
+    .leftJoin(partOverhaulUnitPrices, API_PART_OVERHAUL_PRICE_JOIN)
     .where(and(eq(parts.no, no), eq(parts.isDeleted, false)))
     .limit(1);
 

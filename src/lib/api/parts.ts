@@ -27,6 +27,20 @@ export interface ApiPart {
   supplyCurrency: Currency;
   /** 항상 원 */
   quotePrice: number | null;
+  /**
+   * **오버홀(O/H) 작업일 때의 견적가.** 일반 수리면 `quotePrice`, O/H 면 이 값을 쓴다
+   * (A/S 의 부품 고르개가 고르는 순간 단가를 붓는 자리다). 2026-10-16 에 더했다.
+   *
+   * 🔴 **`null` 은 「정하지 않았다」이고, `0` 은 「O/H 때는 무상」이다 — 섞지 않는다.**
+   *    `null` 을 0 으로 바꿔 보내면 고르개가 **0원을 부어** 정하지 않은 부품을 0원으로 청구한다.
+   *    받는 쪽도 `?? 0` 으로 뭉개지 말고, `null` 이면 칸을 **비워 두고 사람이 채우게** 한다.
+   *    (까닭은 `db/schema/oh-templates.ts` 의 `part_overhaul_unit_prices` 머리말)
+   * 🔵 **통화 칸을 두지 않는다** — `quotePrice` 와 같이 **항상 원**이다. 통화가 갈리는 것은
+   *    공급가(`supplyPrice`·`supplyCurrency`)뿐이다.
+   * 🔵 O/H 단가를 **정한 부품만** 값이 있다. 지운 단가는 행이 통째로 사라지므로 `null` 로 온다
+   *    — 그 표에는 소프트 삭제가 없다(비우면 0 을 저장하지 않고 행을 지운다).
+   */
+  overhaulQuotePrice: number | null;
   note: string;
   item: { code: string; name: string };
   category: { code: Category; label: string };
@@ -46,6 +60,8 @@ export interface ApiPartSource {
   supplyPrice: number | null;
   supplyCurrency: Currency;
   quotePrice: number | null;
+  /** 🔴 정해진 것만. 없으면 `null` 이고 **0 으로 채우지 않는다**(위 `ApiPart.overhaulQuotePrice`) */
+  overhaulQuotePrice: number | null;
   note: string;
   itemCode: string;
   itemName: string;
@@ -66,6 +82,9 @@ export function toApiPart(p: ApiPartSource): ApiPart {
     supplyPrice: p.supplyPrice,
     supplyCurrency: p.supplyCurrency,
     quotePrice: p.quotePrice,
+    // 🔴 그대로 나른다. `?? 0` · `|| null` 을 끼우지 않는다 — 앞엣것은 「정하지 않음」을 0원으로,
+    //    뒤엣것은 「무상(0)」을 「정하지 않음」으로 바꿔 버린다. 둘 다 되돌릴 수 없는 손실이다.
+    overhaulQuotePrice: p.overhaulQuotePrice,
     note: p.note,
     item: { code: p.itemCode, name: p.itemName },
     category: { code: p.category, label: CATEGORY_LABEL[p.category] },
