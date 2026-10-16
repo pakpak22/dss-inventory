@@ -1067,6 +1067,9 @@ function DeleteTemplateDialog({
           <p className="text-xs text-zinc-500">
             부품 {template.items.length}종과 연결된 제품 모델 {template.models.length}개가 함께 숨겨집니다. 목록에서
             사라지고 되살리기 화면은 없습니다.
+            {/* 🔴 숨긴 연결이 모델을 영영 붙잡아 두지 않는다(2026-10-16). 그 사실을 지우기 전에 말해 준다. */}
+            {template.models.length > 0 &&
+              " 숨긴 제품 모델은 나중에 다른 템플릿에 이을 수 있으며, 그때 이 템플릿의 연결은 풀립니다."}
           </p>
           <label className="flex flex-col gap-1 text-xs text-zinc-500">
             삭제 사유 *

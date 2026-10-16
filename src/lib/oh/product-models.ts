@@ -110,6 +110,10 @@ export function filterUnlinkedModels(
  *
  * 🔵 템플릿 **전부**를 받는다(한 장이 아니라) — 모델은 템플릿 하나에만 붙으므로, 다른 템플릿에
  * 붙은 것도 이 템플릿의 고르개에서 빠져야 한다.
+ *
+ * 🔴 **받는 것은 「살아 있는 템플릿 전부」다**(`listOhTemplates` 가 지워진 것을 뺀다). 그래서
+ * 지워진 템플릿에 걸린 모델은 고르개에 **그대로 올라온다** — 그것이 옳다. 아래
+ * `decideProductModelLink` 가 그 모델을 받아 주므로, 고르개와 저장이 같은 말을 한다.
  */
 export function linkedProductModelIds(
   templates: readonly { models: readonly { productModelId: string }[] }[],
@@ -119,4 +123,81 @@ export function linkedProductModelIds(
     for (const model of template.models) ids.add(model.productModelId);
   }
   return ids;
+}
+
+/* ───────────────── 이미 붙어 있는 모델을 만났을 때 어떻게 하나 ───────────────── */
+
+/**
+ * 그 모델이 **지금 붙어 있는 줄**. `oh_part_template_models` 한 줄과 그 주인 템플릿의 상태다.
+ * 없으면 `null` 을 넘긴다.
+ */
+export type ExistingProductModelLink = {
+  templateId: string;
+  templateName: string;
+  /**
+   * 🔴 **그 템플릿이 지워진(숨긴) 것인가.** 이 한 칸이 「사람이 풀 수 있는 연결」과
+   * 「풀러 갈 데가 없는 연결」을 가른다 — 아래 머리말.
+   */
+  templateIsDeleted: boolean;
+};
+
+export type ProductModelLinkDecision =
+  /** 이미 **이 템플릿**에 붙어 있다. 사람이 두 번 누른 것이고, 결과는 바라던 그대로다. */
+  | { kind: "ALREADY" }
+  /** 아무 데도 안 붙어 있다. 그냥 잇는다. */
+  | { kind: "LINK" }
+  /** 🔴 **지워진 템플릿**이 붙잡고 있다. 그 줄을 거둬들이고 잇는다(머리말). */
+  | { kind: "TAKE_OVER"; fromTemplateName: string }
+  /** 살아 있는 **다른** 템플릿에 붙어 있다. 거절하고, 어디로 가야 하는지 말해 준다. */
+  | { kind: "BLOCKED"; message: string };
+
+/**
+ * 거절 문구. 🔴 **살아 있는 템플릿에만 쓴다** — 「그쪽 연결을 먼저 푸십시오」는 **갈 수 있는 곳이
+ * 있을 때만** 참말이다. 지워진 템플릿은 목록에 뜨지 않고 되살리기 화면도 없으므로, 그 이름으로
+ * 이 말을 하면 사람에게 **갈 수 없는 곳**을 가리키는 셈이 된다(2026-10-16 실제로 그랬다).
+ */
+export function productModelLinkBlockedMessage(productModelName: string, templateName: string): string {
+  return `${productModelName} 은(는) 이미 「${templateName}」 템플릿에 연결되어 있습니다. 그쪽 연결을 먼저 푸십시오.`;
+}
+
+/**
+ * ============================================================================
+ * 🔴 이을 수 있나 — 그리고 못 이으면 **사람이 빠져나갈 길이 있나** (2026-10-16 결함 수리)
+ * ============================================================================
+ * 「모델 하나는 템플릿 하나에만」은 DB 의 unique(`oh_part_template_models_model_uq`)가 지키는
+ * 규칙이고, 그 인덱스에는 **`WHERE is_deleted = false` 같은 조건이 없다** — 템플릿을 지워도
+ * 그 줄은 표에 남아 모델 id 를 계속 붙잡는다.
+ *
+ * 그래서 고치기 전에는 이런 막다른 길이 있었다: 템플릿을 지우면 화면에서 사라지는데, 그 템플릿에
+ * 걸린 모델을 다른 템플릿에 이으려 하면 **「지워진 템플릿에 가서 연결을 푸십시오」**라고 막았다.
+ * 갈 곳이 없으므로 그 모델은 영영 다시 이을 수 없었다.
+ *
+ * ── 그래서 지워진 템플릿의 연결은 **막지 않고 거둬들인다** ─────────────────
+ * 옛 줄은 **지운다**(옮기지 않는다). 까닭 둘:
+ *   ① DB 의 unique 가 전역이라 **그냥 새로 잇는 길이 없다** — 옛 줄이 남아 있으면 insert 가
+ *      23505 로 거절된다. 비워 둘 칸도 없다(`product_model_id` 는 NOT NULL).
+ *   ② 지워진 템플릿이 그 모델을 **계속 가리킬 까닭이 없다.** 지워진 템플릿은 「이 장비의 O/H
+ *      부품」을 더 이상 답하지 않는다(`findOhTemplateByProductModel` 이 지워진 것을 뺀다).
+ *
+ * ── 🔵 되살리면 어떻게 되나 ────────────────────────────────────────────────
+ * 이 저장소에는 **되살리기 화면이 없다**(관리자가 DB 에서 `is_deleted` 를 되돌리는 것이 유일한
+ * 길이다). 그렇게 되살려도 **모델 하나에 템플릿 둘**은 생기지 않는다 — 거둬들일 때 옛 줄을
+ * 지웠으므로 되살아난 템플릿에는 그 모델이 **없다.** 모델은 사람이 나중에 이어 둔 쪽에 그대로
+ * 붙어 있고, 그것이 사람이 마지막으로 한 말이다. 「지웠다가 되살렸더니 모델이 사라졌다」가 될 수
+ * 있지만, 그 사이에 **사람이 그 모델을 다른 템플릿에 손수 이었을 때만** 그렇다. 감사 로그에
+ * 거둬들인 줄(`OH_TEMPLATE_MODEL_UNLINKED`)이 남으므로 어디로 갔는지 답할 수 있다.
+ *
+ * @param targetTemplateId 이으려는 템플릿. 🔴 부르는 쪽이 **살아 있는지 이미 확인한 뒤**여야 한다.
+ */
+export function decideProductModelLink(
+  targetTemplateId: string,
+  productModelName: string,
+  existing: ExistingProductModelLink | null,
+): ProductModelLinkDecision {
+  if (!existing) return { kind: "LINK" };
+  // 같은 템플릿에 다시 거는 것은 그냥 성공이다(두 번 누른 것이고, 결과는 바라던 그대로다).
+  if (existing.templateId === targetTemplateId) return { kind: "ALREADY" };
+  // 🔴 지워진 템플릿이 붙잡고 있으면 **막지 않는다** — 사람이 풀러 갈 곳이 없다(머리말).
+  if (existing.templateIsDeleted) return { kind: "TAKE_OVER", fromTemplateName: existing.templateName };
+  return { kind: "BLOCKED", message: productModelLinkBlockedMessage(productModelName, existing.templateName) };
 }

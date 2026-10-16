@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
 
 import {
   AS_PRODUCT_MODEL_MESSAGES,
+  decideProductModelLink,
   filterUnlinkedModels,
   linkedProductModelIds,
   parseAsProductModelsResponse,
+  productModelLinkBlockedMessage,
   type AsProductModelDirectory,
+  type ExistingProductModelLink,
 } from "../src/lib/oh/product-models";
 
 /**
@@ -114,5 +118,137 @@ describe("🔴 이미 이어 둔 모델을 고르개에서 뺀다", () => {
     const linked = linkedProductModelIds(templates);
     assert.equal(linked.size, 2);
     assert.deepEqual(filterUnlinkedModels([가, 나], linked), []);
+  });
+});
+
+/* ================================================================== */
+/*  🔴 지워진 템플릿이 붙잡고 있던 모델 (2026-10-16 결함 수리)         */
+/* ================================================================== */
+
+/**
+ * 쓰는 분이 만난 막다른 길: 템플릿을 지웠는데 거기 이어 둔 제품 모델을 다른 템플릿에 이으려니
+ * **「지워진 템플릿에 가서 연결을 먼저 푸십시오」** 라고 막았다. 그 템플릿은 목록에 없고
+ * 되살리기 화면도 없어 **갈 곳이 없다.**
+ *
+ * 여기서 못 박는 것 셋:
+ *  ① 지워진 템플릿이 붙잡고 있으면 **막지 않는다**(거둬들이고 잇는다).
+ *  ② 살아 있는 템플릿끼리는 **여전히 막는다** — 모델 하나에 템플릿 둘이 되면 「이 장비의 O/H
+ *    부품」이 두 가지가 된다.
+ *  ③ 「그쪽에 가서 푸십시오」라는 말은 **갈 수 있을 때만** 한다.
+ *
+ * 🔵 템플릿 이름은 **가짜**다 — 운영의 템플릿 이름은 고객사 이름이라 저장소에 박아 두지 않는다.
+ */
+const 살아있는템플릿 = "11111111-aaaa-4aaa-8aaa-111111111111";
+const 다른템플릿 = "22222222-bbbb-4bbb-8bbb-222222222222";
+const 지워진템플릿 = "33333333-cccc-4ccc-8ccc-333333333333";
+
+const 붙어있음 = (over: Partial<ExistingProductModelLink> = {}): ExistingProductModelLink => ({
+  templateId: 다른템플릿,
+  templateName: "살아 있는 옛 템플릿",
+  templateIsDeleted: false,
+  ...over,
+});
+
+describe("🔴 이을 수 있나 — 그리고 못 이으면 빠져나갈 길이 있나", () => {
+  test("아무 데도 안 붙어 있으면 그냥 잇는다", () => {
+    assert.deepEqual(decideProductModelLink(살아있는템플릿, 가.modelName, null), { kind: "LINK" });
+  });
+
+  test("같은 템플릿에 다시 거는 것은 그냥 성공 — 사람이 두 번 누른 것이다", () => {
+    const decision = decideProductModelLink(살아있는템플릿, 가.modelName, 붙어있음({ templateId: 살아있는템플릿 }));
+    assert.deepEqual(decision, { kind: "ALREADY" });
+  });
+
+  test("🔴 **살아 있는** 다른 템플릿에 붙어 있으면 여전히 막는다 — 모델 하나에 템플릿 둘이 되면 안 된다", () => {
+    const decision = decideProductModelLink(살아있는템플릿, 가.modelName, 붙어있음());
+    assert.equal(decision.kind, "BLOCKED");
+    if (decision.kind !== "BLOCKED") return;
+    assert.match(decision.message, /살아 있는 옛 템플릿/, "어느 템플릿인지 말해 주지 않으면 풀러 갈 수 없다");
+    assert.match(decision.message, /먼저 푸십시오/);
+    assert.match(decision.message, /RF-100/, "어느 모델 이야기인지도 말해 준다");
+  });
+
+  test("🔴 **지워진** 템플릿이 붙잡고 있으면 막지 않고 거둬들인다 — 풀러 갈 곳이 없다", () => {
+    const decision = decideProductModelLink(
+      살아있는템플릿,
+      가.modelName,
+      붙어있음({ templateId: 지워진템플릿, templateName: "지워진 옛 템플릿", templateIsDeleted: true }),
+    );
+    assert.deepEqual(
+      decision,
+      { kind: "TAKE_OVER", fromTemplateName: "지워진 옛 템플릿" },
+      "막으면 그 모델은 영영 다시 이을 수 없다 — 지워진 템플릿은 목록에 없고 되살리기 화면도 없다",
+    );
+  });
+
+  test("🔴 문구가 사실에 맞다 — 지워진 템플릿 이름으로 「그쪽에 가서 푸십시오」라고 말하지 않는다", () => {
+    const decision = decideProductModelLink(
+      살아있는템플릿,
+      가.modelName,
+      붙어있음({ templateId: 지워진템플릿, templateName: "지워진 옛 템플릿", templateIsDeleted: true }),
+    );
+    assert.notEqual(decision.kind, "BLOCKED", "거절이 아니므로 「푸십시오」라고 말할 일 자체가 없다");
+    assert.equal("message" in decision, false, "갈 수 없는 곳을 가리키는 문구가 만들어지면 안 된다");
+  });
+
+  test("거절 문구는 한 자리에서만 만든다 — 두 벌이 되면 한쪽만 고쳐진다", () => {
+    const decision = decideProductModelLink(살아있는템플릿, 가.modelName, 붙어있음());
+    assert.equal(
+      decision.kind === "BLOCKED" ? decision.message : "",
+      productModelLinkBlockedMessage(가.modelName, "살아 있는 옛 템플릿"),
+    );
+  });
+
+  test("🔵 거둬들인 뒤에도 「모델 하나에 템플릿 하나」는 그대로다 — 고르개가 보는 집합이 안 는다", () => {
+    // 거둬들이기 = 옛 줄을 **지우고** 새 줄을 넣는 것이므로, 살아 있는 템플릿들이 쥔 모델은
+    // 여전히 모델마다 하나다. 되살려도 그 템플릿에는 그 모델이 없다(지웠으므로).
+    const 거둔뒤 = [{ models: [{ productModelId: 가.id }] }];
+    assert.equal(linkedProductModelIds(거둔뒤).size, 1);
+    assert.deepEqual(filterUnlinkedModels([가, 나], linkedProductModelIds(거둔뒤)), [나]);
+  });
+});
+
+/**
+ * 🔴 **저장하는 자리가 이 판단을 실제로 쓰는가** — 소스 글자로 잰다.
+ *
+ * `mutations.ts` 는 `server-only` 를 거쳐 들어가 `npm test` 가 불러올 수 없고, 이 저장소에는 DB
+ * 시험이 없다(`tests/part-issue-gate.test.ts` 와 같은 사정). 약한 울타리인 것은 맞지만 없는 것보다
+ * 훨씬 낫다 — 아래 넷 중 하나라도 되돌리면 그 자리에서 깨진다.
+ */
+const linkBody = (() => {
+  const source = readFileSync(new URL("../src/lib/oh/mutations.ts", import.meta.url), "utf8");
+  const start = source.indexOf("export async function linkProductModel(");
+  assert.notEqual(start, -1, "linkProductModel 을 찾지 못했다 — 이름이 바뀌었으면 시험도 함께 고쳐라");
+  const rest = source.slice(start);
+  const end = rest.indexOf("\nexport ", 1);
+  return end === -1 ? rest : rest.slice(0, end);
+})();
+
+describe("🔴 저장하는 자리의 울타리 (mutations.ts 의 linkProductModel)", () => {
+  test("붙잡고 있는 템플릿이 **지워진 것인지** 함께 읽는다", () => {
+    assert.match(
+      linkBody,
+      /isDeleted:\s*ohPartTemplates\.isDeleted/,
+      "이 칸을 안 읽으면 지워진 템플릿의 연결을 살아 있는 것과 똑같이 막아 막다른 길이 된다",
+    );
+  });
+
+  test("판단은 시험이 붙는 순수 함수가 한다", () => {
+    assert.match(linkBody, /decideProductModelLink\(/);
+    assert.doesNotMatch(linkBody, /먼저 푸십시오/, "거절 문구를 여기 다시 적으면 규칙이 두 벌이 된다");
+  });
+
+  test("🔴 거둬들일 때 옛 줄을 **지운다** — DB 의 unique 가 전역이라 남겨 두면 insert 가 거절된다", () => {
+    assert.match(linkBody, /\.delete\(ohPartTemplateModels\)/);
+    assert.match(linkBody, /OH_TEMPLATE_MODEL_UNLINKED/, "거둬들인 줄이 감사 로그에 남아야 어디로 갔는지 답할 수 있다");
+  });
+
+  test("🔴 붙어 있는 줄을 찾을 때 **지워진 템플릿을 빼지 않는다** — 빼면 insert 가 unique 로 터진다", () => {
+    const filters = linkBody.match(/eq\(ohPartTemplates\.isDeleted,\s*false\)/g) ?? [];
+    assert.equal(
+      filters.length,
+      1,
+      "그 조건은 **이으려는 템플릿이 살아 있는가**를 보는 한 군데뿐이어야 한다. 붙어 있는 줄을 찾는 질의에 더하면 지워진 줄이 안 보여 거둬들이지 못하고, 그대로 insert 하다 unique 로 터진다",
+    );
   });
 });

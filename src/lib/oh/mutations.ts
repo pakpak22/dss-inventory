@@ -11,6 +11,7 @@ import {
 import { parts } from "@/db/schema/parts";
 import { auditValues } from "@/lib/audit";
 import type { OhPriceEntry, OhTemplateFields } from "./input";
+import { decideProductModelLink } from "./product-models";
 
 /**
  * ============================================================================
@@ -424,8 +425,13 @@ export type DeleteOhTemplateResult = { ok: true; name: string } | { ok: false; m
  * `deletePart` 가 이 저장소의 본보기다.
  *
  * 🔵 딸린 줄(items)과 모델 잇기(models)는 `ON DELETE CASCADE` 지만 소프트 삭제에서는 돌지 않는다.
- * **일부러다**: 되살릴 때 그대로 돌아와야 하고, 모델 잇기를 지우면 그 모델이 다른 템플릿에 붙을 수
- * 있게 되어 「지웠다가 되살렸더니 모델이 사라졌다」가 된다.
+ * **일부러다**: 되살릴 때 그대로 돌아와야 한다.
+ *
+ * 🔴 **그렇다고 그 모델을 영영 붙잡아 두지는 않는다**(2026-10-16 결함 수리). 지운 뒤에 사람이 그
+ * 모델을 **다른 템플릿에 이으면** 그때 이쪽 줄을 거둬들인다(`linkProductModel` 의 `TAKE_OVER`).
+ * 막아 두었더니 지워진 템플릿 이름을 대며 「그쪽에 가서 푸십시오」라고 말하게 됐는데, 그 템플릿은
+ * 목록에 없고 되살리기 화면도 없어 **갈 곳이 없었다.** 거둬들인 뒤에도 「모델 하나에 템플릿 하나」는
+ * 그대로다 — 옛 줄을 지우고 새 줄을 넣기 때문이다.
  */
 export async function deleteOhTemplate(id: string, reason: string, actor: OhActor): Promise<DeleteOhTemplateResult> {
   const now = new Date();
@@ -463,7 +469,16 @@ export async function deleteOhTemplate(id: string, reason: string, actor: OhActo
 
 /* ───────────────────────── 모델 잇기 ───────────────────────── */
 
-export type OhLinkResult = { ok: true } | { ok: false; message: string };
+export type OhLinkResult =
+  | {
+      ok: true;
+      /**
+       * 🔵 **지워진 템플릿에서 거둬들였다면** 그 이름. 부르는 쪽이 사람에게 「무슨 일이 일어났는지」
+       * 말해 줄 글자다 — 조용히 옮기면 사람은 연결이 그냥 생긴 줄 안다.
+       */
+      takenFromDeletedTemplate?: string;
+    }
+  | { ok: false; message: string };
 
 /**
  * 제품 모델을 템플릿에 잇는다.
@@ -472,6 +487,11 @@ export type OhLinkResult = { ok: true } | { ok: false; message: string };
  * 템플릿에 붙어 있으면 거절하고 **어느 템플릿인지 말해 준다** — 조용히 옮기면 그 템플릿을 쓰던
  * 사람이 까닭을 모른 채 다른 부품을 받게 된다. 같은 템플릿에 다시 거는 것은 그냥 성공이다
  * (사람이 두 번 누른 것이고, 결과는 바라던 그대로다).
+ *
+ * 🔴 **단, 붙잡고 있는 템플릿이 지워진 것이면 막지 않는다**(2026-10-16 결함 수리). 지워진
+ * 템플릿은 목록에 없고 되살리기 화면도 없어 **풀러 갈 곳이 없다** — 막으면 그 모델은 영영 다시
+ * 이을 수 없다. 그때는 옛 줄을 거둬들이고(지우고) 잇는다. 판단과 그 까닭은 전부
+ * `product-models.ts` 의 `decideProductModelLink` 에 있다(시험이 거기 붙는다).
  *
  * @param productModelName 🔴 **이을 때의 이름 사본.** 부르는 쪽(서버 액션)이 A/S 명부를 다시 받아
  *   와 거기서 뽑은 값이어야 한다 — 화면이 보낸 글자를 그대로 적으면 이름이 우리 표에 거짓으로
@@ -494,16 +514,47 @@ export async function linkProductModel(
       if (!template) reject("NOT_FOUND", NOT_FOUND_MESSAGE);
 
       const [clash] = await tx
-        .select({ templateId: ohPartTemplateModels.templateId, name: ohPartTemplates.name })
+        .select({
+          linkId: ohPartTemplateModels.id,
+          templateId: ohPartTemplateModels.templateId,
+          name: ohPartTemplates.name,
+          // 🔴 **이 칸을 안 읽으면 결함이 돌아온다.** 지워진 템플릿이 붙잡고 있는 줄을
+          //    살아 있는 템플릿의 것과 똑같이 다루면, 사람이 풀러 갈 곳이 없는 막다른 길이 된다.
+          isDeleted: ohPartTemplates.isDeleted,
+        })
         .from(ohPartTemplateModels)
         .innerJoin(ohPartTemplates, eq(ohPartTemplates.id, ohPartTemplateModels.templateId))
         .where(eq(ohPartTemplateModels.productModelId, productModelId))
         .limit(1);
-      if (clash) {
-        if (clash.templateId === templateId) return { ok: true };
-        reject(
-          "VALIDATION_ERROR",
-          `${productModelName} 은(는) 이미 「${clash.name}」 템플릿에 연결되어 있습니다. 그쪽 연결을 먼저 푸십시오.`,
+
+      const decision = decideProductModelLink(
+        templateId,
+        productModelName,
+        clash ? { templateId: clash.templateId, templateName: clash.name, templateIsDeleted: clash.isDeleted } : null,
+      );
+      if (decision.kind === "ALREADY") return { ok: true };
+      if (decision.kind === "BLOCKED") reject("VALIDATION_ERROR", decision.message);
+
+      // ── 🔴 지워진 템플릿이 붙잡고 있던 줄을 거둬들인다 ────────────────────
+      //    DB 의 unique 가 전역이라 옛 줄을 남겨 둔 채로는 insert 가 거절된다. 같은 트랜잭션
+      //    안이므로, 아래 잇기가 실패하면 이 거둬들임도 함께 되돌아간다.
+      if (decision.kind === "TAKE_OVER" && clash) {
+        await tx.delete(ohPartTemplateModels).where(eq(ohPartTemplateModels.id, clash.linkId));
+        await tx.insert(auditLogs).values(
+          auditValues({
+            action: "OH_TEMPLATE_MODEL_UNLINKED",
+            actorId: actor.id,
+            actorName: actor.name,
+            // 🔵 대상은 **그 지워진 템플릿**이다 — 나중에 되살렸을 때 「그 모델이 어디로 갔나」를
+            //    물을 사람이 보는 자리가 거기다.
+            target: `oh_templates:${clash.name}`,
+            detail: {
+              productModelId,
+              productModelName,
+              releasedFromDeletedTemplate: true,
+              movedTo: template.name,
+            },
+          }),
         );
       }
 
@@ -519,10 +570,18 @@ export async function linkProductModel(
           actorId: actor.id,
           actorName: actor.name,
           target: `oh_templates:${template.name}`,
-          detail: { productModelId, productModelName },
+          detail: {
+            productModelId,
+            productModelName,
+            // 🔵 거둬들인 것이 아니면 `null` 이다 — 키를 아예 빼면 옛 줄과 모양이 달라져
+            //    이력에서 둘을 견주기 어렵다.
+            takenFromDeletedTemplate: decision.kind === "TAKE_OVER" ? decision.fromTemplateName : null,
+          },
         }),
       );
-      return { ok: true };
+      return decision.kind === "TAKE_OVER"
+        ? { ok: true, takenFromDeletedTemplate: decision.fromTemplateName }
+        : { ok: true };
     });
   } catch (err) {
     if (err instanceof OhRejected) return { ok: false, message: err.result.message };

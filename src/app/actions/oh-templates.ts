@@ -170,6 +170,14 @@ export async function linkProductModelAction(input: { templateId: string; produc
       name: session.user.name,
     });
     if (!result.ok) return { ok: false, message: result.message };
+    // 🔴 지워진 템플릿이 붙잡고 있던 연결을 거둬들였으면 **말해 준다**. 조용히 옮기면 사람은
+    //    연결이 그냥 생긴 줄 알고, 나중에 그 템플릿을 되살렸을 때 모델이 없는 까닭을 모른다.
+    if (result.takenFromDeletedTemplate !== undefined) {
+      return {
+        ok: true,
+        message: `${model.modelName} 을(를) 연결했습니다. 삭제된 템플릿 「${result.takenFromDeletedTemplate}」 에 남아 있던 연결은 풀었습니다.`,
+      };
+    }
     return { ok: true, message: `${model.modelName} 을(를) 연결했습니다.` };
   } catch (e) {
     console.error("[oh-templates] 모델 연결 실패:", e instanceof Error ? e.message : e);
