@@ -76,6 +76,20 @@ export interface RequestLineView {
    *    「(지워진 부품)」으로 나간다.
    */
   owner: Owner | null;
+  /**
+   * 그 부품의 **자세한 내용** 넷 (2026-10-16, 쓰는 분 요청: 「신청 항목의 자세한 내용이 보이면」).
+   *
+   * 🔵 담당자가 상자를 뜯으러 가기 전에 **어느 부품인지** 가리는 값들이다 — 같은 품명이 여럿인 묶음이
+   *    실제로 16개 있다(REQUIREMENTS 4-1절). 고객사 품명은 고객사에 나가는 서류에 쓰는 이름이다.
+   * 🔴 **부품을 못 찾으면 전부 빈 글자다.** 지어내지 않는다(위 두 칸과 같은 규칙) — 화면은 빈 칸을
+   *    아예 안 그린다(`lib/stock/request-item-detail.ts`).
+   * 🔵 **바깥 통로로는 나가지 않는다** — `toApiRequestStatus` 가 칸을 하나씩 손으로 옮겨 적으므로
+   *    (`lib/api/stock-request-status.ts`) 여기 칸이 늘어도 A/S 가 받는 모양은 그대로다.
+   */
+  customerName: string;
+  name2: string;
+  kyosanPartNo: string;
+  drawingNo: string;
 }
 
 export interface PendingRequestRow {
@@ -153,8 +167,14 @@ async function partNamesOf(partIds: readonly string[]): Promise<Map<string, { no
   return new Map(rows.map((r) => [r.id, { no: r.no, name: r.name }]));
 }
 
-/** 화면에 보일 부품 한 줄 — No.·품명에 **소유와 지금 재고**까지 (2026-10-15, 조각 10b). */
-export type PartLineView = { no: number; name: string; owner: Owner; available: number };
+/**
+ * 화면에 보일 부품 한 줄 — No.·품명에 **소유와 지금 재고**까지 (2026-10-15, 조각 10b),
+ * 그리고 **그 부품의 자세한 내용** 넷 (2026-10-16, 쓰는 분 요청).
+ *
+ * 🔵 넷은 `RequestLineView` 를 거쳐 화면까지 그대로 간다 — 무엇을 어떻게 보일지는
+ *    `lib/stock/request-item-detail.ts`(순수)가 정한다.
+ */
+export type PartLineView = { no: number; name: string; owner: Owner; available: number; customerName: string; name2: string; kyosanPartNo: string; drawingNo: string };
 
 /**
  * 목록이 그릴 부품 정보를 **부품 묶음으로 한 번에** (2026-10-15, 조각 10b).
@@ -168,11 +188,27 @@ async function partViewsOf(partIds: readonly string[]): Promise<Map<string, Part
   const ids = [...new Set(partIds)];
   if (ids.length === 0) return new Map();
   const rows = await db()
-    .select({ id: parts.id, no: parts.no, name: parts.name, owner: parts.owner, available: stockBalances.quantity })
+    // 🔴 `select()` 전체 조회가 아니라 **쓸 칸만** 적는다 — 부품 표에 칸이 늘어도 화면으로 새어 나가지 않는다.
+    .select({
+      id: parts.id,
+      no: parts.no,
+      name: parts.name,
+      owner: parts.owner,
+      available: stockBalances.quantity,
+      customerName: parts.customerName,
+      name2: parts.name2,
+      kyosanPartNo: parts.kyosanPartNo,
+      drawingNo: parts.drawingNo,
+    })
     .from(parts)
     .leftJoin(stockBalances, eq(stockBalances.partId, parts.id))
     .where(inArray(parts.id, ids));
-  return new Map(rows.map((r) => [r.id, { no: r.no, name: r.name, owner: r.owner, available: r.available ?? 0 }]));
+  return new Map(
+    rows.map((r) => [
+      r.id,
+      { no: r.no, name: r.name, owner: r.owner, available: r.available ?? 0, customerName: r.customerName, name2: r.name2, kyosanPartNo: r.kyosanPartNo, drawingNo: r.drawingNo },
+    ]),
+  );
 }
 
 /**
@@ -731,6 +767,11 @@ function toRow(r: typeof stockRequests.$inferSelect, names: ReadonlyMap<string, 
       // 🔴 부품을 못 찾으면 가용 0 · 소유 null 이다 — 지어내지 않는다(`RequestLineView` 의 두 주석).
       available: p?.available ?? 0,
       owner: p?.owner ?? null,
+      // 🔴 자세한 내용도 못 찾으면 **빈 글자**다 — 화면이 빈 칸을 아예 안 그리므로 그 줄은 품명만 남는다.
+      customerName: p?.customerName ?? "",
+      name2: p?.name2 ?? "",
+      kyosanPartNo: p?.kyosanPartNo ?? "",
+      drawingNo: p?.drawingNo ?? "",
     };
   });
   return {

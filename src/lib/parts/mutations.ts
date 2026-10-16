@@ -9,6 +9,7 @@ import { stockBalances } from "@/db/schema/stock-balances";
 import { auditValues } from "@/lib/audit";
 import { markWorkbookDirty } from "@/lib/excel/workbook-sync";
 import { partHasTransactions } from "@/lib/stock/queries";
+import { customerNameFillAudit, type CustomerNameFiller } from "./customer-name";
 import { diffPartInput, type PartChanges, type PartInput, type PartItemFieldErrors, type PartItemInput } from "./form";
 
 /**
@@ -186,6 +187,72 @@ export async function updateCustomerName(id: string, customerName: string, actor
     );
   });
   return { ok: true, no: before.no, changed: true };
+}
+
+export type FillCustomerNameResult = { ok: true; filled: boolean; part: { no: number; name: string; customerName: string } } | { ok: false; code: "not_found" | "deleted" };
+
+/**
+ * 고객사 품명을 **비어 있을 때만** 채운다 — 바깥(A/S) 통로 전용 (2026-10-16, 설계 7절의 2026-10-14 결정).
+ *
+ * 🔴 **바로 위 `updateCustomerName` 과 일부러 다른 함수다.** 저쪽은 **사람이 화면에서** 고치는 길이라
+ *    이미 값이 있어도 덮어쓴다(안 그러면 제 오타를 못 고친다). 이쪽은 **바깥에서 들어오는 쓰기**라
+ *    덮어쓰지 않는다 — A/S 쪽 한 사람의 오타가 고객사에 나가는 서류의 이름을 조용히 갈아치우면
+ *    재고 쪽에서는 바뀐 줄도 모른다. 🔴 **두 규칙을 한 함수에 깃발로 합치지 않는다**: 깃발은 언젠가
+ *    반대로 넘어오고, 그날 조용히 덮어써진다.
+ *
+ * 🔴 **채우기만 한다.** 빈 값으로 지우는 길은 이 함수에도, 통로에도 없다(값 검사는
+ *    `lib/api/part-customer-name.ts`). 여기서는 **이 칸 말고 아무것도 건드리지 않는다.**
+ *
+ * 🔴 **비어 있을 때만」은 `WHERE` 로 지킨다**(읽고 나서 쓰기 사이에 다른 호출이 채울 수 있다).
+ *    그 다툼에서 진 호출은 **오류가 아니라** 「이미 있다」로 돌아간다 — 두 번 보내도 안전하다는 결이
+ *    반출 신청(`created: false`)·거두기(`cancelled: false`)와 같다.
+ *
+ * 🔵 이력은 사람이 고칠 때와 **같은 길**이다 — `PART_UPDATE` + `detail.changes.customerName`.
+ *    🔴 거기에 **누가 채웠는지**(`detail.filledBy` = 포털 번호와 보내온 이름)를 더한다. 바깥에서
+ *    들어오는 쓰기라 「이 이름 누가 넣었지?」가 반드시 나오고, 그때 답할 자리가 이력뿐이다.
+ *    `/audit` 이 그 칸을 보고 「A/S 통로로 채움」 한 줄을 더 그린다(`linesOf`).
+ *
+ * 🔵 `markWorkbookDirty` 를 부르지 않는 까닭은 `updateCustomerName` 과 같다 — 엑셀 한 벌에 이 칸이 없다.
+ */
+export async function fillCustomerName(no: number, customerName: string, filler: CustomerNameFiller): Promise<FillCustomerNameResult> {
+  // 🔴 숨긴 부품을 여기서 거르지 않는다 — **「없다」와 「치웠다」를 다른 말로** 돌려주어야 한다(통로가 가른다).
+  const [before] = await db().select({ id: parts.id, no: parts.no, name: parts.name, customerName: parts.customerName, isDeleted: parts.isDeleted }).from(parts).where(eq(parts.no, no)).limit(1);
+  if (!before) return { ok: false, code: "not_found" };
+  if (before.isDeleted) return { ok: false, code: "deleted" };
+  if (before.customerName !== "") return { ok: true, filled: false, part: { no: before.no, name: before.name, customerName: before.customerName } };
+
+  const now = new Date();
+  const filled = await db().transaction(async (tx) => {
+    const [row] = await tx
+      .update(parts)
+      // 🔴 `updatedBy` 는 **찾은 사람만** 적는다. 우리 `users` 에 없는 사람을 적을 자리가 없어서인데,
+      //    null 은 이 칸에서 이미 「사람이 아닌 길로 들어왔다」는 뜻이다(표 주석: 가져오기 스크립트).
+      //    누가 채웠는지는 **감사 로그**가 번호까지 들고 있다.
+      .set({ customerName, updatedBy: filler.id, updatedAt: now })
+      // 🔴 **비어 있을 때만** — 읽은 뒤 여기 오기까지 다른 호출이 채웠으면 0행이고, 그러면 덮지 않는다.
+      .where(and(eq(parts.id, before.id), eq(parts.customerName, ""), eq(parts.isDeleted, false)))
+      .returning({ no: parts.no, name: parts.name, customerName: parts.customerName });
+    if (!row) return null; // 🔵 쓴 것이 없으므로 이 트랜잭션은 빈 채로 끝난다(감사 로그도 안 남는다).
+    await tx.insert(auditLogs).values(
+      auditValues({
+        action: "PART_UPDATE",
+        actorId: filler.id,
+        actorName: filler.name,
+        target: `parts:No.${row.no}`,
+        // 🔴 **누가 채웠나**(포털 번호와 보내온 이름)를 포함해 남길 내용은 순수 함수가 빚는다 —
+        //    이 파일은 `server-only` 라 시험이 불러올 수 없어서다(`./customer-name.ts` 머리말).
+        detail: customerNameFillAudit(customerName, filler),
+      }),
+    );
+    return row;
+  });
+
+  // 🔵 다툼에서 졌다 — 지금 값을 다시 읽어 「이미 있다」로 돌려준다. 지어내지 않는다.
+  if (!filled) {
+    const [now2] = await db().select({ no: parts.no, name: parts.name, customerName: parts.customerName }).from(parts).where(eq(parts.id, before.id)).limit(1);
+    return { ok: true, filled: false, part: now2 ?? { no: before.no, name: before.name, customerName } };
+  }
+  return { ok: true, filled: true, part: filled };
 }
 
 export type DeletePartResult = { ok: true; no: number } | { ok: false; code: "not_found" | "has_quantity" | "has_records" };

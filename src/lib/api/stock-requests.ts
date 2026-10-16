@@ -77,8 +77,10 @@ function text(v: unknown, max: number): string {
  * 🔴 올릴 때 잘리고 다듬어져 저장된 값을 거둘 때 **다르게 다듬으면 같은 글자로 보내도 못 찾는다.**
  *    되읽는 통로가 `MAX_KEY` 를 여기서 가져가는 것과 같은 까닭이다(위 `MAX_KEY` 주석).
  * 🔴 **동작은 한 글자도 바뀌지 않았다** — 이 파일 안의 부르는 자리는 그대로 `text`·`asRecord` 다.
+ * 🔵 2026-10-16: **고객사 품명을 채우는 통로**(`./part-customer-name.ts`)도 사람 칸을 같은 자로 다듬는다 —
+ *    같은 포털 번호가 통로마다 다르게 잘리면 「누가 했나」를 번호로 맞춰 볼 수 없다. 그래서 `MAX_NAME` 도 내보낸다.
  */
-export { text as trimTextField, asRecord as asObjectField, MAX_SUB };
+export { text as trimTextField, asRecord as asObjectField, MAX_SUB, MAX_NAME };
 
 /**
  * 받은 본문을 검사한다. 🔴 **첫 번째 잘못에서 멈추고 무엇이 틀렸는지 말한다** — 부르는 쪽이 고칠 수 있게

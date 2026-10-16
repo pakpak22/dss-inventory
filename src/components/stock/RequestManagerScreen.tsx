@@ -1,11 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { RequestActions, type RequestActionLine, type RequestActionStatus } from "./RequestActions";
 import type { RequestSource, RequestStatus } from "@/db/schema/stock-requests";
 import { partIssueConfirmLabel, type PartIssueLock } from "@/lib/approval/part-issue-gate";
 import { OWNER_LABEL, formatQuantity, type Owner } from "@/lib/parts/codes";
 import { ENTRY_TYPE_LABEL, REQUEST_SOURCE_LABEL, REQUEST_STATUS_LABEL, REQUEST_STATUS_ORDER, canCancelRequest, isClaimableRequest, requestStatusBadge, requestStatusLabel, type EntryType } from "@/lib/stock/codes";
+import { partDetailHref, requestItemDetails, type RequestItemPart } from "@/lib/stock/request-item-detail";
 import type { RequestNotice } from "@/lib/stock/request-notice";
 
 /**
@@ -31,7 +33,7 @@ import type { RequestNotice } from "@/lib/stock/request-notice";
  * 🔴 **server-only 를 끌어오지 않는다.** 줄·신청의 모양을 여기 따로 적는 까닭이 그것이다(아래 두 타입).
  *    서버가 내려보내는 `PendingRequestRow`(`src/lib/stock/requests.ts`)는 칸이 더 많고, 더 많은 것은 그냥 버려진다.
  */
-export interface ManagerRequestLine extends RequestActionLine {
+export interface ManagerRequestLine extends RequestActionLine, RequestItemPart {
   /** 그 부품의 **지금 재고**. 가용이 남은 수량보다 적으면 지금 다 내줄 수 없다 */
   available: number;
   /** 부품을 못 찾으면 `null` (지워진 부품) */
@@ -146,6 +148,14 @@ function HoldReason({ hold }: { hold: ManagerRequestRow["hold"] }) {
  * 🔴 **남음은 화면에서 계산한다**(요청 − 불출). 사람이 뺄셈하게 두면 그 자리가 실수가 나는 자리다.
  * 🔴 **가용이 남음보다 적으면 빨강**: 지금 다 내줄 수 없다는 뜻이고, [확인] 상자를 열거나 상자를 뜯으러 가기
  *    **전에** 보여야 헛걸음을 막는다.
+ *
+ * 🔵 **자세한 내용을 2026-10-16 에 더했다**(쓰는 분 요청). **열을 늘리지 않고** 품목 칸 안에서 품명 아래
+ *    작은 글씨로 묶는다 — 이 표는 이미 `min-w-[64rem]` 에 가로 스크롤이고(이 저장소 관례), 고객사 품명·
+ *    품명2·교산 품번·도번을 **열로 세우면 네 열이 늘어** 신청 하나를 보려고 가로로 끌어야 한다. 한편 줄마다
+ *    네 토막을 다 적으면 읽을 것이 네 배가 되므로 **값이 있는 칸만** 그린다(`requestItemDetails`).
+ * 🔴 **품명을 누르면 부품 상세**로 간다 — 새 화면이 아니라 **이미 있는 길**(`/?part=No.` = 재고 현황의
+ *    상세 창)이고, 변경 이력·기록 내역이 쓰는 그 길이다. 🔴 **지워진 부품에는 링크를 걸지 않는다**
+ *    (`partDetailHref` 가 `null`). 판정은 화면이 다시 적지 않는다.
  */
 function RequestItems({ lines }: { lines: readonly ManagerRequestLine[] }) {
   return (
@@ -174,11 +184,33 @@ function RequestItems({ lines }: { lines: readonly ManagerRequestLine[] }) {
           const issued = Math.min(l.quantity, l.issued);
           const remaining = Math.max(0, l.quantity - l.issued);
           const short = remaining > 0 && l.available < remaining;
+          const href = partDetailHref(l.partNo);
+          const label = l.partNo !== null ? `No. ${l.partNo} ${l.partName}` : l.partName;
+          const details = requestItemDetails(l);
           return (
             <tr key={l.partId} className="border-t border-zinc-100 align-top">
               <td className="py-1 pr-2">
-                <span className="text-zinc-800">{l.partNo !== null ? `No. ${l.partNo} ${l.partName}` : l.partName}</span>
+                {/* 🔴 링크는 **번호가 있을 때만**. 지워진 부품은 열 창이 없어 글자 그대로 둔다. */}
+                {href ? (
+                  <Link href={href} className="text-zinc-800 underline decoration-zinc-300 underline-offset-2 hover:decoration-zinc-500" title="부품 상세 열기">
+                    {label}
+                  </Link>
+                ) : (
+                  <span className="text-zinc-800">{label}</span>
+                )}
                 <span className="block text-zinc-500">{l.owner ? OWNER_LABEL[l.owner] : "-"}</span>
+                {/* 🔵 자세한 내용 — 라벨은 더 옅게, 값은 읽히게. 값이 있는 칸만 서고 폭이 모자라면 줄이 접힌다. */}
+                {details.length > 0 ? (
+                  <span className="mt-0.5 block text-[11px] leading-snug text-zinc-600">
+                    {details.map((d, i) => (
+                      <span key={d.label}>
+                        {i > 0 ? <span className="text-zinc-300"> · </span> : null}
+                        <span className="text-zinc-400">{d.label} </span>
+                        {d.value}
+                      </span>
+                    ))}
+                  </span>
+                ) : null}
               </td>
               <td className="tabular py-1 text-right text-zinc-700">{formatQuantity(l.quantity)}</td>
               <td className={`tabular py-1 text-right ${issued > 0 ? "text-zinc-700" : "text-zinc-300"}`}>{formatQuantity(issued)}</td>

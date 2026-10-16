@@ -67,11 +67,19 @@ function linesOf(row: AuditRow, entryNos: Map<string, string>): Line[] {
     const cur = (d.supplyCurrency ?? {}) as { before?: unknown; after?: unknown };
     const curBefore = String(cur.before ?? changes.supplyCurrency?.before ?? "JPY");
     const curAfter = String(cur.after ?? changes.supplyCurrency?.after ?? "JPY");
-    const lines = Object.entries(changes).map(([field, c]) => ({
+    const lines: Line[] = Object.entries(changes).map(([field, c]) => ({
       field: PART_FIELD_LABEL[field] ?? field,
       before: valueText(field, c.before, curBefore),
       after: valueText(field, c.after, curAfter),
     }));
+    /**
+     * 🔴 **바깥에서 채운 것이면 누가 채웠는지를 함께 보인다** (2026-10-16, 고객사 품명 통로).
+     * 사람이 화면에서 고친 것과 A/S 통로로 들어온 것은 같은 행위(`PART_UPDATE`)로 남지만, 「이 이름
+     * 누가 넣었지?」에 답할 자리가 이력뿐이다. 🔵 이름은 겹칠 수 있어 **포털 번호**까지 적는다
+     * (반출 신청 취소에 「A/S 에서 거둠」을 적는 것과 같은 결). 옛 기록에는 이 칸이 없어 그대로 읽힌다.
+     */
+    const filledBy = d.filledBy as { sub?: unknown; name?: unknown } | undefined;
+    if (filledBy) lines.push({ text: `A/S 통로로 채움 · 보낸 이름 ${String(filledBy.name ?? "")} · 포털 번호 ${String(filledBy.sub ?? "")}` });
     return lines.length > 0 ? lines : [{ text: "바뀐 칸 없음" }];
   }
   if (row.action === "PART_CREATE") {
