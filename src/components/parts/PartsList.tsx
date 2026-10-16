@@ -11,6 +11,8 @@ import {
   OWNER_LABEL,
   formatMoney,
   formatQuantity,
+  isLowStock,
+  lowStockTitle,
 } from "@/lib/parts/codes";
 import { PART_FIELDS, type PartFieldKey } from "@/lib/parts/field-order";
 import {
@@ -705,7 +707,20 @@ export function PartsList({
                           </td>
                         );
                       })}
-                      <td className="tabular px-2.5 py-1.5 text-right font-semibold whitespace-nowrap">
+                      {/*
+                        🔴 **한계수량에 걸리면 수량 글자가 붉다** (2026-10-16 쓰는 분 요청:
+                           「한계수량 이하이면 재고현황 표에서 해당 부품의 수량이 빨간색 붉은 글씨로」).
+                        🔴 **판정은 `isLowStock` 하나다** — 종(`notifications/bell-items.ts`)과 상세 창의
+                           「부족」 딱지가 보는 그 함수다. 여기에 부등호를 손으로 적으면 네 번째 자리가
+                           생겨 언젠가 **목록만 안 빨개지는** 날이 온다.
+                        🔴 **색만으로 알리지 않는다** — `title` 로 까닭을 함께 단다(그 함수 주석).
+                        🔵 **수량 칸만 칠한다.** 줄 전체를 칠하면 다른 칸의 글자까지 뜻이 바뀐다.
+                        🔵 한계수량을 정하지 않은 부품(`null`)은 **지금 그대로** 검다.
+                      */}
+                      <td
+                        className={`tabular px-2.5 py-1.5 text-right font-semibold whitespace-nowrap ${isLowStock(p.quantity, p.limitQuantity) ? "text-red-700" : ""}`}
+                        title={lowStockTitle(p.quantity, p.limitQuantity)}
+                      >
                         {formatQuantity(p.quantity)}
                       </td>
                       {yearColumns.map((y) => (

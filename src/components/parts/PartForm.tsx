@@ -170,6 +170,34 @@ export function PartForm({ items, initial, partId, partNo, quantity }: PartFormP
         <p className="mt-2 text-xs text-zinc-500">엔이 기본이고 국내 구매품만 원입니다. 견적가는 항상 원입니다.</p>
       </section>
 
+      {/*
+        재고 알림 (2026-10-16 사용자 요청). 가격 칸들과 **따로 둔 까닭**: 돈이 아니라 수량이고,
+        이 칸 하나가 「알림이 뜨느냐 마느냐」를 정하는 설정이라 설명 한 줄이 반드시 따라붙어야 한다.
+        🔴 비우면 `null`(정하지 않음)이고, 그 부품은 알림 대상이 아니다 — 0 과 다르다(lib/parts/form.ts).
+      */}
+      <section className="rounded-lg border border-zinc-200 bg-white p-4">
+        <h2 className="text-sm font-semibold text-zinc-900">재고 알림</h2>
+        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+          <label className={LABEL}>
+            한계수량
+            <input
+              name="limitQuantity"
+              inputMode="numeric"
+              className={`${INPUT} tabular text-right ${err.limitQuantity ? INPUT_ERR : ""}`}
+              value={v.limitQuantity}
+              onChange={set("limitQuantity")}
+              placeholder="없으면 비움"
+            />
+            <Err msg={err.limitQuantity} />
+          </label>
+        </div>
+        {/* 🔴 「같을 때도」와 「0 도 알린다」를 둘 다 적는다 — 둘 다 2026-10-16 에 뜻이 바뀐 자리이고,
+            설명이 반만 맞으면 사람이 0 을 「끄기」로 쓴다(끄는 길은 비우는 것 하나뿐이다). */}
+        <p className="mt-2 text-xs text-zinc-500">
+          재고가 한계수량과 <b>같거나 적어지면</b> 머리말의 알림 종에 뜹니다. 0 을 적으면 재고가 하나도 남지 않았을 때 알립니다. <b>알리지 않으려면 비워 두십시오</b> — 비운 부품은 알리지 않습니다.
+        </p>
+      </section>
+
       <section className="rounded-lg border border-zinc-200 bg-white p-4">
         <label className={LABEL}>
           비고

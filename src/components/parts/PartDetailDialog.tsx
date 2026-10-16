@@ -3,8 +3,8 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { startTransition, useActionState, useEffect, useRef, useState } from "react";
-import { saveCustomerNameAction, type CustomerNameState } from "@/app/actions/parts";
-import { CATEGORY_LABEL, OWNER_LABEL, formatMoney, formatQuantity } from "@/lib/parts/codes";
+import { saveCustomerNameAction, saveLimitQuantityAction, type CustomerNameState, type LimitQuantityState } from "@/app/actions/parts";
+import { CATEGORY_LABEL, OWNER_LABEL, formatMoney, formatQuantity, isLowStock } from "@/lib/parts/codes";
 import type { LegacyHistoryLine, PartYearlyRow, ProductUse } from "@/lib/legacy/queries";
 import type { PartRow } from "@/lib/parts/types";
 import { CHARGE_LABEL, ENTRY_TYPE_LABEL, formatDelta, sheetNoText } from "@/lib/stock/codes";
@@ -138,6 +138,14 @@ export function PartDetailDialog({ part, missingNo, canEdit, canRecord, detail, 
               <dt className="text-xs text-zinc-500">수량</dt>
               <dd className="tabular">
                 <b>{formatQuantity(part.quantity)}</b> 개
+              </dd>
+            </div>
+            {/* 한계수량 — 재고가 이 수 이하가 되면 종에 뜬다. 수량 바로 옆에 둔다(견주는 두 수다). */}
+            <div className="flex flex-col gap-0.5">
+              <dt className="text-xs text-zinc-500">한계수량</dt>
+              <dd>
+                {/* key: 다른 부품으로 갈아타면 고치던 중이던 상태·입력값을 버린다 (고객사 품명과 같은 까닭) */}
+                <LimitQuantityField key={part.id} partId={part.id} value={part.limitQuantity} quantity={part.quantity} canEdit={canEdit} />
               </dd>
             </div>
             <div className="flex flex-col gap-0.5">
@@ -355,6 +363,125 @@ function CustomerNameField({ partId, value, canEdit }: { partId: string; value: 
           취소
         </button>
       </span>
+      {state.error ? (
+        <span role="alert" className="text-xs text-red-600">
+          {state.error}
+        </span>
+      ) : null}
+    </form>
+  );
+}
+
+/* ───────────── 한계수량 — 이 칸만 ADMIN 이 그 자리에서 고친다 (2026-10-16) ───────────── */
+
+const EMPTY_LIMIT_QUANTITY_STATE: LimitQuantityState = { error: null, saveCount: 0 };
+
+/**
+ * 한계수량만 고치는 자리 (2026-10-16 사용자 요청: 「부품 상세에서 한계수량을 설정할 수 있도록」).
+ *
+ * 🔴 **바로 위 `CustomerNameField` 와 같은 결로 만든다** — 고치기 → 칸 → 저장/취소, 저장이 끝나면
+ *    칸을 닫고 `router.refresh()`. 함정 둘(렌더 중 상태 맞추기 · 폼 자동 초기화 피하기)도 같다.
+ * 🔴 **다른 점은 자격뿐이다.** 고객사 품명은 기록(STAFF) 이상이지만(2026-10-14 결정) 한계수량은
+ *    **관리자(ADMIN)** 다 — 그래서 `canRecord` 가 아니라 `canEdit` 를 본다. 진짜 차단은 서버 액션의
+ *    `requireRole("ADMIN")` 이고 이것은 **화면에 보일지**만 정한다 (CLAUDE.md 8-4절).
+ *
+ * 🔵 값이 없을 때 「-」 가 아니라 **「없음」**이라고 적는다. 이 칸의 빈 값은 「모른다」가 아니라
+ *    **정하지 않아 알리지 않는다**는 뜻이고, `0`(「하나도 안 남으면 알려라」)과 다른 값이다.
+ *    🔴 **`0` 은 끄는 값이 아니다** — 부등호가 「이하」라 재고가 0 이면 울린다(2026-10-16 결정).
+ *
+ * 🔴 **「부족」 딱지는 종이 쓰는 그 함수(`isLowStock`)로 붙인다.** 여기에 `quantity < value` 를 손으로
+ *    적어 두었다가 부등호가 「이하」로 바뀐 날 한쪽만 고칠 뻔했다 — 그러면 「상세엔 부족이라는데
+ *    종은 조용하다」가 된다. 적는 자리는 `lib/parts/codes.ts` 하나다.
+ */
+function LimitQuantityField({ partId, value, quantity, canEdit }: { partId: string; value: number | null; quantity: number; canEdit: boolean }) {
+  const router = useRouter();
+  const [state, formAction, pending] = useActionState<LimitQuantityState, FormData>(saveLimitQuantityAction, EMPTY_LIMIT_QUANTITY_STATE);
+  const [editing, setEditing] = useState(false);
+  // 🔴 `null` 만 빈 칸이다. `0` 은 "0" 으로 그린다 — 뭉개면 「0 으로 정함」이 「정하지 않음」으로 바뀐다.
+  const [draft, setDraft] = useState(value === null ? "" : String(value));
+
+  const [seenSaveCount, setSeenSaveCount] = useState(0);
+  if (state.saveCount !== seenSaveCount) {
+    setSeenSaveCount(state.saveCount);
+    setEditing(false);
+  }
+
+  useEffect(() => {
+    if (seenSaveCount !== 0) router.refresh();
+  }, [seenSaveCount, router]);
+
+  function onSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const data = new FormData(e.currentTarget);
+    startTransition(() => formAction(data));
+  }
+
+  if (!editing) {
+    return (
+      <span className="flex flex-wrap items-center gap-1.5">
+        {value === null ? (
+          <span className="text-zinc-400" title="한계수량을 정하지 않았습니다. 이 부품은 재고가 줄어도 알리지 않습니다.">
+            없음
+          </span>
+        ) : (
+          <span className="tabular">
+            <b>{formatQuantity(value)}</b> 개
+            {isLowStock(quantity, value) ? <span className="ml-1 inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-xs text-amber-900">부족</span> : null}
+          </span>
+        )}
+        {canEdit ? (
+          <button
+            type="button"
+            className={SMALL_BTN}
+            onClick={() => {
+              setDraft(value === null ? "" : String(value));
+              setEditing(true);
+            }}
+            title="재고가 한계수량과 같거나 적어지면 알림 종에 뜹니다. 알리지 않으려면 비워 두십시오(0 은 「하나도 안 남으면 알려라」입니다). 관리자가 고칠 수 있습니다."
+          >
+            고치기
+          </button>
+        ) : null}
+        {state.error ? (
+          <span role="alert" className="text-xs text-red-600">
+            {state.error}
+          </span>
+        ) : null}
+      </span>
+    );
+  }
+
+  return (
+    <form onSubmit={onSubmit} className="flex flex-col gap-1">
+      <input type="hidden" name="id" value={partId} />
+      <span className="flex flex-wrap items-center gap-1.5">
+        <input
+          name="limitQuantity"
+          inputMode="numeric"
+          aria-label="한계수량"
+          className="tabular min-w-0 flex-1 rounded-md border border-zinc-200 bg-white px-2 py-1 text-right text-sm text-zinc-900"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="없으면 비움"
+          autoFocus
+        />
+        <button type="submit" className={SMALL_BTN} disabled={pending}>
+          {pending ? "저장 중" : "저장"}
+        </button>
+        <button
+          type="button"
+          className={SMALL_BTN}
+          disabled={pending}
+          onClick={() => {
+            setDraft(value === null ? "" : String(value));
+            setEditing(false);
+          }}
+        >
+          취소
+        </button>
+      </span>
+      {/* 🔴 「끄려면 비운다」를 고치는 자리에도 적는다 — 0 을 끄기로 쓰는 오해가 여기서 생긴다. */}
+      <span className="text-xs text-zinc-500">재고가 이 수와 같거나 적어지면 알립니다. 알리지 않으려면 비워 두십시오.</span>
       {state.error ? (
         <span role="alert" className="text-xs text-red-600">
           {state.error}

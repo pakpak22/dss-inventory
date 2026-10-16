@@ -1,0 +1,1 @@
+ALTER TABLE "parts" ADD COLUMN "limit_quantity" integer;

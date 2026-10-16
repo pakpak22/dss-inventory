@@ -2,27 +2,34 @@ import type { NotificationBellItem } from "@dss/ui";
 import type { Role } from "@/db/schema/users";
 import type { PartIssueStatus } from "@/lib/approval/part-issue-rules";
 import { roleAtLeast } from "@/lib/auth/role";
+// 🔴 「재고가 한계수량에 걸렸나」는 **부품 어휘**에 있다 — 상세 창의 「부족」 딱지도 같은 함수를
+//    본다(그쪽 주석). 여기에 한 벌 더 적으면 「상세엔 부족이라는데 종은 조용하다」가 생긴다.
+import { isLowStock } from "@/lib/parts/codes";
 import { todaySeoul as seoulDate } from "@/lib/stock/codes";
 
 /**
  * ============================================================================
- * 이 시스템의 **자체 알림** — 반출 신청 둘 · 부품 불출 결재 둘
+ * 이 시스템의 **자체 알림** — 반출 신청 둘 · 부품 불출 결재 둘 · 한계수량 하나
  * ============================================================================
  * 머리말의 알림 종(@dss/ui 의 NotificationBell)이 받는 아홉 칸을 만든다.
  * 이 파일은 **순수 계산만** 한다 — DB 도 React 도 세션도 환경변수도 모른다.
  * 재료(대기 건수 · 반려된 신청 줄 · 결재 차례 요약 · 결정된 내 결재건 · 이 시스템의
  * 주소 · client_id)는 부르는 쪽이 날라다 준다(notifications/queries.ts).
  *
- * ── 🔴 스키마를 건드리지 않는다 ─────────────────────────────────────────
- * 새 표도 마이그레이션도 없다. 「읽음」 표를 만들지 않는다. 네 가지 알림이 모두
- * **이미 있는 표의 상태와 시각만으로** 풀리기 때문이다:
+ * ── 🔴 「읽음」 표를 만들지 않는다 ───────────────────────────────────────
+ * 다섯 가지 알림이 모두 **이미 있는 표의 상태와 값만으로** 풀린다:
  *
  *  | 누구에게          | 무엇                      | 어디로      | 언제 사라지나                       |
  *  |-------------------|---------------------------|-------------|-------------------------------------|
  *  | 지금 내 차례인 사람| 「결재할 불출 신청 N건」 | `/approvals`| 결재하면 단계가 닫혀 저절로          |
  *  | ADMIN(재고 담당)  | 「반출 확인 대기 N건」    | `/requests` | 확인·반려하면 상태가 바뀌어 저절로  |
+ *  | ADMIN(재고 담당)  | 「재고가 한계수량 이하」  | `/?part=No.`| 재고가 한계수량을 넘으면 저절로     |
  *  | 결재를 올린 본인  | 「불출 결재가 승인/반려」 | `/approvals`| 승인=**실행되면**, 반려=**7일**     |
  *  | 신청한 본인       | 「반출 신청이 반려됨」    | `/requests` | **결정된 지 7일**이 지나면 저절로   |
+ *
+ * 🔵 **2026-10-16 에 다섯째가 붙었다** — 한계수량(`parts.limit_quantity`)은 새 칸이지만, 이 파일의
+ * 약속은 **읽음 표를 만들지 않는 것**이지 칸을 안 더하는 것이 아니다. 그 줄도 다른 넷과 똑같이
+ * **지금 값으로만** 풀린다: 재고를 채우면 다음 번에 저절로 빠진다(아래 ④).
  *
  * 🔵 **확인된(CONFIRMED) 신청은 알리지 않는다**(2026-10-13 사용자 결정). 수량이
  * 바뀌어 화면에서 바로 보인다. 취소(CANCELLED)도 알리지 않는다 — 본인이 거둔 것이다.
@@ -69,6 +76,20 @@ export const NOTIFICATION_KINDS = {
    * 구분**이다. 제목을 다듬을 때 그 사실을 잊지 마라.
    */
   issueApprovalDecided: "STOCK_ISSUE_APPROVAL_DECIDED",
+  /**
+   * 「재고가 한계수량 이하다」 — **부품마다 한 줄** (2026-10-16 사용자 요청).
+   *
+   * 🔴 **묶음이 아닌 까닭**: 사용자가 「알림을 누르면 해당 부품 상세가 뜨도록」을 함께 요청했다.
+   * 한 줄로 묶으면 어느 부품인지 가릴 수 없어 그 요청을 지킬 수 없다. 대신 줄이 넘치지 않게
+   * **상한**(아래 `MAX_LOW_STOCK_ITEMS`)을 두고 나머지는 한 줄로 묶어 목록으로 보낸다.
+   *
+   * 🔴 **코드에 부등호를 담지 않는다.** 처음에 `PART_STOCK_BELOW_LIMIT` 로 적었다가 같은 날
+   * 규칙이 「미만」에서 **「이하」**로 바뀌어(2026-10-16 사용자 결정) 코드만 거짓말이 될 뻔했다.
+   * 코드는 **무슨 알림인가**(재고가 모자라다)만 말하고, 가르는 셈은 `isLowStock` 한 곳에 둔다.
+   * 🔵 바꿔도 안전했던 까닭: 이 값을 **저장하는 표가 없다**(읽음 표도, 설정 표도 없다 — 포털
+   * 설정은 읽기 전용이고 @dss/ui 는 이 글자를 해시해 색 칸만 고른다. 목록이 아니다).
+   */
+  lowStock: "PART_STOCK_LOW",
 } as const;
 
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[keyof typeof NOTIFICATION_KINDS];
@@ -79,6 +100,7 @@ export const NOTIFICATION_KIND_LABELS: Record<NotificationKind, string> = {
   [NOTIFICATION_KINDS.rejected]: "반려",
   [NOTIFICATION_KINDS.issueApprovalToDecide]: "결재 차례",
   [NOTIFICATION_KINDS.issueApprovalDecided]: "결재 결과",
+  [NOTIFICATION_KINDS.lowStock]: "재고 부족",
 };
 
 /**
@@ -99,6 +121,17 @@ export const ISSUE_APPROVAL_TO_DECIDE_NOTIFICATION_ID = "ISSUE_APPROVALS_TO_DECI
 /** 「결재 결과」 알림 id 의 앞머리. */
 export const ISSUE_APPROVAL_DECIDED_ID_PREFIX = "ISSUE_APPROVAL_DECIDED";
 
+/**
+ * 「재고 부족」 줄 id 의 앞머리. 🔴 뒤에 붙는 것은 **부품 No.** 다(uuid 가 아니다) — 그 줄이 가리키는
+ * 주소(`/?part=No.`)와 **같은 열쇠**여야 한다. No. 는 재매김이 없어(`parts.ts` 머리말) 열쇠로 안전하다.
+ */
+export const LOW_STOCK_ID_PREFIX = "PART_LOW_STOCK";
+
+/**
+ * 「그 밖에 N종 더」 줄의 id. 🔴 **고정값이다** — 여러 부품을 한 줄로 묶은 줄이라 열쇠도 하나다.
+ */
+export const LOW_STOCK_MORE_NOTIFICATION_ID = "PARTS_LOW_STOCK_MORE";
+
 /** 반려 알림이 보이는 기간(일). 🔴 사용자가 정한 값(2026-10-13). */
 export const REJECTED_VISIBLE_DAYS = 7;
 
@@ -113,6 +146,27 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * 🔴 **배지 숫자는 이 상한에 걸리기 전의 진짜 개수**다(아래 count 주석).
  */
 export const NOTIFICATION_MAX_ITEMS = 200;
+
+/**
+ * 「재고 부족」을 **부품마다 한 줄로** 실어 보내는 상한 (2026-10-16).
+ *
+ * ── 🔴 왜 상한이 있어야 하나 ────────────────────────────────────────────
+ * 다른 네 알림과 성질이 다르다. 반려·결재는 **사건**이라 사람이 처리하면 사라지지만, 재고
+ * 부족은 **상태**라 부품을 채워 넣기 전까지 계속 서 있다. 부품이 300종이 넘으므로 관리자가
+ * 한계수량을 널리 정해 두면 종이 이 줄로만 가득 찰 수 있다.
+ *
+ * ── 🔴 그래도 묶음 한 줄로 두지 않는다 ──────────────────────────────────
+ * 사용자가 「알림을 누르면 **해당 부품 상세**가 뜨도록」을 함께 요청했다. 전부 묶으면 그 요청을
+ * 지킬 수 없다. 그래서 **급한 것부터 10종은 줄마다 하나씩**(눌러서 바로 그 부품으로) 두고,
+ * 넘치는 것은 **「그 밖에 N종 더」 한 줄**로 묶어 **목록**으로 보낸다(아래 LOW_STOCK_LIST_PATH).
+ *
+ * 10인 까닭: 종의 목록은 `min(60vh, 420px)` 안에서 굴러가므로(@dss/ui 의 notification-bell.css)
+ * 한 번에 눈에 들어오는 줄이 예닐곱이다. 10줄이면 굴려서 끝까지 볼 수 있고, 다른 알림(결재
+ * 차례·반려·결재 결과)이 이 줄들에 밀려 안 보이는 일도 생기지 않는다.
+ * 🔵 @dss/ui 는 줄 수를 **스스로 자르지 않는다**(굴림 막대로 받는다). 자르는 자리는 여기와
+ * 포털의 200(위 NOTIFICATION_MAX_ITEMS)뿐이다.
+ */
+export const MAX_LOW_STOCK_ITEMS = 10;
 
 /**
  * 알림을 누르면 가는 화면 — **부품 요청 관리**(`/requests`).
@@ -147,6 +201,25 @@ const REQUESTS_PATH = "/requests";
  *    읽고** 적었다 — 넘겨짚지 마라.
  */
 const APPROVALS_PATH = "/approvals";
+
+/**
+ * 「재고 부족」 줄이 가는 곳 — **재고 현황 목록의 부품 상세 창**(`/?part=No.`) (2026-10-16).
+ *
+ * 🔴 **그 길이 실제로 상세 창을 연다.** 넘겨짚지 않고 읽고 적는다:
+ *    `src/app/(app)/page.tsx` 가 `searchParams.part` 를 숫자로 읽어 그 부품의 이력까지 함께 내려주고,
+ *    `PartsList` → `PartDetailDialog` 이 그 값으로 `showModal()` 한다. 이 저장소가 이미 쓰는 길이다
+ *    (`PartForm.tsx` 의 「보기」 · 저장 뒤 `redirect(\`/?part=${no}\`)`).
+ * 🔴 **문은 `requireSession` 이다 — 역할로 막지 않는다**(`(app)/layout.tsx` 한 곳에서 본다. 이 화면에는
+ *    `requireRole` 이 없다). 그래서 「눌러도 못 여는 줄」이 되지 않는다. 다만 이 알림을 **받는 사람**은
+ *    아래 `receivesLowStockNotification` 이 ADMIN 으로 좁힌다 — 자격이 아니라 **할 일**로 가른 것이다.
+ * 🔵 묶음 줄(「그 밖에 N종 더」)은 **목록**으로 간다. 🔴 그 줄은 어느 부품인지 가리지 못하므로 상세
+ *    창으로 보낼 수 없다. `sort=quantity` 는 목록이 이미 쓰는 주소 규칙이라(`parts/list-state.ts` 의
+ *    `parseListState`) 수량이 적은 부품이 맨 위에 선다 — 새 화면도 새 주소 규칙도 만들지 않았다.
+ */
+function lowStockPartPath(no: number): string {
+  return `/?part=${no}`;
+}
+const LOW_STOCK_LIST_PATH = "/?sort=quantity";
 
 /**
  * 반려 알림이 보이는 선. 이 시각보다 **먼저** 결정된 것은 사라진다.
@@ -233,6 +306,25 @@ export function receivesIssueApprovalDecidedNotification(): boolean {
   return true;
 }
 
+/**
+ * 「재고가 한계수량 이하다」를 받는 사람 — **재고 담당(ADMIN)뿐**이다 (2026-10-16).
+ *
+ * 🔴 **「반출 확인 대기」와 같은 사람들을 고른 까닭**: 이 줄이 바라는 행동이 **재고를 채우는 일**인데,
+ * 그 일을 하는 사람이 재고 담당(ADMIN)이다. 입고를 적는 것도, 수량을 조정하는 것도, 반출을 확인해
+ * 내주는 것도 같은 사람이다. 기록(STAFF)에게 보내면 **자기가 할 수 없는 일**이 종에 쌓이고,
+ * 보기(VIEWER)에게는 더더욱 그렇다 — 줄은 「누가 처리할 수 있는가」로 가른다.
+ *
+ * 🔴 **`receivesPendingNotification` 을 그대로 부르지 않는다.** 답이 오늘 같을 뿐 **다른 물음**이다 —
+ * 저쪽은 「누가 신청을 확인하는가」, 이쪽은 「누가 재고를 채우는가」. 한쪽이 바뀌는 날 다른 쪽까지
+ * 조용히 끌려가면 안 된다(불출 결재 둘이 똑같이 `true` 를 돌려주면서도 함수를 둘로 둔 것과 같은 까닭).
+ *
+ * 🔵 이 판정은 **자격이 아니라 할 일**로 가른 것이다. 그 줄이 가리키는 `/?part=No.` 는 문이
+ * `requireSession` 이라 누구나 열 수 있다 — 「눌러도 못 여는 줄」 걱정은 여기에 없다.
+ */
+export function receivesLowStockNotification(role: Role): boolean {
+  return role === "ADMIN";
+}
+
 /** 종이 받는 한 뭉치 — 그릴 줄과 배지에 찍을 수. */
 export type InventoryNotificationFeed = {
   items: NotificationBellItem[];
@@ -315,6 +407,32 @@ export type DecidedIssueApprovalSource = {
 };
 
 /**
+ * 알림으로 만들 「재고가 한계수량에 걸린 부품」 한 줄 (2026-10-16). 종에 필요한 칸만 받는다.
+ *
+ * 🔴 **고르는 일은 여기서 하지 않는다.** 「재고 ≤ 한계수량」도, 「한계수량이 null 이면 빼기」도,
+ * 「지워진 부품은 빼기」도 **질의가 WHERE 로** 끝낸 뒤에 오는 줄이다(`parts/queries.ts` 의
+ * `listLowStockParts`). 그래서 `limitQuantity` 가 `number`(널 아님)인 것이 이 타입의 약속이다.
+ * 🔵 조립은 그래도 한 번 더 거른다(아래 ④) — 반려 줄이 7일 선을 두 번 보는 것과 같은 결이고,
+ * **두 자리가 같은 부등호를 쓰므로** 갈라질 수 없다.
+ */
+export type LowStockPartSource = {
+  /** 부품 No. 🔴 알림 id 와 주소(`/?part=No.`)가 **이 값 하나**에서 나온다. */
+  no: number;
+  name: string;
+  /** 없으면 빈 문자열(`parts` 표의 관례). 있으면 줄에 함께 적는다 — 품명만 같은 부품이 실제로 여럿 있다. */
+  name2: string;
+  /** 🔴 **재고 현황 목록이 보여 주는 그 수**다(`stock_balances.quantity`, 줄이 없으면 0). */
+  quantity: number;
+  /** 🔴 `null` 이 아니다 — 질의가 걸렀다. */
+  limitQuantity: number;
+};
+
+/** 부품 No. → 이 시스템 안에서의 알림 id. 🔴 같은 부품에는 **언제나 같은 값**이 나온다. */
+export function lowStockNotificationId(partNo: number): string {
+  return `${LOW_STOCK_ID_PREFIX}:${partNo}`;
+}
+
+/**
  * 절대 주소인지 보고 끝의 슬래시를 떼어 낸다.
  *
  * 🔴 **상대경로를 받지 않는다.** 자기 화면에서는 `/entries` 로도 열리지만, 이 목록은
@@ -359,9 +477,10 @@ function joinDetail(parts: Array<string | null | undefined>): string {
  * 재료 → 종이 받는 목록과 개수.
  *
  * ── 차례 ────────────────────────────────────────────────────────────────
- * **할 일이 위, 결과가 아래**다. ⓪ 결재 차례 → ① 확인 대기 → ③ 결재 결과 → ② 반출 신청 반려.
+ * **할 일이 위, 결과가 아래**다. ⓪ 결재 차례 → ① 확인 대기 → ④ 재고 부족 → ③ 결재 결과 → ② 반출 신청 반려.
  * ⓪ 가 맨 위인 까닭: 그 줄만이 **남이 나를 기다리고 있는** 일이다(결재가 안 나면 부품이 안
- * 나간다). 줄 안의 차례는 질의가 정한 그대로 쓴다 — 두 곳에서 각자 정렬하면 언젠가 갈린다.
+ * 나간다). ④ 는 할 일 묶음의 **끝**이다 — 사람을 기다리게 하는 일이 아니라 미리 챙기는 일이다.
+ * 줄 안의 차례는 질의가 정한 그대로 쓴다 — 두 곳에서 각자 정렬하면 언젠가 갈린다.
  *
  * ── 🔴 아홉 칸이 전부 채워진다 ──────────────────────────────────────────
  * @dss/ui 의 NotificationBellItem 은 아홉 칸이 모두 필수 string 이고, **없는 값은
@@ -385,6 +504,13 @@ export function buildInventoryNotificationItems(input: {
   decidedIssueApprovals: readonly DecidedIssueApprovalSource[];
   /** 🔴 자르기 전의 건수. 안 넘기면 받은 줄 수로 본다. */
   decidedIssueApprovalsTotal?: number;
+  /**
+   * 재고가 한계수량 이하인 부품 — **이미 상한(`MAX_LOW_STOCK_ITEMS`)에서 잘린** 줄,
+   * 모자란 만큼 큰 순서(질의가 정한 차례 그대로).
+   */
+  lowStockParts: readonly LowStockPartSource[];
+  /** 🔴 자르기 전의 **종수**. 안 넘기면 받은 줄 수로 본다. 「그 밖에 N종 더」가 이 값에서 나온다. */
+  lowStockPartsTotal?: number;
   /** 기준 시각. 7일 선을 여기서 긋는다. */
   now: Date;
   /** 이 시스템의 주소 앞머리. 🔴 절대 주소여야 한다. */
@@ -397,6 +523,7 @@ export function buildInventoryNotificationItems(input: {
   //    줄을 쓰므로, 이 두 줄이 양쪽을 함께 바꾼다.
   const requestsHref = `${baseUrl}${REQUESTS_PATH}`;
   const approvalsHref = `${baseUrl}${APPROVALS_PATH}`;
+  const lowStockListHref = `${baseUrl}${LOW_STOCK_LIST_PATH}`;
   const items: NotificationBellItem[] = [];
   const seen = new Set<string>();
 
@@ -451,6 +578,43 @@ export function buildInventoryNotificationItems(input: {
       input.pending.oldestAt ? `가장 오래 기다린 신청 ${seoulDate(input.pending.oldestAt)}` : "",
       requestsHref,
     );
+  }
+
+  // ④ 담당자(ADMIN)에게 — 「재고가 한계수량 이하입니다」. **부품마다 한 줄**이다 (2026-10-16).
+  //    🔴 묶지 않는 까닭: 사용자가 「알림을 누르면 **해당 부품 상세**가 뜨도록」을 함께 요청했다.
+  //       묶으면 어느 부품인지 가릴 수 없어 그 요청을 지킬 수 없다.
+  //    🔴 그래서 **상한**(MAX_LOW_STOCK_ITEMS)을 두고 넘치면 「그 밖에 N종 더」 한 줄로 묶어
+  //       **목록**으로 보낸다. 재고 부족은 사건이 아니라 **상태**라 채워 넣기 전까지 계속 서 있는데,
+  //       부품이 300종이 넘어 상한이 없으면 종이 이 줄로만 가득 찬다(그 상수의 주석).
+  //    🔴 **역할도 본다** — 재고를 채우는 사람(ADMIN)에게만 간다. 판정은
+  //       `receivesLowStockNotification` 한 곳에서만 온다.
+  const showLowStock = receivesLowStockNotification(input.role);
+  let lowStockShown = 0;
+  let lowStockMoreShown = false;
+  if (showLowStock) {
+    for (const row of input.lowStockParts) {
+      // 🔴 질의가 이미 걸렀지만 여기서 한 번 더 본다(②·③과 같은 모양). **같을 때도 알린다** —
+      //    둘이 `isLowStock` 하나를 보므로 규칙이 갈라질 수 없다.
+      if (!isLowStock(row.quantity, row.limitQuantity)) continue;
+      lowStockShown += 1;
+      push(
+        lowStockNotificationId(row.no),
+        NOTIFICATION_KINDS.lowStock,
+        "재고가 한계수량 이하입니다",
+        // 🔴 **어느 부품인지와 두 숫자만** 싣는다. 눌러서 열리는 상세 창이 나머지를 다 말해 준다.
+        joinDetail([`No. ${row.no} ${row.name}`.trim(), row.name2, `재고 ${row.quantity}개 · 한계수량 ${row.limitQuantity}개`]),
+        // 🔴 **이 줄만이 부품마다 다른 주소**를 쓴다 — 그래야 눌러서 그 부품 상세가 열린다.
+        `${baseUrl}${lowStockPartPath(row.no)}`,
+      );
+    }
+    // 🔵 넘친 종은 **한 줄로 묶어 목록으로** 보낸다. 🔴 상세 창으로 보낼 수 없는 줄이다(어느
+    //    부품인지 가리지 못한다). 수량이 적은 순으로 선 목록이 열린다.
+    const lowStockTotal = input.lowStockPartsTotal ?? input.lowStockParts.length;
+    const rest = lowStockTotal - lowStockShown;
+    if (lowStockShown > 0 && rest > 0) {
+      push(LOW_STOCK_MORE_NOTIFICATION_ID, NOTIFICATION_KINDS.lowStock, `한계수량 이하인 부품이 ${rest}종 더 있습니다`, "재고 현황 목록에서 봅니다", lowStockListHref);
+      lowStockMoreShown = true;
+    }
   }
 
   // ③ 결재를 **올린 본인**에게 — 「승인되었습니다」 · 「반려되었습니다」. **건마다 한 줄**이다
@@ -531,9 +695,14 @@ export function buildInventoryNotificationItems(input: {
     decidedCount = decidedTotal > input.decidedIssueApprovals.length ? decidedTotal : decidedShown;
   }
 
+  // ④ 재고 부족은 **그린 줄을 그대로 센다** — 넘친 종을 「그 밖에 N종 더」 한 줄로 **보여 주므로**
+  //    배지와 펼친 목록이 어긋날 자리가 없다. 🔴 ②·③처럼 「잘린 총계」를 쓰지 않는 까닭이 그것이다:
+  //    저쪽은 넘친 줄을 **말없이 버리므로** 총계를 써야 참말이 되고, 이쪽은 버리지 않는다.
+  const lowStockCount = lowStockShown + (lowStockMoreShown ? 1 : 0);
+
   return {
     items: items.slice(0, NOTIFICATION_MAX_ITEMS),
-    // 🔵 묶음 줄(⓪ · ①)은 **1** 로 센다 — 펼치면 한 줄이기 때문이다(위 count 주석).
-    count: (showToDecide ? 1 : 0) + (showPending ? 1 : 0) + decidedCount + rejectedCount,
+    // 🔵 묶음 줄(⓪ · ① · ④의 「그 밖에 N종 더」)은 **1** 로 센다 — 펼치면 한 줄이기 때문이다(위 count 주석).
+    count: (showToDecide ? 1 : 0) + (showPending ? 1 : 0) + lowStockCount + decidedCount + rejectedCount,
   };
 }

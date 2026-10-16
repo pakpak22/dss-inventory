@@ -3,8 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireRole } from "@/lib/auth/session";
-import { parseCustomerName, parsePartForm, readPartFormValues, type PartFieldErrors, type PartFormValues } from "@/lib/parts/form";
-import { createPart, deletePart, findDuplicateParts, updateCustomerName, updatePart, type DuplicatePart } from "@/lib/parts/mutations";
+import { parseCustomerName, parseLimitQuantity, parsePartForm, readPartFormValues, type PartFieldErrors, type PartFormValues } from "@/lib/parts/form";
+import { createPart, deletePart, findDuplicateParts, updateCustomerName, updateLimitQuantity, updatePart, type DuplicatePart } from "@/lib/parts/mutations";
 import { listPartItems } from "@/lib/parts/queries";
 
 /**
@@ -95,6 +95,49 @@ export async function saveCustomerNameAction(prev: CustomerNameState, formData: 
     result = await updateCustomerName(id, parsed.value, { id: session.user.id, name: session.user.name });
   } catch (e) {
     console.error("[parts] 고객사 품명 저장 실패:", e instanceof Error ? e.message : e);
+    return { error: "저장하지 못했습니다. 잠시 뒤 다시 시도하십시오.", saveCount: prev.saveCount };
+  }
+  if (!result.ok) return { error: "고칠 부품이 없습니다. 이미 지워졌을 수 있습니다.", saveCount: prev.saveCount };
+
+  revalidatePath("/");
+  return { error: null, saveCount: prev.saveCount + 1 };
+}
+
+/* ───────────── 한계수량만 고치는 전용 길 (ADMIN) ───────────── */
+
+/**
+ * 🔵 모양이 `CustomerNameState` 와 **똑같다** — 상세 창에서 칸 하나를 그 자리에서 고치는 길이라
+ * 「저장이 끝난 **횟수**」가 필요한 까닭도 같다(위 saveCount 주석을 그대로 따른다).
+ * 🔴 타입을 합치지 않는다: 두 칸이 같은 상태를 나눠 쓰면 한쪽 저장이 다른 쪽 칸을 닫는다.
+ */
+export interface LimitQuantityState {
+  error: string | null;
+  saveCount: number;
+}
+
+/**
+ * 한계수량 하나만 저장한다 (2026-10-16 사용자 요청).
+ *
+ * 🔴 **관리자(ADMIN)다.** 고객사 품명이 기록(STAFF) 이상인 것은 2026-10-14 에 그 칸만 따로 정한
+ *    것이고, 한계수량은 부품의 다른 칸과 같은 관리자 칸이다 — **기존 가드를 내리지 않았다.**
+ *    까닭 둘: ① 이 값이 재고 담당에게 가는 알림을 켜고 끈다 ② 같은 칸이 관리자 전용인 부품
+ *    수정 화면(`/parts/[no]/edit`)에도 있어, 여기만 열면 같은 칸의 문턱이 둘이 된다.
+ *
+ * 성공해도 redirect 하지 않는다: 상세 창이 열린 채로 그 자리에서 고치는 길이라, 돌아가면 창이 닫힌다.
+ */
+export async function saveLimitQuantityAction(prev: LimitQuantityState, formData: FormData): Promise<LimitQuantityState> {
+  const session = await requireRole("ADMIN");
+  const id = String(formData.get("id") ?? "").trim();
+  if (!id) return { error: "고칠 부품이 정해지지 않았습니다.", saveCount: prev.saveCount };
+
+  const parsed = parseLimitQuantity(formData);
+  if (!parsed.ok) return { error: parsed.errors, saveCount: prev.saveCount };
+
+  let result;
+  try {
+    result = await updateLimitQuantity(id, parsed.value, { id: session.user.id, name: session.user.name });
+  } catch (e) {
+    console.error("[parts] 한계수량 저장 실패:", e instanceof Error ? e.message : e);
     return { error: "저장하지 못했습니다. 잠시 뒤 다시 시도하십시오.", saveCount: prev.saveCount };
   }
   if (!result.ok) return { error: "고칠 부품이 없습니다. 이미 지워졌을 수 있습니다.", saveCount: prev.saveCount };

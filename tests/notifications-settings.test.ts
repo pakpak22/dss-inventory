@@ -13,7 +13,7 @@ const ADMIN: PortalActor = { id: "u-admin", role: "ADMIN" };
 const found = (actor: PortalActor | null) => async () => actor;
 
 describe("내주는 표", () => {
-  it("종류는 종이 실제로 쓰는 그 넷이다 — 손으로 적지 않는다", () => {
+  it("종류는 종이 실제로 쓰는 그 다섯이다 — 손으로 적지 않는다", () => {
     const { kinds } = inventoryNotificationSettings();
     assert.deepEqual(
       kinds.map((k) => k.kind).sort(),
@@ -79,6 +79,30 @@ describe("내주는 표", () => {
       assert.notEqual(row.label, "", kind);
       assert.notEqual(row.description, "", kind);
     }
+  });
+
+  /**
+   * 🔴 2026-10-16. 재고 부족이 표에 실린다 — 실리지 않으면 포털 관리 화면에서 이 알림이 있는 줄도
+   * 모른다. 🔵 **재고를 채우는 사람(ADMIN)만 ✓ 인 것이 참말이다** — 확인 대기와 같은 사람들이다.
+   */
+  it("🔴 재고 부족도 표에 실리고, 관리자만 받는다", () => {
+    const row = inventoryNotificationSettings().kinds.find((k) => k.kind === NOTIFICATION_KINDS.lowStock);
+    assert.ok(row);
+    assert.deepEqual(
+      Object.entries(row.roles).map(([code, cell]) => [code, cell.receives]),
+      [
+        ["VIEWER", false],
+        ["STAFF", false],
+        ["ADMIN", true],
+      ],
+    );
+    assert.notEqual(row.label, "");
+    // 🔴 「같을 때도 알린다」와 「끄는 길은 비우기뿐」이 설명에 적혀 있어야 한다 — 포털 화면이 이 글자를
+    //    그대로 그린다. 2026-10-16 에 부등호가 「미만」에서 「이하」로 바뀌면서 뜻이 뒤집힌 자리다.
+    assert.ok(row.description.includes("같거나 적어지면"), row.description);
+    assert.ok(row.description.includes("비워 둔 부품은 알리지 않습니다"), row.description);
+    // 🔴 `0` 이 끄는 값으로 읽히면 안 된다.
+    assert.ok(row.description.includes("0 은 「하나도 안 남으면 알려라」"), row.description);
   });
 
   it("🔴 승인 줄에 기간 제한이 없다는 것이 설명에 적혀 있다 — 반려만 7일이다", () => {

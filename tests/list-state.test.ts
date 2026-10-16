@@ -28,6 +28,7 @@ function row(over: Partial<PartRow> & { no: number }): PartRow {
     supplyPrice: null,
     supplyCurrency: "JPY",
     quotePrice: null,
+    limitQuantity: null,
     note: "",
     itemCode: "PCB",
     itemName: "PCB",

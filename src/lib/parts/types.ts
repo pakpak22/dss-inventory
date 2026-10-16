@@ -16,6 +16,12 @@ export interface PartRow {
   supplyPrice: number | null;
   supplyCurrency: Currency;
   quotePrice: number | null;
+  /**
+   * 한계수량 — 재고가 이 수 **이하가 되면** 종에 알린다 (2026-10-16, 같을 때도 알린다).
+   * 🔴 `null` 은 「정하지 않음 = 알림 없음」이고 `0` 은 「하나도 안 남으면 알려라」는 정한 값이다
+   *    (끄는 길은 비우는 것 하나뿐이다). `?? 0` 으로 뭉개지 마라.
+   */
+  limitQuantity: number | null;
   note: string;
   itemCode: string;
   itemName: string;

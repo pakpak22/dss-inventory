@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { diffPartInput, parseCustomerName, parsePartForm, parsePartItemForm, partToFormValues, readPartFormValues, type PartInput } from "../src/lib/parts/form";
+import { diffPartInput, parseCustomerName, parseLimitQuantity, parsePartForm, parsePartItemForm, partToFormValues, readPartFormValues, type PartInput } from "../src/lib/parts/form";
+import { MAX_QTY } from "../src/lib/stock/form";
 
 const ITEM = "11111111-1111-1111-1111-111111111111";
 const ITEMS = new Set([ITEM]);
@@ -20,6 +21,7 @@ const GOOD = {
   supplyPrice: "54,000",
   supplyCurrency: "JPY",
   quotePrice: "990000",
+  limitQuantity: "5",
   note: "2024.04.07 재고 100EA시 주문 필요\r\n둘째 줄",
   itemId: ITEM,
   category: "RFG",
@@ -112,6 +114,7 @@ describe("폼 값 왕복", () => {
       supplyPrice: null,
       supplyCurrency: "KRW",
       quotePrice: 1200,
+      limitQuantity: null,
       note: "",
       itemId: ITEM,
       category: "MB",
@@ -121,6 +124,28 @@ describe("폼 값 왕복", () => {
     assert.equal(back.customerName, "고객사 품명 A");
     assert.equal(back.quotePrice, "1200");
     assert.equal(back.supplyCurrency, "KRW");
+    assert.equal(back.limitQuantity, "");
+  });
+
+  // 🔴 「0 = 하나도 안 남으면 알려라」와 「빈 칸 = 알리지 않음」은 다른 값이다. 빈 칸으로 그리면
+  //    화면에서 **끈 것처럼 보이는데 실제로는 울리는** 부품이 생긴다(부등호가 「이하」라서).
+  it("🔴 한계수량 `0` 은 빈 칸이 아니다 — 「0 으로 정함」과 「정하지 않음」이 다른 값이다", () => {
+    const zero = partToFormValues({
+      name: "A",
+      name2: "",
+      customerName: "",
+      kyosanPartNo: "",
+      drawingNo: "",
+      supplyPrice: null,
+      supplyCurrency: "JPY",
+      quotePrice: null,
+      limitQuantity: 0,
+      note: "",
+      itemId: ITEM,
+      category: "MB",
+      owner: "DSS",
+    });
+    assert.equal(zero.limitQuantity, "0");
   });
 });
 
@@ -152,6 +177,65 @@ describe("parseCustomerName (고객사 품명만 고치는 전용 길)", () => {
   });
 });
 
+/**
+ * 한계수량 (2026-10-16 사용자 요청). 🔴 **`null` 과 `0` 이 다른 값**인 것이 이 칸의 전부다 —
+ * `null` 은 「정하지 않았다 = **알리지 않는다**」이고 `0` 은 「**하나도 안 남으면 알려라**」는 정한
+ * 값이다(부등호가 「이하」라 재고 0 에서 울린다). 「빈 칸과 0 은 다르다」는 결은 금액 칸이 이미
+ * 지키는 규칙과 같고, 다른 점은 상한뿐이다.
+ *
+ * 🔴 **끄는 길은 비우는 것 하나뿐**이라는 것이 이 묶음이 지키는 울타리다 — `0` 을 끄기로 읽으면
+ *    그 부품은 재고가 0 이 되는 날 조용히 울린다.
+ */
+describe("한계수량", () => {
+  it("🔴 비우면 null, 0 은 0 — 뭉개면 「끈 부품」과 「0 으로 정한 부품」이 한 값이 된다", () => {
+    const none = parsePartForm(fd({ ...GOOD, limitQuantity: "" }), ITEMS);
+    assert.ok(none.ok);
+    assert.equal(none.value.limitQuantity, null);
+
+    const zero = parsePartForm(fd({ ...GOOD, limitQuantity: "0" }), ITEMS);
+    assert.ok(zero.ok);
+    assert.equal(zero.value.limitQuantity, 0);
+    // 🔴 `0 || null` 같은 실수를 잡는다 — 값이 0 이면서 null 이 아니어야 한다.
+    assert.notEqual(zero.value.limitQuantity, null);
+  });
+
+  it("쉼표와 앞뒤 공백을 정리한다", () => {
+    const r = parsePartForm(fd({ ...GOOD, limitQuantity: " 1,200 " }), ITEMS);
+    assert.ok(r.ok);
+    assert.equal(r.value.limitQuantity, 1200);
+  });
+
+  it("🔴 음수·소수·글자·상한 넘김은 오류다", () => {
+    for (const bad of ["-1", "-0", "1.5", "abc", "1e3", String(MAX_QTY + 1)]) {
+      const r = parsePartForm(fd({ ...GOOD, limitQuantity: bad }), ITEMS);
+      assert.ok(!r.ok, bad);
+      assert.ok(r.errors.limitQuantity, bad);
+    }
+    const edge = parsePartForm(fd({ ...GOOD, limitQuantity: String(MAX_QTY) }), ITEMS);
+    assert.ok(edge.ok);
+    assert.equal(edge.value.limitQuantity, MAX_QTY);
+  });
+
+  it("🔴 상세 창의 전용 길도 **같은 자**를 쓴다 — 어디서 고쳤느냐로 값이 달라지면 안 된다", () => {
+    const empty = parseLimitQuantity(fd({ limitQuantity: " " }));
+    assert.ok(empty.ok);
+    assert.equal(empty.value, null);
+
+    const zero = parseLimitQuantity(fd({ limitQuantity: "0" }));
+    assert.ok(zero.ok);
+    assert.equal(zero.value, 0);
+
+    const bad = parseLimitQuantity(fd({ limitQuantity: "-3" }));
+    assert.ok(!bad.ok);
+    assert.match(bad.errors, /한계수량/);
+
+    // 아예 안 보내도 빈 값(= 알림 끄기)
+    const none = parseLimitQuantity(fd({}));
+    assert.ok(none.ok);
+    assert.equal(none.value, null);
+  });
+});
+
 describe("diffPartInput", () => {
   const base: PartInput = {
     name: "A",
@@ -162,6 +246,7 @@ describe("diffPartInput", () => {
     supplyPrice: 100,
     supplyCurrency: "JPY",
     quotePrice: null,
+    limitQuantity: null,
     note: "",
     itemId: ITEM,
     category: "RFG",
@@ -179,6 +264,17 @@ describe("diffPartInput", () => {
 
   it("같으면 빈 객체", () => {
     assert.deepEqual(diffPartInput(base, { ...base }), {});
+  });
+
+  /**
+   * 🔴 안 남기면 「누가 한계수량을 내려서 알림이 꺼졌는지」를 아무도 모른다. 특히 `null → 0`
+   * (정하지 않음 → 0 으로 정함)은 **알림을 켠 것**인데 숫자가 작아 눈에 안 띈다 — 그 반대인
+   * `5 → null` 은 **알림을 끈 것**이다. 둘 다 이력에 남아야 나중에 따질 수 있다.
+   */
+  it("🔴 한계수량도 이력에 남는다 — null → 0(켜기)·5 → null(끄기) 둘 다 바뀐 것으로 센다", () => {
+    assert.deepEqual(diffPartInput(base, { ...base, limitQuantity: 0 }), { limitQuantity: { before: null, after: 0 } });
+    assert.deepEqual(diffPartInput({ ...base, limitQuantity: 5 }, { ...base, limitQuantity: null }), { limitQuantity: { before: 5, after: null } });
+    assert.deepEqual(diffPartInput({ ...base, limitQuantity: 5 }, { ...base, limitQuantity: 5 }), {});
   });
 });
 

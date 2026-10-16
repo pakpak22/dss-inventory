@@ -111,6 +111,7 @@ export async function updatePart(id: string, input: PartInput, actor: Actor): Pr
     supplyPrice: before.supplyPrice,
     supplyCurrency: before.supplyCurrency,
     quotePrice: before.quotePrice,
+    limitQuantity: before.limitQuantity,
     note: before.note,
     itemId: before.itemId,
     category: before.category,
@@ -189,7 +190,58 @@ export async function updateCustomerName(id: string, customerName: string, actor
   return { ok: true, no: before.no, changed: true };
 }
 
-export type FillCustomerNameResult = { ok: true; filled: boolean; part: { no: number; name: string; customerName: string } } | { ok: false; code: "not_found" | "deleted" };
+export type UpdateLimitQuantityResult = { ok: true; no: number; changed: boolean } | { ok: false; code: "not_found" };
+
+/**
+ * 한계수량 **하나만** 고친다 — 상세 창에서 그 자리에서 (2026-10-16 사용자 요청).
+ *
+ * 🔴 **바로 위 `updateCustomerName` 과 같은 모양이고, 가드만 다르다.** 고객사 품명은 기록(STAFF)
+ *    이상이 고치는 칸으로 따로 결정된 것이고(2026-10-14), 한계수량은 **부품의 다른 칸과 같은
+ *    관리자(ADMIN) 칸**이다 — 권한을 넓히지 않았다. 가드는 서버 액션에 있다
+ *    (`app/actions/parts.ts` 의 `saveLimitQuantityAction` → `requireRole("ADMIN")`).
+ * 🔴 그런데도 `updatePart` 를 쓰지 않는 까닭: 저쪽은 **폼 전체**를 받아 열두 칸을 통째로 덮어쓴다.
+ *    상세 창은 그 열두 칸을 들고 있지 않으므로 그대로 부르면 적지 않은 칸이 빈 값으로 지워진다.
+ *    여기서는 **이 칸 말고 아무것도 건드리지 않는다.**
+ *
+ * 🔵 이력은 부품 수정과 **같은 길**이다 — `PART_UPDATE` + `detail.changes`. `/audit` 의 `linesOf` 가
+ *    그대로 풀어 `PART_FIELD_LABEL` 로 「한계수량」이라고 그리고, 비운 값은 「(없음)」으로 읽힌다.
+ *    🔴 **반드시 남아야 하는 변경이다** — 안 남기면 「누가 한계수량을 내려서 알림이 꺼졌는지」를
+ *    아무도 모른다. (`supplyCurrency` 는 안 넣는다. 공급가가 안 바뀌니 쓸 데가 없고 그쪽은 `?? "JPY"` 로 받는다.)
+ *
+ * 🔵 `markWorkbookDirty` 를 **부르지 않는다**: 엑셀 한 벌에 한계수량 칸이 없어 다시 쓸 것이 없다
+ *    (`updateCustomerName` 과 같은 까닭). 나중에 엑셀에 넣게 되면 여기도 같이 고쳐야 한다.
+ *
+ * 🔴 **`null` 과 `0` 을 가르는 자리이기도 하다** — 아래 `===` 비교는 `null !== 0` 이라 「정하지 않음」에서
+ *    「0 으로 정함」으로 바꾼 것도 **바뀐 것으로 센다.** 이력에 「(없음) → 0」이 남는다.
+ *    🔵 그것이 뜻하는 바는 **알림을 켠 것**이다(부등호가 「이하」라 재고 0 에서 울린다). 반대로
+ *    「5 → (없음)」은 **끈 것**이다 — 이력이 그 둘을 가려 주는 유일한 자리다.
+ */
+export async function updateLimitQuantity(id: string, limitQuantity: number | null, actor: Actor): Promise<UpdateLimitQuantityResult> {
+  const [before] = await db()
+    .select({ id: parts.id, no: parts.no, limitQuantity: parts.limitQuantity })
+    .from(parts)
+    .where(and(eq(parts.id, id), eq(parts.isDeleted, false)))
+    .limit(1);
+  if (!before) return { ok: false, code: "not_found" };
+  if (before.limitQuantity === limitQuantity) return { ok: true, no: before.no, changed: false };
+
+  const now = new Date();
+  await db().transaction(async (tx) => {
+    await tx.update(parts).set({ limitQuantity, updatedBy: actor.id, updatedAt: now }).where(eq(parts.id, id));
+    await tx.insert(auditLogs).values(
+      auditValues({
+        action: "PART_UPDATE",
+        actorId: actor.id,
+        actorName: actor.name,
+        target: `parts:No.${before.no}`,
+        detail: { changes: { limitQuantity: { before: before.limitQuantity, after: limitQuantity } } },
+      }),
+    );
+  });
+  return { ok: true, no: before.no, changed: true };
+}
+
+export type FillCustomerNameResult ={ ok: true; filled: boolean; part: { no: number; name: string; customerName: string } } | { ok: false; code: "not_found" | "deleted" };
 
 /**
  * 고객사 품명을 **비어 있을 때만** 채운다 — 바깥(A/S) 통로 전용 (2026-10-16, 설계 7절의 2026-10-14 결정).

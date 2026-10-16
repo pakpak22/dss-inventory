@@ -1,4 +1,5 @@
 import { CATEGORIES, CURRENCIES, OWNERS, type Category, type Currency, type Owner } from "@/db/schema/codes";
+import { MAX_QTY } from "@/lib/stock/form";
 
 /**
  * 부품 등록·수정 폼의 **검사** — 순수 함수. FormData 를 받아 저장할 값 또는 칸별 한국어 오류를 돌려준다.
@@ -7,6 +8,7 @@ import { CATEGORIES, CURRENCIES, OWNERS, type Category, type Currency, type Owne
  * 규칙 (DESIGN 2-3절):
  *  - 품명 필수. No. 는 프로그램이 매긴다(폼에 없다). 수량은 여기서 못 고친다(폼에 없다).
  *  - 품명2·고객사 품명·교산 품번·도번·비고는 비면 빈 문자열. 공급가·견적가는 비면 null, 적으면 0 이상의 정수.
+ *  - 한계수량은 비면 null(= 정하지 않음 = 알리지 않음), 적으면 0 이상의 정수 (2026-10-16).
  */
 export interface PartInput {
   name: string;
@@ -22,6 +24,18 @@ export interface PartInput {
   supplyPrice: number | null;
   supplyCurrency: Currency;
   quotePrice: number | null;
+  /**
+   * 한계수량 — 재고가 **이 수 이하가 되면** 종에 알린다 (2026-10-16 사용자 요청, **같을 때도 알린다**).
+   *
+   * 🔴 **`null` 과 `0` 이 다르다.** `null` 은 「정하지 않았다」라 그 부품은 아예 알림 대상이 아니고,
+   *    `0` 은 「하나도 안 남으면 알려라」는 **정한 값**이다 — 재고가 0 이면 `0 <= 0` 이라 울린다.
+   *    🔴 **그래서 `0` 은 끄는 값이 아니다. 끄려면 칸을 비운다(`null`).** 부등호가 「미만」이던
+   *    잠깐 동안에는 0 이 사실상 끄는 값이었는데 **지금은 아니다**(뜻은 `lib/parts/codes.ts` 의
+   *    `isLowStock`). `?? 0` 으로 뭉개면 정하지 않은 부품이 재고 0 이 되는 순간 전부 울린다.
+   *    「빈 칸과 0 은 다르다」는 결 자체는 금액 칸(공급가·견적가)이 이미 지키는 규칙 그대로다.
+   * 🔴 음수는 받지 않는다(아래 parseLimitQuantityText).
+   */
+  limitQuantity: number | null;
   note: string;
   itemId: string;
   category: Category;
@@ -87,6 +101,30 @@ export function parsePriceText(raw: string): { ok: true; value: number | null } 
 }
 
 /**
+ * 한계수량 칸의 규칙 (2026-10-16). 🔴 **빈 칸과 0 은 다르다** — 빈 칸은 `null`(정하지 않음 = 알림 없음)이고
+ * `0` 은 정한 값이다. 금액 칸과 **같은 결**이고, 다른 점은 상한뿐이다.
+ *
+ * 🔴 상한을 여기서 새로 정하지 않는다 — 한 건에 적을 수 있는 수량의 상한(`MAX_QTY`, `lib/stock/form.ts`)을
+ *    그대로 쓴다. 한계수량이 그보다 커질 까닭이 없고, 숫자를 따로 적으면 언젠가 두 벌이 갈린다.
+ * 🔴 **음수는 모양에서 걸린다** — `^\d+$` 라 `-1` 은 애초에 통과하지 못한다. 「0 이상」을 부등호로
+ *    한 번 더 적지 않는 까닭이 그것이다.
+ *
+ * 🔵 내보내는 까닭: 상세 창에서 이 칸 하나만 고치는 길(`parseLimitQuantity`)과 폼 전체 검사가 **같은 자를**
+ *    써야 한다 — 같은 칸인데 어디서 고쳤느냐로 받는 값이 달라지면 안 된다(`parseCustomerName` 과 같은 관례).
+ */
+export function parseLimitQuantityText(raw: string): { ok: true; value: number | null } | { ok: false } {
+  if (raw === "") return { ok: true, value: null };
+  const cleaned = raw.replace(/[,\s]/g, "");
+  if (!/^\d+$/.test(cleaned)) return { ok: false };
+  const n = Number(cleaned);
+  if (!Number.isSafeInteger(n) || n > MAX_QTY) return { ok: false };
+  return { ok: true, value: n };
+}
+
+/** 한계수량 칸이 틀렸을 때의 한 문장. 🔴 두 길(폼 전체·상세 창)이 **같은 글자**를 쓴다. */
+export const LIMIT_QUANTITY_ERROR = `한계수량은 0 이상의 정수로 입력하십시오(${MAX_QTY.toLocaleString("ko-KR")} 이하). 비우면 알리지 않습니다.`;
+
+/**
  * @param itemIds 지금 있는(숨기지 않은) 항목 id 들. 폼이 보낸 항목이 실제로 있는지 확인한다.
  */
 export function parsePartForm(fd: FormLike, itemIds: ReadonlySet<string>): ParseResult<PartInput, PartFieldErrors> {
@@ -113,6 +151,9 @@ export function parsePartForm(fd: FormLike, itemIds: ReadonlySet<string>): Parse
 
   const quote = parsePriceText(text(fd, "quotePrice"));
   if (!quote.ok) errors.quotePrice = "견적가는 0 이상의 정수로 입력하십시오.";
+
+  const limitQuantity = parseLimitQuantityText(text(fd, "limitQuantity"));
+  if (!limitQuantity.ok) errors.limitQuantity = LIMIT_QUANTITY_ERROR;
 
   const note = textOrEmpty(fd, "note");
   if (note.length > NOTE_MAX) errors.note = `비고는 ${NOTE_MAX}자 이하여야 합니다.`;
@@ -141,6 +182,7 @@ export function parsePartForm(fd: FormLike, itemIds: ReadonlySet<string>): Parse
       supplyPrice: supply.ok ? supply.value : null,
       supplyCurrency: supplyCurrency!,
       quotePrice: quote.ok ? quote.value : null,
+      limitQuantity: limitQuantity.ok ? limitQuantity.value : null,
       note,
       itemId,
       category: category!,
@@ -161,8 +203,34 @@ export function parseCustomerName(fd: FormLike): ParseResult<string, string> {
   return { ok: true, value: v };
 }
 
+/**
+ * 한계수량 **하나만** 고치는 전용 길의 검사 — 상세 창에서 그 자리에서 고친다 (2026-10-16).
+ * 🔴 규칙을 베껴 적지 않고 `parseLimitQuantityText` 를 그대로 쓴다. 두 길이 다르게 받으면 같은 칸인데
+ *    어디서 고쳤느냐에 따라 값이 달라진다(`parseCustomerName` 과 같은 까닭).
+ * 🔵 **칸을 비우면 null** 이다 — 「알림을 끈다」가 그 길이다.
+ */
+export function parseLimitQuantity(fd: FormLike): ParseResult<number | null, string> {
+  const r = parseLimitQuantityText(text(fd, "limitQuantity"));
+  if (!r.ok) return { ok: false, errors: LIMIT_QUANTITY_ERROR };
+  return { ok: true, value: r.value };
+}
+
 /** 폼이 되돌아올 때 입력값을 다시 채우려고, 문자열 그대로 꺼낸다. */
-export const PART_FORM_FIELDS = ["name", "name2", "customerName", "kyosanPartNo", "drawingNo", "supplyPrice", "supplyCurrency", "quotePrice", "note", "itemId", "category", "owner"] as const;
+export const PART_FORM_FIELDS = [
+  "name",
+  "name2",
+  "customerName",
+  "kyosanPartNo",
+  "drawingNo",
+  "supplyPrice",
+  "supplyCurrency",
+  "quotePrice",
+  "limitQuantity",
+  "note",
+  "itemId",
+  "category",
+  "owner",
+] as const;
 export type PartFormValues = Record<(typeof PART_FORM_FIELDS)[number], string>;
 
 export function readPartFormValues(fd: FormLike): PartFormValues {
@@ -181,6 +249,7 @@ export function partToFormValues(p: {
   supplyPrice: number | null;
   supplyCurrency: Currency;
   quotePrice: number | null;
+  limitQuantity: number | null;
   note: string;
   itemId: string;
   category: Category;
@@ -195,6 +264,8 @@ export function partToFormValues(p: {
     supplyPrice: p.supplyPrice === null ? "" : String(p.supplyPrice),
     supplyCurrency: p.supplyCurrency,
     quotePrice: p.quotePrice === null ? "" : String(p.quotePrice),
+    // 🔴 `null`(정하지 않음)만 빈 칸이다. `0` 은 정한 값이라 "0" 으로 그린다 — 금액 칸과 같은 결.
+    limitQuantity: p.limitQuantity === null ? "" : String(p.limitQuantity),
     note: p.note,
     itemId: p.itemId,
     category: p.category,

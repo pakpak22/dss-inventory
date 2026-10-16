@@ -7,19 +7,25 @@ import {
   isRejectionVisible,
   ISSUE_APPROVAL_TO_DECIDE_NOTIFICATION_ID,
   issueApprovalDecidedNotificationId,
+  LOW_STOCK_MORE_NOTIFICATION_ID,
+  lowStockNotificationId,
+  MAX_LOW_STOCK_ITEMS,
   NOTIFICATION_KINDS,
   NOTIFICATION_MAX_ITEMS,
   PENDING_NOTIFICATION_ID,
   receivesIssueApprovalDecidedNotification,
   receivesIssueApprovalToDecideNotification,
+  receivesLowStockNotification,
   receivesPendingNotification,
   receivesRejectedNotification,
   rejectedNotificationId,
   rejectionCutoff,
   REJECTED_VISIBLE_DAYS,
   type DecidedIssueApprovalSource,
+  type LowStockPartSource,
   type RejectedRequestSource,
 } from "../src/lib/notifications/bell-items";
+import { isLowStock } from "../src/lib/parts/codes";
 import { PART_ISSUE_STATUSES } from "../src/lib/approval/part-issue-rules";
 import { ownBaseUrlFrom, SSO_CALLBACK_PATH } from "../src/lib/env";
 
@@ -71,6 +77,11 @@ function rejectedIssue(over: Partial<DecidedIssueApprovalSource> = {}): DecidedI
   };
 }
 
+/** 재고가 한계수량 이하인 부품 한 줄 (2026-10-16). 🔴 값은 전부 가짜다 — 공개 저장소다. */
+function lowStock(over: Partial<LowStockPartSource> = {}): LowStockPartSource {
+  return { no: 7, name: "가짜부품", name2: "", quantity: 2, limitQuantity: 5, ...over };
+}
+
 function build(over: Partial<Parameters<typeof buildInventoryNotificationItems>[0]> = {}) {
   return buildInventoryNotificationItems({
     role: "ADMIN",
@@ -78,6 +89,7 @@ function build(over: Partial<Parameters<typeof buildInventoryNotificationItems>[
     rejected: [],
     issueApprovalsToDecide: { count: 0, oldestAt: null },
     decidedIssueApprovals: [],
+    lowStockParts: [],
     now: NOW,
     baseUrl: BASE,
     sourceId: SOURCE,
@@ -462,6 +474,152 @@ describe("결재 결과 — 내가 올린 결재건이 승인/반려됐다 (2026
   });
 });
 
+/**
+ * ============================================================================
+ * 재고 부족 — 재고가 한계수량 **이하**인 부품 (2026-10-16 사용자 요청)
+ * ============================================================================
+ * 「한계수량 아래로 재고가 떨어졌을 때에 알림이 뜨도록. 그리고 알림을 누르면 해당 부품
+ * 상세가 뜨도록.」
+ *
+ * 🔴 **부등호는 「이하」다** — 같은 날 사용자가 **「같을 때도 알린다」**로 정했다(처음 판은
+ * 「미만」이었다). 뜻은 「한계수량까지 내려왔으면 이미 채울 때다」. 적는 자리는
+ * `lib/parts/codes.ts` 의 `isLowStock` 하나이고 질의의 WHERE 가 그것을 SQL 로 옮긴 것이다.
+ *
+ * 다른 넷과 성질이 다르다 — **사건이 아니라 상태**라 부품을 채워 넣기 전까지 계속 서 있다.
+ * 그래서 ① 부품마다 한 줄이되 ② 상한을 두고 ③ 넘친 종은 한 줄로 묶어 목록으로 보낸다.
+ */
+describe("재고 부족 — 재고가 한계수량 이하인 부품 (2026-10-16)", () => {
+  it("🔴 재고를 채우는 사람(ADMIN)에게만 간다 — 「반출 확인 대기」와 같은 사람들이다", () => {
+    assert.equal(receivesLowStockNotification("ADMIN"), true);
+    assert.equal(receivesLowStockNotification("STAFF"), false);
+    assert.equal(receivesLowStockNotification("VIEWER"), false);
+    // 🔴 판정이 적힌 자리는 하나다 — 그 함수가 참인 역할에서만 줄이 선다.
+    for (const role of ["VIEWER", "STAFF", "ADMIN"] as const) {
+      const feed = build({ role, lowStockParts: [lowStock()] });
+      assert.equal(feed.items.length > 0, receivesLowStockNotification(role), role);
+      if (!receivesLowStockNotification(role)) assert.equal(feed.count, 0, role);
+    }
+  });
+
+  it("부품마다 한 줄이고, 어느 부품인지와 두 숫자가 글자에 들어간다", () => {
+    const feed = build({ lowStockParts: [lowStock({ no: 7, name: "가짜부품", name2: "가짜품명2", quantity: 2, limitQuantity: 5 })] });
+    assert.equal(feed.items.length, 1);
+    const item = feed.items[0];
+    assert.equal(item.kind, NOTIFICATION_KINDS.lowStock);
+    assert.equal(item.kindLabel, "재고 부족");
+    assert.equal(item.subject, "재고가 한계수량 이하입니다");
+    assert.equal(item.detail, "No. 7 가짜부품 · 가짜품명2 · 재고 2개 · 한계수량 5개");
+    assert.equal(item.id, lowStockNotificationId(7));
+    assert.equal(item.key, `${SOURCE}:${lowStockNotificationId(7)}`);
+  });
+
+  it("품명2 가 비면 그 토막만 빠진다", () => {
+    const feed = build({ lowStockParts: [lowStock({ name2: "" })] });
+    assert.equal(feed.items[0].detail, "No. 7 가짜부품 · 재고 2개 · 한계수량 5개");
+  });
+
+  /**
+   * 🔴 사용자 요청의 뒷문장이 이 시험이다 — 「알림을 누르면 **해당 부품 상세**가 뜨도록」.
+   * `/?part=No.` 는 이 저장소가 이미 쓰는 길이고(`(app)/page.tsx` 가 그 값으로 상세 창을 연다),
+   * 포털이 상대경로로 온 줄을 버리므로 **절대 주소**여야 한다.
+   */
+  it("🔴 누르면 그 부품 상세가 열린다 — 줄마다 다른 절대 주소(`/?part=No.`)", () => {
+    const feed = build({ lowStockParts: [lowStock({ no: 7 }), lowStock({ no: 12 })] });
+    assert.deepEqual(
+      feed.items.map((i) => i.href),
+      [`${BASE}/?part=7`, `${BASE}/?part=12`],
+    );
+    for (const item of feed.items) assert.ok(item.href.startsWith("http://") || item.href.startsWith("https://"), item.href);
+  });
+
+  /** 🔴 2026-10-16 사용자 결정으로 **뜻이 뒤집힌 시험**이다 — 처음에는 「같으면 안 알린다」였다. */
+  it("🔴 **같을 때도 알린다** — 한계수량까지 내려왔으면 이미 채울 때다", () => {
+    assert.equal(isLowStock(5, 5), true);
+    assert.equal(isLowStock(4, 5), true);
+    assert.equal(isLowStock(6, 5), false);
+    // 질의가 걸러 왔더라도 조립이 한 번 더 본다 — 두 자리가 같은 부등호를 쓴다.
+    const same = build({ lowStockParts: [lowStock({ quantity: 5, limitQuantity: 5 })] });
+    assert.equal(same.items.length, 1);
+    assert.equal(same.items[0].detail, "No. 7 가짜부품 · 재고 5개 · 한계수량 5개");
+    assert.equal(same.count, 1);
+    // 한 개라도 넘으면 조용해진다 — 재고를 채우면 저절로 빠지는 자리다.
+    const over = build({ lowStockParts: [lowStock({ quantity: 6, limitQuantity: 5 })] });
+    assert.deepEqual(over.items, []);
+    assert.equal(over.count, 0);
+  });
+
+  it("🔴 한계수량이 null 이면 언제나 거짓이다 — 「정하지 않음」이 **끄는 유일한 길**이다", () => {
+    assert.equal(isLowStock(0, null), false);
+    assert.equal(isLowStock(999, null), false);
+    const none = build({ lowStockParts: [] });
+    assert.deepEqual(none.items, []);
+  });
+
+  /**
+   * 🔴 **「이하」가 된 뒤로 `0` 의 뜻이 달라졌다.** 「미만」이던 잠깐 동안에는 0 이 사실상 끄는
+   * 값이었는데(재고가 음수일 수 없으므로), 지금은 `0 <= 0` 이라 **재고가 0 이 되면 울린다** —
+   * 「하나도 안 남으면 알려라」다. `null` 과 `0` 이 다른 값이라는 것은 그대로이고, **다른 점이
+   * 더 뚜렷해졌다**: 하나는 끄기, 하나는 가장 늦게 울리는 설정이다.
+   */
+  it("🔴 한계수량 0 은 **끄는 값이 아니다** — 재고가 0 이면 울린다", () => {
+    assert.equal(isLowStock(0, 0), true);
+    assert.equal(isLowStock(1, 0), false);
+    const feed = build({ lowStockParts: [lowStock({ no: 9, name2: "", quantity: 0, limitQuantity: 0 })] });
+    assert.equal(feed.items.length, 1);
+    assert.equal(feed.items[0].detail, "No. 9 가짜부품 · 재고 0개 · 한계수량 0개");
+  });
+
+  it("떨어진 부품이 없으면 줄이 없다 — 재고를 채우면 저절로 빠진다", () => {
+    const feed = build({ lowStockParts: [] });
+    assert.deepEqual(feed.items, []);
+    assert.equal(feed.count, 0);
+  });
+
+  it("받은 차례를 그대로 쓴다 — 모자란 만큼 큰 순은 질의가 정한다", () => {
+    const feed = build({ lowStockParts: [lowStock({ no: 30, quantity: 0, limitQuantity: 20 }), lowStock({ no: 4, quantity: 9, limitQuantity: 10 })] });
+    assert.deepEqual(
+      feed.items.map((i) => i.id),
+      [lowStockNotificationId(30), lowStockNotificationId(4)],
+    );
+  });
+
+  /**
+   * 🔴 상한을 넘기면 **버리지 않고 한 줄로 묶어** 목록으로 보낸다. ②·③의 반려 줄과 다른 점이고
+   * (저쪽은 말없이 버리므로 배지에 「잘리기 전 총계」를 쓴다), 그래서 여기서는 **그린 줄을 그대로**
+   * 센다 — 배지와 펼친 목록이 어긋날 자리가 없다.
+   */
+  it("🔴 상한을 넘으면 「그 밖에 N종 더」 한 줄이 붙고 그 줄은 **목록**으로 간다", () => {
+    const rows = Array.from({ length: MAX_LOW_STOCK_ITEMS }, (_, i) => lowStock({ no: i + 1 }));
+    const feed = build({ lowStockParts: rows, lowStockPartsTotal: MAX_LOW_STOCK_ITEMS + 3 });
+    assert.equal(feed.items.length, MAX_LOW_STOCK_ITEMS + 1);
+    const more = feed.items[feed.items.length - 1];
+    assert.equal(more.id, LOW_STOCK_MORE_NOTIFICATION_ID);
+    assert.equal(more.kind, NOTIFICATION_KINDS.lowStock);
+    assert.equal(more.subject, "한계수량 이하인 부품이 3종 더 있습니다");
+    assert.equal(more.href, `${BASE}/?sort=quantity`);
+    // 🔴 묶음 줄도 **한 줄**로 센다 — 펼치면 한 줄이기 때문이다.
+    assert.equal(feed.count, MAX_LOW_STOCK_ITEMS + 1);
+  });
+
+  it("상한에 안 걸리면 묶음 줄이 없다", () => {
+    const feed = build({ lowStockParts: [lowStock({ no: 1 }), lowStock({ no: 2 })], lowStockPartsTotal: 2 });
+    assert.equal(feed.items.length, 2);
+    assert.ok(!feed.items.some((i) => i.id === LOW_STOCK_MORE_NOTIFICATION_ID));
+    assert.equal(feed.count, 2);
+  });
+
+  it("🔴 총계를 안 넘기면 받은 줄 수로 본다 — 없는 「더 있습니다」를 지어내지 않는다", () => {
+    const feed = build({ lowStockParts: [lowStock({ no: 1 })] });
+    assert.equal(feed.items.length, 1);
+    assert.equal(feed.count, 1);
+  });
+
+  it("🔵 같은 부품에는 언제나 같은 열쇠가 나온다 — 종이 줄을 다시 그리지 않는다", () => {
+    assert.equal(lowStockNotificationId(7), lowStockNotificationId(7));
+    assert.notEqual(lowStockNotificationId(7), lowStockNotificationId(70));
+  });
+});
+
 describe("🔴 말이 서로 달라야 한다 — 색만으로 가르지 않는다 (CLAUDE.md 9-7절)", () => {
   it("세 줄의 제목이 서로 다르고, 기존 두 줄과도 다르다", () => {
     const feed = build({
@@ -512,6 +670,38 @@ describe("🔴 말이 서로 달라야 한다 — 색만으로 가르지 않는�
       ],
     );
     assert.equal(feed.count, 1 + 1 + 2 + 1);
+  });
+
+  /**
+   * 🔴 재고 부족(2026-10-16)은 **할 일 묶음의 끝**에 선다 — 남이 나를 기다리는 일(결재 차례·확인
+   * 대기)보다 아래, 이미 끝난 일(결재 결과·반출 반려)보다 위다.
+   */
+  it("🔴 재고 부족은 할 일 묶음의 끝 — 확인 대기 아래, 결과 위", () => {
+    const feed = build({
+      role: "ADMIN",
+      issueApprovalsToDecide: { count: 5, oldestAt: NOW },
+      pending: { count: 4, oldestAt: NOW },
+      lowStockParts: [lowStock({ no: 1 }), lowStock({ no: 2 })],
+      decidedIssueApprovals: [approvedIssue()],
+      rejected: [rejected()],
+    });
+    assert.deepEqual(
+      feed.items.map((i) => i.kind),
+      [
+        NOTIFICATION_KINDS.issueApprovalToDecide,
+        NOTIFICATION_KINDS.pending,
+        NOTIFICATION_KINDS.lowStock,
+        NOTIFICATION_KINDS.lowStock,
+        NOTIFICATION_KINDS.issueApprovalDecided,
+        NOTIFICATION_KINDS.rejected,
+      ],
+    );
+    assert.equal(feed.count, 1 + 1 + 2 + 1 + 1);
+    // 열쇠는 여섯 줄 모두에서 유일해야 한다.
+    const keys = feed.items.map((i) => i.key);
+    assert.equal(new Set(keys).size, keys.length);
+    // 🔴 제목도 서로 다른 말이어야 한다 — 재고 부족 둘은 같은 사건이라 **detail 로** 갈린다.
+    assert.equal(new Set(feed.items.map((i) => i.detail)).size, feed.items.length);
   });
 
   it("열쇠(key)가 다섯 줄 모두에서 유일하다", () => {

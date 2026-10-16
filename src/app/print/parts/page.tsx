@@ -84,6 +84,17 @@ export default async function PrintPartsPage({ searchParams }: { searchParams: P
                     {p[f.key] || "-"}
                   </td>
                 ))}
+                {/*
+                  🔴 **종이에는 한계수량 빨강을 칠하지 않는다** (2026-10-16 결정, 화면에만 칠한다).
+                     까닭 셋: ① 흑백으로 뽑으면 붉은 글씨가 **뜻 없는 회색**이 된다 — 색이 유일한
+                     신호인데 그 신호가 인쇄에서 사라진다(이 화면은 `td` 에 `print-color-adjust`
+                     를 걸지 않는다. 걸린 곳은 머리글 배경뿐이다 — globals.css).
+                     ② 화면에서는 `title` 이 까닭을 말해 주지만 **종이에는 마우스가 없다.**
+                     ③ 쓰는 분이 짚은 곳은 「재고현황 **표**」이고, 이 화면은 쓰임이 다르다
+                     (손으로 적는 「확인」 칸이 있는 A4 가로).
+                  🔵 종이에 뜻을 담으려면 색이 아니라 **글자**(한계수량 열이나 표식)가 필요한데,
+                     그것은 열을 늘리는 설계 결정이라 쓰는 분 승인이 먼저다. **일부러 비워 둔 자리다.**
+                */}
                 <td className={`${TD} tabular text-right font-semibold`}>{formatQuantity(p.quantity)}</td>
                 <td className={`${TD} tabular text-right whitespace-nowrap`}>{formatMoney(p.supplyPrice, p.supplyCurrency)}</td>
                 <td className={`${TD} tabular text-right whitespace-nowrap`}>{formatMoney(p.quotePrice, "KRW")}</td>

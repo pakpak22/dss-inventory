@@ -5,8 +5,10 @@ import {
   NOTIFICATION_KIND_LABELS,
   receivesIssueApprovalDecidedNotification,
   receivesIssueApprovalToDecideNotification,
+  receivesLowStockNotification,
   receivesPendingNotification,
   receivesRejectedNotification,
+  MAX_LOW_STOCK_ITEMS,
   REJECTED_VISIBLE_DAYS,
   type NotificationKind,
 } from "./bell-items";
@@ -94,6 +96,7 @@ const RECEIVES: Record<NotificationKind, (role: Role) => boolean> = {
   [NOTIFICATION_KINDS.rejected]: receivesRejectedNotification,
   [NOTIFICATION_KINDS.issueApprovalToDecide]: receivesIssueApprovalToDecideNotification,
   [NOTIFICATION_KINDS.issueApprovalDecided]: receivesIssueApprovalDecidedNotification,
+  [NOTIFICATION_KINDS.lowStock]: receivesLowStockNotification,
 };
 
 /** 종이 무엇을 언제 보여 주는가. 포털 화면이 종류 줄 밑에 그대로 그린다. */
@@ -103,6 +106,7 @@ const DESCRIPTIONS: Record<NotificationKind, string> = {
   [NOTIFICATION_KINDS.issueApprovalToDecide]:
     "부품 불출 결재가 지금 자기 차례이면 건수를 한 줄로 묶어 종에 띄웁니다. 결재하면 사라집니다. 결재자는 역할과 상관없이 결재선에 든 사람이므로 역할로 가르지 않습니다.",
   [NOTIFICATION_KINDS.issueApprovalDecided]: `자기가 올린 부품 불출 결재가 승인되거나 반려되면 종에 띄웁니다. 승인된 건은 기간 제한 없이 남고 담당자가 실제로 내주면 사라집니다. 반려된 건은 ${REJECTED_VISIBLE_DAYS}일이 지나면 사라집니다.`,
+  [NOTIFICATION_KINDS.lowStock]: `한계수량을 정해 둔 부품의 재고가 그 수와 같거나 적어지면 부품마다 한 줄씩 종에 띄웁니다. 누르면 그 부품 상세가 열립니다. 한계수량을 비워 둔 부품은 알리지 않습니다 — 알리지 않게 하는 길은 비워 두는 것뿐이고, 0 은 「하나도 안 남으면 알려라」라는 뜻입니다. 재고를 채우면 사라집니다. 한 번에 ${MAX_LOW_STOCK_ITEMS}종까지 줄로 보이고 넘치는 종수는 한 줄로 묶어 목록으로 보냅니다.`,
 };
 
 /**

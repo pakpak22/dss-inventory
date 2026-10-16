@@ -43,6 +43,24 @@ export const parts = pgTable(
     supplyCurrency: currencyEnum("supply_currency").notNull().default("JPY"),
     /** 견적가. 항상 원. */
     quotePrice: bigint("quote_price", { mode: "number" }),
+    /**
+     * 한계수량 — 재고가 **이 수 이하가 되면** 머리말의 알림 종에 뜬다 (2026-10-16 사용자 요청).
+     *
+     * 🔴 **`null` 과 `0` 이 다르다.** `null` = 「정하지 않았다」 = **알림 없음**이고, `0` 은 「하나도
+     *    안 남으면 알려라」는 **정한 값**이다 — 금액 칸(`supply_price`·`quote_price`)이 이미 지키는
+     *    규칙 그대로다. 읽는 쪽에서 `?? 0` 으로 뭉개지 마라: 정하지 않은 부품이 재고 0 이 되는 순간
+     *    전부 알림 대상이 된다.
+     * 🔴 **알림을 끄는 길은 칸을 비우는 것(`null`) 하나뿐이다.** 부등호가 「이하」라 `0` 은 끄는 값이
+     *    아니다(`0 <= 0` 이라 재고가 0 이면 울린다). 2026-10-16 에 「미만」에서 바뀐 자리다.
+     * 🔴 **견주는 수량은 이 표에 없다** — `stock_balances.quantity` 다(위 머리말). 「재고 ≤ 한계수량」을
+     *    가르는 뜻이 적힌 자리는 `lib/parts/codes.ts` 의 `isLowStock` **하나**이고, 질의
+     *    (`lib/parts/queries.ts` 의 `listLowStockParts`)의 WHERE 가 그것을 SQL 로 옮긴 것이다.
+     * 🔵 **음수는 DB 제약이 아니라 폼 검사로 막는다**(`lib/parts/form.ts` 의 `parseLimitQuantityText` —
+     *    `^\d+$` 라 `-1` 은 모양에서 걸린다). 금액 칸 둘과 **같은 방식**이다: 이 칸에 값을 넣는 길이
+     *    그 검사를 지나는 폼 하나뿐이라서다. `stock_balances.quantity` 에 CHECK 가 걸려 있는 것은
+     *    그쪽이 **원장이 자동으로 고치는** 칸이기 때문이고, 이 칸은 사람이 적는 설정값이다.
+     */
+    limitQuantity: integer("limit_quantity"),
     note: text("note").notNull().default(""),
     itemId: uuid("item_id")
       .notNull()

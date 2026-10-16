@@ -68,6 +68,9 @@ export const PART_FIELD_LABEL: Record<string, string> = {
   supplyPrice: "공급가",
   supplyCurrency: "공급가 통화",
   quotePrice: "견적가",
+  // 재고가 이 수 이하가 되면 종에 알린다 (2026-10-16). 🔴 이력에 남아야 「누가 한계수량을 내려서
+  // 알림이 꺼졌는지」를 나중에 따질 수 있다 — 값이 비면(`null`) 이력에 「없음」으로 그려진다.
+  limitQuantity: "한계수량",
   note: "비고",
   itemCode: "항목",
   category: "분류",
