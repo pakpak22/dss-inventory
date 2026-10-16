@@ -116,6 +116,21 @@ export const REQUEST_SOURCE_LABEL: Record<RequestSource, string> = {
 export const CANCELLABLE_REQUEST_SOURCES = ["INVENTORY"] as const satisfies readonly RequestSource[];
 
 /**
+ * **바깥 통로로** 거둘 수 있는 출처 — A/S 에서 올라온 것뿐이다
+ * (2026-10-16, `POST /api/v1/stock-requests/cancel`. API.md 4-9절).
+ *
+ * 🔴 **위 `CANCELLABLE_REQUEST_SOURCES` 와 짝이고, 겹치지 않는다.** 거두는 문은 하나뿐이고 **낸 쪽에만**
+ *    열린다 — 화면에서 올린 것은 화면에서, A/S 가 올린 것은 A/S 에서. 한 출처가 양쪽에 들어가면 같은
+ *    신청을 두 곳에서 접을 수 있게 되고, 그러면 저쪽에 열린 요청이 답을 못 받는 일이 되돌아온다.
+ *    🔵 두 묶음이 **빠짐없이 덮는지**를 시험이 본다(`tests/api-stock-request-cancel.test.ts`) — 출처를
+ *    하나 더하고 어느 쪽에도 안 넣으면 그 신청은 **아무도 거둘 수 없는 신청**이 된다.
+ * 🔴 **화면과 서버가 아니라, 판정과 WHERE 가 이 한 벌을 같이 본다** —
+ *    `src/lib/api/stock-request-cancel.ts` 의 `judgeApiCancel`(거절 문구를 고르는 자리)과
+ *    `src/lib/stock/requests.ts` 의 `cancelExternalRequest`(실제로 막는 WHERE).
+ */
+export const EXTERNALLY_CANCELLABLE_REQUEST_SOURCES = ["AS"] as const satisfies readonly RequestSource[];
+
+/**
  * 「내가 거둘 수 있는 신청인가」 — 출처 · 상태 · 본인 셋을 함께 본다 (2026-10-15).
  *
  * 🔵 **울타리가 아니라 단추를 그릴지의 판정이다.** 실제로 막는 자리는 `cancelRequest` 의 WHERE 이고,

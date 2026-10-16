@@ -8,7 +8,15 @@ import { stockTransactions } from "@/db/schema/stock";
 import { stockRequestIssues, stockRequests, type RequestSource, type RequestStatus } from "@/db/schema/stock-requests";
 import { auditValues } from "@/lib/audit";
 import type { Owner } from "@/lib/parts/codes";
-import { ACTIONABLE_REQUEST_STATUSES, CANCELLABLE_REQUEST_SOURCES, CLAIMABLE_REQUEST_STATUSES, ENTRY_TYPE_LABEL, isClosedRequest, type EntryType } from "./codes";
+import {
+  ACTIONABLE_REQUEST_STATUSES,
+  CANCELLABLE_REQUEST_SOURCES,
+  CLAIMABLE_REQUEST_STATUSES,
+  ENTRY_TYPE_LABEL,
+  EXTERNALLY_CANCELLABLE_REQUEST_SOURCES,
+  isClosedRequest,
+  type EntryType,
+} from "./codes";
 import type { EntryInput } from "./form";
 import { buildIssueInput, type IssueQuantity } from "./issue";
 import { LedgerAbort, ledgerErrorMessage, recordEntryIn, type Actor, type EntryAuthor, type RecordResult } from "./ledger";
@@ -616,6 +624,100 @@ export async function cancelRequest(id: string, actor: Actor): Promise<{ ok: boo
   return { ok: true };
 }
 
+/* ------------------------------------------------------------------ */
+/* 바깥(A/S)이 **제 신청을 거두는** 길 (2026-10-16)                      */
+/* 🔴 위 `cancelRequest` 는 한 글자도 바뀌지 않았다 — 더하기만 한다.      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 바깥 통로가 거둘 신청을 **판정에 필요한 칸만** 읽어 온다 (`POST /api/v1/stock-requests/cancel`).
+ *
+ * 🔵 `listRequestsByExternalKeys` 를 쓰지 않는 까닭: 그쪽이 주는 줄(`PendingRequestRow`)에는 **포털
+ *    번호가 없다.** 화면이 쓸 일이 없어 일부러 안 넣은 칸인데, 거기에 더하면 관리 화면의 클라이언트
+ *    묶음으로 **남의 포털 번호가 줄줄이 실려 나간다.** 그래서 이 길에만 필요한 칸을 따로 읽는다.
+ * 🔵 돌려줄 응답 줄은 거둔 **뒤에** 그 함수로 다시 읽는다 — 그래야 A/S 가 받는 모양이 상태 통로와
+ *    한 글자도 다르지 않다(빚는 길이 `attachNames` → `toRow` 하나다).
+ */
+export interface ExternalCancelTarget {
+  id: string;
+  source: RequestSource;
+  status: RequestStatus;
+  /** 신청에 적힌 **올린 사람의 포털 번호**. 화면에서 올린 신청은 비어 있다. */
+  requesterSub: string | null;
+  /** 🔴 `null` 일 수 있다 — A/S 에서 올라왔고 재고 관리에 계정이 없는 사람이다(표 주석). */
+  requestedBy: string | null;
+  requestedByName: string;
+}
+
+export async function findExternalRequestForCancel(externalKey: string): Promise<ExternalCancelTarget | null> {
+  const [row] = await db()
+    .select({
+      id: stockRequests.id,
+      source: stockRequests.source,
+      status: stockRequests.status,
+      requesterSub: stockRequests.requesterSub,
+      requestedBy: stockRequests.requestedBy,
+      requestedByName: stockRequests.requestedByName,
+    })
+    .from(stockRequests)
+    .where(eq(stockRequests.externalKey, externalKey));
+  return row ?? null;
+}
+
+/**
+ * 바깥 통로로 **거두기** — 🔴 **울타리 셋을 WHERE 에 그대로 건다**(출처 · 본인 · 대기).
+ *
+ * 🔴 **`cancelRequest` 를 그대로 부를 수 없었다.** 그 함수의 울타리가 **정반대**이기 때문이다:
+ *   ① 출처를 `CANCELLABLE_REQUEST_SOURCES`(= `INVENTORY`)로 막는다 — A/S 신청은 거기서 **언제나** 거절된다.
+ *      그것이 버그가 아니라 그 함수의 뜻이다(「A/S 것은 A/S 가 거둔다」).
+ *   ② 본인을 `requested_by = <내 users.id>` 로 본다. 🔴 A/S 신청자는 **재고 관리에 계정이 없을 수 있어**
+ *      그 칸이 `NULL` 이고, 그러면 본인인데도 영영 못 거둔다. 바깥에서 사람을 가리키는 유일한 열쇠는
+ *      **포털 번호**(`requester_sub`)다 (표 주석: 「못 찾은 사람을 되짚을 유일한 열쇠」).
+ *   🔵 그래서 **동작을 고치지 않고 옆에 세웠다.** 고쳤다면 화면의 [신청 취소]가 A/S 신청까지 거두게 되어
+ *      이 조각이 막으려는 바로 그 일이 일어난다.
+ * 🔴 **같은 울타리를 같은 모양으로 지킨다** — 상태를 조건으로 건 UPDATE **한 번**(두 번 들어와도 한 번만
+ *    바뀐다), 그다음 감사 로그. `cancelRequest`·`rejectRequest`·`closeRequest` 와 같은 관례다.
+ * 🔵 **거둔 사람 = 올린 사람**이다. 본인임을 WHERE 가 이미 가렸으므로 `decided*` 에 신청자를 적는다
+ *    (id 는 없을 수 있고, 그때도 이름은 남는다).
+ * 🔴 **감사 로그에 출처가 보인다** — 행위는 기존 「반출 신청 취소」(`STOCK_REQUEST_CANCELLED`) 그대로이고,
+ *    `detail.source` · `detail.externalKey` 로 **A/S 에서 거둔 것**임이 이력에 남는다(`/audit` 화면이
+ *    그 두 칸을 읽어 한 줄로 적는다). 행위를 새로 만들지 않은 까닭: 일어난 일은 같은 일이고, 거르개에
+ *    항목이 둘이 되면 「취소된 신청」을 찾을 때 한쪽을 놓친다.
+ *
+ * @returns 거뒀으면 `true`. 🔵 `false` 는 **그 사이에 상태가 바뀐 것**이다(같은 요청이 동시에 두 번
+ *   왔거나 담당자가 방금 집었거나) — 부르는 쪽이 **다시 읽어 다시 판정한다**(통로 파일의 두 바퀴).
+ */
+export async function cancelExternalRequest(target: ExternalCancelTarget, requesterSub: string): Promise<boolean> {
+  const now = new Date();
+  const [row] = await db()
+    .update(stockRequests)
+    .set({ status: "CANCELLED", decidedBy: target.requestedBy, decidedByName: target.requestedByName, decidedAt: now })
+    .where(
+      and(
+        eq(stockRequests.id, target.id),
+        eq(stockRequests.status, "PENDING"),
+        inArray(stockRequests.source, [...EXTERNALLY_CANCELLABLE_REQUEST_SOURCES]),
+        // 🔴 **보낸 번호로** 건다 — 읽어 둔 값으로 걸면 「그 줄에 그 번호가 적혀 있나」를 확인할 뿐,
+        //    「부른 사람이 그 사람인가」는 확인하지 못한다.
+        eq(stockRequests.requesterSub, requesterSub),
+      ),
+    )
+    .returning({ summary: stockRequests.summary, externalKey: stockRequests.externalKey });
+  if (!row) return false;
+  await db()
+    .insert(auditLogs)
+    .values(
+      auditValues({
+        action: "STOCK_REQUEST_CANCELLED",
+        actorId: target.requestedBy,
+        actorName: target.requestedByName,
+        target: `requests:${target.id}`,
+        detail: { summary: row.summary, source: target.source, externalKey: row.externalKey, requesterSub },
+      }),
+    );
+  return true;
+}
+
 function toRow(r: typeof stockRequests.$inferSelect, names: ReadonlyMap<string, PartLineView>, issued: ReadonlyMap<string, number>): PendingRequestRow {
   const input = r.payload as unknown as EntryInput;
   const lines = linesOf(input).map((l) => {
@@ -689,13 +791,37 @@ export async function listAllRequests(): Promise<PendingRequestRow[]> {
  *    (`lib/api/stock-request-status.ts` 의 `buildStatusResponse`). 그래야 시험이 DB 없이 덮는다.
  * 🔵 재고 관리에서 직접 올린 신청은 이 칸이 비어 있어 **절대 걸리지 않는다**(NULL 은 어떤 값과도 같지 않다).
  */
-export async function listRequestsByExternalKeys(keys: readonly string[]): Promise<Array<{ externalKey: string; request: PendingRequestRow }>> {
+export async function listRequestsByExternalKeys(keys: readonly string[]): Promise<Array<{ externalKey: string; request: ApiRequestRow }>> {
   const unique = [...new Set(keys)];
   if (unique.length === 0) return [];
   const rows = await db().select().from(stockRequests).where(inArray(stockRequests.externalKey, unique));
   const keyById = new Map(rows.map((r) => [r.id, r.externalKey ?? ""]));
   const views = await attachNames(rows);
-  return views.map((request) => ({ externalKey: keyById.get(request.id) ?? "", request }));
+  const subs = requesterSubsOf(rows);
+  return views.map((request) => ({ externalKey: keyById.get(request.id) ?? "", request: withRequesterSub(request, subs) }));
+}
+
+/**
+ * **바깥 통로가 받아 가는 줄** — 화면이 그리는 줄에 **올린 사람의 포털 번호**를 얹은 것
+ * (2026-10-16, A/S 가 「내가 올린 줄」을 가리는 유일한 값이다. API.md 4-7절).
+ *
+ * 🔴 **`PendingRequestRow` 에 그 칸을 넣지 않은 까닭**: 그 줄은 부품 요청 관리 화면이 **통째로 클라이언트
+ *    컴포넌트에 넘긴다**(`app/(app)/requests/page.tsx` → `RequestManagerScreen`). 거기에 칸을 더하면 **모든
+ *    신청자의 포털 번호가 브라우저로 실려 나간다** — 화면은 그 값을 한 번도 쓰지 않는데도.
+ *    그래서 **바깥으로 나가는 두 함수에서만** 얹는다. 🔵 A/S 는 이 번호를 이미 알고 있다(저쪽
+ *    `users.sso_subject`) — 저쪽에는 새어 나가는 값이 아니고, 브라우저에는 안 보낸다.
+ * 🔴 **재고 관리 화면에서 직접 올린 신청은 `null`** 이다. 지어내지 않는다 — 거기서는 `requested_by` 가 곧
+ *    사람이라 포털 번호를 적을 까닭이 없었다(표 주석). A/S 쪽은 이 `null` 을 보고 「내 것이 아니다」로 읽는다.
+ */
+export type ApiRequestRow = PendingRequestRow & { requesterSub: string | null };
+
+/** 신청 번호 → 포털 번호. 🔵 줄을 빚는 길(`attachNames` → `toRow`)을 건드리지 않으려고 밖에서 짝짓는다. */
+function requesterSubsOf(rows: Array<typeof stockRequests.$inferSelect>): Map<string, string | null> {
+  return new Map(rows.map((r) => [r.id, r.requesterSub]));
+}
+
+function withRequesterSub(request: PendingRequestRow, subs: ReadonlyMap<string, string | null>): ApiRequestRow {
+  return { ...request, requesterSub: subs.get(request.id) ?? null };
 }
 
 /**
@@ -717,7 +843,7 @@ export async function listRequestsByExternalKeys(keys: readonly string[]): Promi
  * 🔵 차례를 여기서 정하지 않는다 — 돌려줄 차례는 순수 함수 한 곳에서 정한다(`buildIntakeStatusResponse`).
  *    그래야 시험이 DB 없이 그 규칙을 덮는다.
  */
-export async function listRequestsByIntakeNumbers(intakeNumbers: readonly string[]): Promise<Array<{ externalKey: string | null; request: PendingRequestRow }>> {
+export async function listRequestsByIntakeNumbers(intakeNumbers: readonly string[]): Promise<Array<{ externalKey: string | null; request: ApiRequestRow }>> {
   const unique = [...new Set(intakeNumbers)];
   if (unique.length === 0) return [];
   const rows = await db()
@@ -726,7 +852,10 @@ export async function listRequestsByIntakeNumbers(intakeNumbers: readonly string
     .where(inArray(sql`${stockRequests.payload}->>'intakeNumber'`, unique));
   const keyById = new Map(rows.map((r) => [r.id, r.externalKey]));
   const views = await attachNames(rows);
-  return views.map((request) => ({ externalKey: keyById.get(request.id) ?? null, request }));
+  // 🔴 **열쇠로 물었을 때와 같은 줄 모양**이다 — 포털 번호도 여기서 똑같이 얹는다(한쪽만 실으면 A/S 화면이
+  //    묻는 법에 따라 [요청 취소] 단추를 그렸다 말았다 한다).
+  const subs = requesterSubsOf(rows);
+  return views.map((request) => ({ externalKey: keyById.get(request.id) ?? null, request: withRequesterSub(request, subs) }));
 }
 
 /**

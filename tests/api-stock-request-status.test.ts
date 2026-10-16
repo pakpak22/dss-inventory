@@ -32,6 +32,8 @@ const SOURCE: RequestStatusSource = {
   type: "USE",
   status: "PENDING",
   intakeNumber: "D260701",
+  requesterSub: "portal-sub-aaaa-1111",
+  requestedByName: "예시 신청자",
   requestedAt: "2026-10-15T01:00:00.000Z",
   lines: [LINE],
   decidedByName: null,
@@ -147,12 +149,33 @@ describe("돌려주는 모양 — 화면이 그릴 수 있을 만큼 (2026-10-15
   it("칸은 이것뿐이다 — 약속이라 이름을 바꾸거나 빼지 않는다", () => {
     assert.deepEqual(
       Object.keys(toApiRequestStatus("AS-1", source())).sort(),
-      ["closed", "decision", "hold", "id", "intakeNumber", "lines", "requestKey", "requestedAt", "status", "type"].sort(),
+      ["closed", "decision", "hold", "id", "intakeNumber", "lines", "requestKey", "requestedAt", "requester", "status", "type"].sort(),
     );
   });
 
   it("🔵 인수번호가 함께 간다 — 열쇠로 물었을 때도 같은 모양이다 (2026-10-15 에 더한 칸)", () => {
     assert.equal(toApiRequestStatus("AS-1", source({ intakeNumber: "D260701" })).intakeNumber, "D260701");
+  });
+
+  /**
+   * 🔴 **A/S 가 「내가 올린 줄」을 가리는 값은 포털 번호뿐이다** (2026-10-16 에 더한 칸).
+   *    저쪽은 `requestKey` 를 저장하지 않으므로, 이 칸이 없으면 **[요청 취소] 단추를 아무 줄에도 못 그린다** —
+   *    거두는 통로(API.md 4-9절)를 부를 길이 사라지는데 화면은 멀쩡해 보이고 오류도 안 난다.
+   */
+  it("🔴 A/S 에서 올라온 신청은 **포털 번호가 실린다** — 거두는 통로를 부를 유일한 열쇠다", () => {
+    const q = toApiRequestStatus("AS-1", source({ requesterSub: "portal-sub-aaaa-1111", requestedByName: "예시 신청자" }));
+    assert.deepEqual(q.requester, { sub: "portal-sub-aaaa-1111", name: "예시 신청자" });
+  });
+
+  it("🔴 재고 관리에서 직접 올린 신청은 **`null`** 이다 — 빈 글자가 아니고, 지어내지 않는다", () => {
+    const q = toApiRequestStatus(null, source({ requesterSub: null, requestedByName: "정영빈" }));
+    assert.equal(q.requester.sub, null);
+    assert.notEqual(q.requester.sub, "", "빈 글자로 채우면 「번호가 없는 것」과 「번호가 빈 사람」이 같아진다");
+  });
+
+  it("🔵 이름은 둘 다 실린다 — 보여 주는 값이다(가르는 값은 번호다. 동명이인이면 남의 신청이 열린다)", () => {
+    assert.equal(toApiRequestStatus("AS-1", source({ requesterSub: "s-1", requestedByName: "홍길동" })).requester.name, "홍길동");
+    assert.equal(toApiRequestStatus(null, source({ requesterSub: null, requestedByName: "홍길동" })).requester.name, "홍길동");
   });
 
   it("🔴 상태는 코드와 **사람이 읽을 글자**를 함께 — 글자는 화면이 쓰는 표에서 온다", () => {
@@ -431,6 +454,15 @@ describe("🔴 인수번호로 물었을 때 돌려주는 것 (2026-10-15)", () 
     const byKey = buildStatusResponse(["AS-1"], new Map([["AS-1", source()]]), "2026-10-15T10:00:00.000Z");
     assert.deepEqual(Object.keys(byIntake).sort(), Object.keys(byKey).sort());
     assert.deepEqual(Object.keys(byIntake.requests[0]).sort(), Object.keys(byKey.requests[0]).sort());
+  });
+
+  it("🔴 **포털 번호도 여기서 똑같이 실린다** — 한쪽만 실으면 묻는 법에 따라 취소 단추가 그려졌다 말았다 한다", () => {
+    const fromAs = row({ id: "0c0f5555-5555-4555-8555-555555555555", requesterSub: "portal-sub-aaaa-1111", requestedByName: "예시 신청자" }, "AS-9");
+    const fromInventory = row({ id: "0c0f6666-6666-4666-8666-666666666666", requesterSub: null, requestedByName: "정영빈" }, null);
+    const r = buildIntakeStatusResponse([fromAs, fromInventory], "2026-10-15T10:00:00.000Z");
+    const byId = new Map(r.requests.map((q) => [q.id, q.requester]));
+    assert.deepEqual(byId.get("0c0f5555-5555-4555-8555-555555555555"), { sub: "portal-sub-aaaa-1111", name: "예시 신청자" });
+    assert.deepEqual(byId.get("0c0f6666-6666-4666-8666-666666666666"), { sub: null, name: "정영빈" }, "재고 관리에서 올린 신청은 번호가 null 이다 — 열쇠가 null 인 것과 짝이다");
   });
 
   it("🔵 어느 수리 건의 것인지 줄마다 적혀 온다 — 인수번호를 여러 개 물을 수 있기 때문이다", () => {

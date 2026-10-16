@@ -111,6 +111,13 @@ function linesOf(row: AuditRow, entryNos: Map<string, string>): Line[] {
       { text: `요청 ${n(d.requested)}개 중 ${n(d.issued)}개를 내주고, 남은 ${n(d.remaining)}개는 주지 않는 것으로 마감 · 사유: ${String(d.note ?? "")}` },
     ];
   }
+  // 반출 신청 취소 — 🔴 **어디서 거뒀는지**가 보여야 한다 (2026-10-16, A/S 가 제 신청을 거두는 통로).
+  // 화면에서 거둔 것과 A/S 통로로 거둔 것은 같은 행위(`STOCK_REQUEST_CANCELLED`)로 남지만, 「누가 접었나」를
+  // 나중에 가릴 자리가 이력뿐이다. 🔵 출처 칸이 없는 옛 기록(화면 취소)은 요약 한 줄 그대로 읽힌다.
+  if (row.action === "STOCK_REQUEST_CANCELLED") {
+    const fromAs = d.source === "AS" ? ` · A/S 에서 거둠 (요청 번호 ${String(d.externalKey ?? "")})` : "";
+    return [{ text: `${String(d.summary ?? "")}${fromAs}` }];
+  }
   if (row.action === "PART_ITEM_CREATE") return [{ text: String(d.name ?? "") }];
   if (row.action === "PART_ITEM_REORDER") return [{ text: `${d.direction === "up" ? "위로" : "아래로"} (${String(d.swappedWith ?? "")} 와 자리 바꿈)` }];
   if (row.action === "LOGIN") return [{ text: `역할 ${String(d.role ?? "")}` }];

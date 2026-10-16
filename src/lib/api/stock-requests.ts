@@ -71,6 +71,16 @@ function text(v: unknown, max: number): string {
 }
 
 /**
+ * 🔵 **거두는 통로가 같은 다듬기를 쓰도록 이름만 내보낸다** (2026-10-16,
+ * `POST /api/v1/stock-requests/cancel` — `./stock-request-cancel.ts`).
+ *
+ * 🔴 올릴 때 잘리고 다듬어져 저장된 값을 거둘 때 **다르게 다듬으면 같은 글자로 보내도 못 찾는다.**
+ *    되읽는 통로가 `MAX_KEY` 를 여기서 가져가는 것과 같은 까닭이다(위 `MAX_KEY` 주석).
+ * 🔴 **동작은 한 글자도 바뀌지 않았다** — 이 파일 안의 부르는 자리는 그대로 `text`·`asRecord` 다.
+ */
+export { text as trimTextField, asRecord as asObjectField, MAX_SUB };
+
+/**
  * 받은 본문을 검사한다. 🔴 **첫 번째 잘못에서 멈추고 무엇이 틀렸는지 말한다** — 부르는 쪽이 고칠 수 있게
  * 칸 이름과 받은 값을 함께 적는다.
  */

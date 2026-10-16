@@ -226,6 +226,20 @@ export interface ApiRequestStatus {
    *    「수리 건 없음」으로 적은 신청은 빈 글자다.
    */
   intakeNumber: string;
+  /**
+   * **누가 올린 신청인가** (2026-10-16 에 더한 칸).
+   *
+   * 🔴 **`sub`(포털 번호)가 열쇠다.** A/S 는 올릴 때 지어 보낸 `requestKey` 를 **저장하지 않으므로**
+   *    (2026-10-15 결정), 돌아온 목록에서 **「내가 올린 줄」을 가릴 값이 이것뿐**이다. 이 칸이 없으면
+   *    A/S 는 [요청 취소] 단추를 **아무 줄에도 못 그리고**, 거두는 통로(4-9절)를 부를 길이 사라진다.
+   *    🔵 화면은 멀쩡해 보이고 오류도 안 난다 — 그래서 더 위험한 빈칸이었다.
+   * 🔴 **이름으로는 가르지 않는다.** 같은 이름이 둘이면 남의 신청에 취소 단추가 열린다. `name` 은
+   *    **보여 주는 값**이고 가르는 값이 아니다.
+   * 🔴 **재고 관리 화면에서 직접 올린 신청은 `sub` 이 `null`** 이다 — 거기서는 `requested_by` 가 곧 사람이라
+   *    포털 번호를 적을 까닭이 없었다. 빈 글자가 아니라 `null` 이고, **지어내지 않는다.**
+   * 🔵 저쪽에 새는 값이 아니다 — A/S 가 올릴 때 **직접 보낸** 번호이고(4-2절), 저쪽 `users.sso_subject` 다.
+   */
+  requester: { sub: string | null; name: string };
   type: EntryType;
   /**
    * 상태 코드와 **사람이 읽을 글자**.
@@ -275,6 +289,16 @@ export interface RequestStatusSource {
   status: RequestStatus;
   /** 🔵 `PendingRequestRow` 가 이미 들고 있는 칸이다(USE 가 아니면 빈 글자). 위 `ApiRequestStatus.intakeNumber` */
   intakeNumber: string;
+  /**
+   * 올린 사람의 **포털 번호**와 그때의 이름 (2026-10-16).
+   *
+   * 🔴 번호는 `PendingRequestRow` 에 **없다** — 화면 줄에 넣으면 부품 요청 관리 화면이 그 줄을 통째로
+   *    클라이언트에 넘기면서 **모든 신청자의 포털 번호가 브라우저로 실려 나간다**(`lib/stock/requests.ts` 의
+   *    `ApiRequestRow` 주석). 그래서 **바깥으로 나가는 길에서만** 얹은 `ApiRequestRow` 가 이 모양을 만족한다.
+   * 🔵 이름(`requestedByName`)은 화면 줄이 이미 들고 있다.
+   */
+  requesterSub: string | null;
+  requestedByName: string;
   requestedAt: string;
   lines: readonly { partNo: number | null; partName: string; quantity: number; issued: number }[];
   decidedByName: string | null;
@@ -290,6 +314,9 @@ export function toApiRequestStatus(requestKey: string | null, r: RequestStatusSo
     requestKey,
     id: r.id,
     intakeNumber: r.intakeNumber,
+    // 🔴 **지어내지 않는다** — 화면에서 올린 신청은 포털 번호가 없어 `null` 이고, 그것이 참말이다.
+    //    두 가지 묻는 법 모두 **같은 이 줄**을 지나므로 모양이 갈릴 자리가 없다.
+    requester: { sub: r.requesterSub, name: r.requestedByName },
     type: r.type,
     status: { code: r.status, label: requestStatusLabel(r.status, closed) },
     closed,
