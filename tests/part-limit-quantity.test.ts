@@ -241,7 +241,7 @@ describe("고치는 길 — 자격과 이력", () => {
     const dialog = src("src/components/parts/PartDetailDialog.tsx");
     assert.ok(dialog.includes("<LimitQuantityField"), "상세 창에 한계수량 칸이 없다");
     const tag = dialog.slice(dialog.indexOf("<LimitQuantityField"));
-    assert.ok(tag.slice(0, tag.indexOf("/>")).includes("canEdit={canEdit}"), "한계수량 칸의 [고치기] 가 관리자 아닌 사람에게도 보인다");
+    assert.ok(tag.slice(0, tag.indexOf("/>")).includes("canEdit={canEdit}"), "한계수량 칸의 [수정] 이 관리자 아닌 사람에게도 보인다");
   });
 
   it("🔴 바꾼 것이 변경 이력에 남는다 — 안 남기면 알림이 왜 꺼졌는지 아무도 모른다", () => {

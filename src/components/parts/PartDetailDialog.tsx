@@ -322,7 +322,7 @@ function CustomerNameField({ partId, value, canEdit }: { partId: string; value: 
             }}
             title="고객사에 나가는 서류(견적서)에 쓰는 이름입니다. 기록·관리자가 고칠 수 있습니다."
           >
-            고치기
+            수정
           </button>
         ) : null}
         {state.error ? (
@@ -379,7 +379,7 @@ const EMPTY_LIMIT_QUANTITY_STATE: LimitQuantityState = { error: null, saveCount:
 /**
  * 한계수량만 고치는 자리 (2026-10-16 사용자 요청: 「부품 상세에서 한계수량을 설정할 수 있도록」).
  *
- * 🔴 **바로 위 `CustomerNameField` 와 같은 결로 만든다** — 고치기 → 칸 → 저장/취소, 저장이 끝나면
+ * 🔴 **바로 위 `CustomerNameField` 와 같은 결로 만든다** — 수정 → 칸 → 저장/취소, 저장이 끝나면
  *    칸을 닫고 `router.refresh()`. 함정 둘(렌더 중 상태 맞추기 · 폼 자동 초기화 피하기)도 같다.
  * 🔴 **다른 점은 자격뿐이다.** 고객사 품명은 기록(STAFF) 이상이지만(2026-10-14 결정) 한계수량은
  *    **관리자(ADMIN)** 다 — 그래서 `canRecord` 가 아니라 `canEdit` 를 본다. 진짜 차단은 서버 액션의
@@ -439,7 +439,7 @@ function LimitQuantityField({ partId, value, quantity, canEdit }: { partId: stri
             }}
             title="재고가 한계수량과 같거나 적어지면 알림 종에 뜹니다. 알리지 않으려면 비워 두십시오(0 은 「하나도 안 남으면 알려라」입니다). 관리자가 고칠 수 있습니다."
           >
-            고치기
+            수정
           </button>
         ) : null}
         {state.error ? (
