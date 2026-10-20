@@ -1,6 +1,7 @@
 import { NotificationBell } from "@dss/ui";
 import type { Role } from "@/db/schema/users";
-import { fetchPortalNotifications } from "@/lib/notifications/portal";
+import { dismissNotificationAction } from "@/app/actions/notifications";
+import { fetchPortalNotifications, withoutDismissed } from "@/lib/notifications/portal";
 import { listInventoryNotifications } from "@/lib/notifications/queries";
 
 /**
@@ -39,6 +40,23 @@ import { listInventoryNotifications } from "@/lib/notifications/queries";
  * 그려지지 않는다 — 어느 경우에도 화면은 뜬다. 그래서 이 자리에 error boundary 가
  * 필요 없다.
  *
+ * ── 🔴 지우기(✕)는 **포털에 적힌다** ───────────────────────────────────
+ * 「확인했다」는 그 알림을 만든 시스템에만 적을 수 있지만, 「그만 보겠다」는 포털에
+ * 적힌다(2026-10-19). 그래서 어느 시스템에서 지우든 사내 시스템 **전부의 종**에서
+ * 사라진다. 적는 자리는 서버 액션이다 — 평범한 함수는 클라이언트 경계를 건너지
+ * 못하고, 중계 통로를 뚫으면 위에서 피한 「시크릿을 다루는 자리」가 늘어난다
+ * (app/actions/notifications.ts).
+ *
+ * 🔴 **제 줄은 우리가 걸러야 한다.** 남의 줄은 포털이 걸러서 보내지만(items 에서
+ *    빠지고 count 도 줄어 있다), 재고관리의 알림은 포털이 애초에 보내지 않아
+ *    손댈 수 없다 — 그것을 거르라고 포털이 `dismissed` 를 함께 보낸다. 안 거르면
+ *    **「재고관리에서 지웠는데 재고관리 종에만 그대로 뜬다」**가 된다. 거르는 함수
+ *    (withoutDismissed)가 **개수까지 함께 줄인다** — 줄은 빠졌는데 배지 숫자가
+ *    그대로면 「눌러도 안 없어지는 숫자」가 된다.
+ *
+ * 🔵 포털이 보낸 `others.count` 는 **손대지 않는다.** 남의 줄 몫이고 지움이 이미
+ *    반영돼 있다. 줄이는 것은 우리가 더한 제 줄 몫뿐이다.
+ *
  * 두 물음은 **나란히** 나간다 — 우리 DB 가 포털을 기다릴 이유가 없다.
  * ============================================================================
  */
@@ -46,7 +64,10 @@ export async function HeaderNotificationBell({ userId, role, subject }: { userId
   // 🔴 `subject` 는 **포털 번호**(`session.user.authSub`)다. 포털에 남의 알림을 물을 때 쓰던
   //    그 값을 우리 질의에도 그대로 넘긴다 — 「지금 내 차례인 불출 결재」가 그 번호로만 갈린다
   //    (notifications/queries.ts 의 `NotificationViewer.sub`). **users 를 다시 읽지 않는다.**
-  const [mine, others] = await Promise.all([listInventoryNotifications({ id: userId, role, sub: subject }), fetchPortalNotifications(subject)]);
+  const [raw, others] = await Promise.all([listInventoryNotifications({ id: userId, role, sub: subject }), fetchPortalNotifications(subject)]);
+
+  // 🔴 이 한 줄이 없으면 「여기서 지웠는데 여기서만 그대로 뜬다」가 된다(위 머리말).
+  const mine = withoutDismissed(raw, others.dismissed);
 
   const items = [...mine.items, ...others.items];
 
@@ -66,6 +87,16 @@ export async function HeaderNotificationBell({ userId, role, subject }: { userId
       //
       // colorScheme 도 넘기지 않는다. 이 사이트는 밝은 화면뿐이라 기본값 "host"
       // (조상에 .dark 가 있을 때만 어두워진다)가 그대로 옳다(@dss/ui README 4절).
+      //
+      // 🔴 `onDismiss` 를 **넘겼을 때만** 줄마다 ✕ 가 그려진다(@dss/ui). 넘기는 것은
+      //    서버 액션이라 번들에는 이름표만 나가고 `client_secret` 은 서버에 남는다 —
+      //    이 조각에 "use client" 가 없는 것이 그 판단의 짝이다.
+      onDismiss={dismissNotificationAction}
+      // 🔴 `canDismiss` 는 넘기지 않는다 = **모든 줄에 ✕ 가 선다.** 제 줄도 지울 수
+      //    있다. 한때 A/S 가 「처리해야 사라지는 제 할 일」은 못 지우게 가렸는데,
+      //    2026-10-20 에 그 규칙을 **풀었다**(A/S 의 551641f) — 다른 시스템의 종에서는
+      //    어차피 지워지므로, 막는 것이 아니라 헷갈리게 만들고 있었기 때문이다.
+      //    같은 까닭이 여기에도 그대로 적용된다.
     />
   );
 }

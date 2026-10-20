@@ -26,7 +26,7 @@ function item(over: Record<string, unknown> = {}) {
 describe("포털 응답 읽기", () => {
   it("아홉 칸이 다 글자인 줄은 그대로 실린다", () => {
     const feed = normalizePortalNotificationFeed({ items: [item()], count: 1, degraded: false });
-    assert.deepEqual(feed, { items: [item()], count: 1, degraded: false });
+    assert.deepEqual(feed, { items: [item()], count: 1, degraded: false, dismissed: [] });
   });
 
   it("🔴 칸이 하나라도 글자가 아니면 **그 줄만** 버린다", () => {
@@ -73,7 +73,7 @@ describe("포털 응답 읽기", () => {
 
   it("객체가 아닌 답은 「못 물어봤다」로 본다", () => {
     for (const body of [null, undefined, "응답", 3, true]) {
-      assert.deepEqual(normalizePortalNotificationFeed(body), { items: [], count: 0, degraded: true });
+      assert.deepEqual(normalizePortalNotificationFeed(body), { items: [], count: 0, degraded: true, dismissed: [] });
     }
   });
 });
