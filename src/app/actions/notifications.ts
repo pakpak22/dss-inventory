@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import type { NotificationBellItem } from "@dss/ui";
 import { getSession } from "@/lib/auth/session";
+import { vetDismissKeys } from "@/lib/notifications/dismiss-keys";
 import { dismissPortalNotifications } from "@/lib/notifications/portal";
 
 /**
@@ -79,5 +80,67 @@ export async function dismissNotificationAction(item: NotificationBellItem): Pro
   } catch (e) {
     // 🔴 오류의 **종류**만 남긴다 — 열쇠에는 업무 식별자가 들어 있다.
     console.error("[notifications] 알림 지움 처리에서 넘어졌습니다:", { name: e instanceof Error ? e.name : "unknown" });
+  }
+}
+
+/**
+ * 머리말의 알림 종에서 「**보이는 알림 지우기 n건**」을 눌렀을 때 — 지금 그려져 있는
+ * 줄을 **한꺼번에** 포털에 지운다(2026-10-20).
+ *
+ * 🔵 위 `dismissNotificationAction` 과 **같은 약속 위에 있다.** 세션에서 사람 번호를
+ *    읽는 것도, 던지지 않는 것도, 열쇠를 로그에 안 찍는 것도, 되살리는 자리가 사내 구간
+ *    **레이아웃**인 것도 같다 — 까닭은 거기 적혀 있다. 여기서는 **다른 점 셋**만 적는다.
+ *
+ * ── 🔴 ① 인자를 **미리 묶어** 받는다 ───────────────────────────────────
+ * @dss/ui 가 내준 자리는 `onDismissAll?: () => void` 로 **인자를 안 받는다.** 그런데
+ * 지울 열쇠 목록을 아는 것은 사이트다(종에 무엇을 그릴지 사이트가 정한다). 종은 서버
+ * 조각이라 `onDismissAll={() => 지운다(열쇠들)}` 처럼 평범한 화살표 함수를 클라이언트
+ * 경계로 넘길 수 없다 — 건널 수 있는 것은 서버 액션뿐이다.
+ *
+ * 그래서 **값을 미리 묶은 서버 액션**을 넘긴다(`…bind(null, 열쇠들)`). 묶은 함수도
+ * 여전히 서버 액션이고(React 가 `bind` 를 따로 손봐 둔다), 묶인 값은 RSC 응답에 실려
+ * 내려갔다가 누를 때 되돌아온다.
+ *
+ * 🔴 묶어 보내는 목록은 **제 줄과 포털 줄을 합친 뒤**의 것이다(HeaderNotificationBell).
+ *    재고관리는 제 알림을 제 손으로 그려 이어 붙이므로, 포털에서 온 줄만 묶으면 「전부
+ *    지우기를 눌렀는데 내 알림만 남는다」가 된다.
+ *
+ * ── 🔴 ② 그래서 받은 값을 **믿지 않는다** ───────────────────────────────
+ * 인자가 브라우저를 한 번 거친다는 뜻이다. 🔵 이것은 새 위험이 아니다 — 줄마다 서는 ✕ 도
+ * 이미 브라우저가 보낸 `item.key` 를 쓴다. **누구의 지움인지(`sub`)는 여기서도 서버가 제
+ * 세션에서 읽는다.** 열쇠로 할 수 있는 일은 「내 종에서 이 줄을 그만 보기」뿐이다.
+ *
+ * 모양과 수를 가리는 자리는 `vetDismissKeys` 다(notifications/dismiss-keys.ts). 배열이
+ * 아니면·울타리를 넘으면 **아무 일도 하지 않는다.**
+ *
+ * ── 🔴 ③ 거절당해도 되살린다 — 위와 **반대**다 ──────────────────────────
+ * 위 함수는 「적히지 않았으면 되살리지 않는다」가 맞다. 한 줄짜리라 거절은 곧 「아무것도
+ * 안 바뀌었다」이고, 그때 되살리면 사이트 전체 캐시만 버린다.
+ *
+ * 여기서는 그 셈이 뒤집힌다. 열쇠가 200개를 넘으면 포털로 **여러 묶음**이 나가고
+ * (portal.ts), 돌아오는 값은 「**전부** 적혔는가」다 — 가운데 하나가 거절돼도 나머지는
+ * 적혔다. 그때 안 되살리면 **이미 지워진 줄이 종에 그대로 남아** 사람은 「눌렀는데 아무
+ * 일도 없다」고 읽고, 다음 화면 이동까지 어긋난 목록을 본다. 한 묶음이 통째로 거절된
+ * 때만 쓸데없이 캐시를 버리는데, 그것은 사람이 단추를 **방금 누른** 직후라 다시 그리는
+ * 것이 손해가 아니다(한 번 누름에 한 번뿐이다).
+ */
+export async function dismissAllNotificationsAction(keys: readonly string[]): Promise<void> {
+  try {
+    const session = await getSession();
+    if (!session) return;
+
+    // 🔴 타입이 `readonly string[]` 라고 해서 그 모양으로 오지 않는다 — 서버 액션의
+    //    인자는 tsc 가 지키는 범위 밖이다(위 ②).
+    const wanted = vetDismissKeys(keys);
+    if (wanted === null) return;
+    if (wanted.length === 0) return;
+
+    // 🔴 돌려받는 「전부 적혔는가」를 **보지 않는다.** 일부만 적힌 경우가 있고, 그때
+    //    되살리지 않으면 지워진 줄이 종에 남는다(위 ③).
+    await dismissPortalNotifications(session.user.authSub, wanted);
+    revalidatePath("/", "layout");
+  } catch (e) {
+    // 🔴 여기도 오류의 **종류**만 남긴다 — 몇 건이었는지도 적지 않는다.
+    console.error("[notifications] 보이는 알림 지움 처리에서 넘어졌습니다:", { name: e instanceof Error ? e.name : "unknown" });
   }
 }

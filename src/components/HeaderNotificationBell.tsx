@@ -1,6 +1,7 @@
 import { NotificationBell } from "@dss/ui";
 import type { Role } from "@/db/schema/users";
-import { dismissNotificationAction } from "@/app/actions/notifications";
+import { dismissAllNotificationsAction, dismissNotificationAction } from "@/app/actions/notifications";
+import { visibleNotificationKeys } from "@/lib/notifications/dismiss-keys";
 import { fetchPortalNotifications, withoutDismissed } from "@/lib/notifications/portal";
 import { listInventoryNotifications } from "@/lib/notifications/queries";
 
@@ -57,6 +58,20 @@ import { listInventoryNotifications } from "@/lib/notifications/queries";
  * 🔵 포털이 보낸 `others.count` 는 **손대지 않는다.** 남의 줄 몫이고 지움이 이미
  *    반영돼 있다. 줄이는 것은 우리가 더한 제 줄 몫뿐이다.
  *
+ * ── 🔴 「보이는 알림 지우기」(onDismissAll)도 **넘긴다** (2026-10-20) ────
+ * 줄이 여럿이면 ✕ 를 여러 번 눌러야 했다. 그 단추는 A/S 에만 있었는데, 이제 @dss/ui 가
+ * **단추도 글자도 개수도** 그린다 — 사이트가 하는 일은 함수를 넘기는 것뿐이다(그쪽
+ * README 「보이는 알림 지우기」 절).
+ *
+ * 🔴 그 자리는 `() => void` 로 **인자를 안 받는데** 지울 열쇠 목록을 아는 것은 이쪽이다.
+ *    그래서 **값을 미리 묶어** 넘긴다(`…bind(null, 열쇠들)`). 묶은 것도 여전히 서버
+ *    액션이라 경계를 건넌다 — 평범한 화살표 함수는 못 건넌다(이 조각에 "use client" 가
+ *    없는 것이 그 짝이다).
+ *
+ * 🔴 묶는 목록은 **합친 뒤의 `items`** 다 — 제 줄과 포털 줄 **둘 다**. 계측기·PO 는 남의
+ *    알림만 그려서 포털 목록이 곧 전부였지만, 여기는 제 알림을 제 손으로 이어 붙인다.
+ *    포털에서 온 줄만 묶으면 **「전부 지우기를 눌렀는데 내 알림만 남는다」**가 된다.
+ *
  * 두 물음은 **나란히** 나간다 — 우리 DB 가 포털을 기다릴 이유가 없다.
  * ============================================================================
  */
@@ -75,6 +90,17 @@ export async function HeaderNotificationBell({ userId, role, subject }: { userId
   //    목록이면 스스로 아무것도 그리지 않지만(그쪽 시험), 여기서 한 겹 더 막아 둔다.
   if (items.length === 0) return null;
 
+  // ── 🔴 일괄 지우기에 넘길 열쇠 — **지금 그리는 줄 전부** ────────────────
+  // 🔴 **합친 뒤의 목록**을 본다(제 줄 + 포털 줄). 어느 한쪽만 묶으면 단추에 적힌 수와
+  //    실제로 지워지는 줄이 어긋난다 — 제 줄을 빠뜨리면 「전부 지우기를 눌렀는데 내
+  //    알림만 남는다」가 된다.
+  // 🔴 `visibleNotificationKeys` 가 **그릴 수 없는 주소의 줄을 뺀다.** 종도 그 줄을 안
+  //    그리고 단추에 적는 수도 그렇게 남은 줄 수라, 여기서 빼지 않으면 「3건」을 눌렀는데
+  //    4건이 지워진다(그 함수 주석).
+  // 🔴 묶는 일은 **그릴 때마다** 한다 — 이 조각이 그려지는 순간의 목록이 곧 사람이 보는
+  //    목록이다.
+  const dismissAll = dismissAllNotificationsAction.bind(null, visibleNotificationKeys(items));
+
   return (
     <NotificationBell
       items={items}
@@ -92,6 +118,10 @@ export async function HeaderNotificationBell({ userId, role, subject }: { userId
       //    서버 액션이라 번들에는 이름표만 나가고 `client_secret` 은 서버에 남는다 —
       //    이 조각에 "use client" 가 없는 것이 그 판단의 짝이다.
       onDismiss={dismissNotificationAction}
+      // 🔴 「보이는 알림 지우기 n건」 — 이 함수를 **넘긴 사이트에만** 단추가 그려지고,
+      //    그릴 줄이 있을 때만 선다(@dss/ui). 적히는 수는 묶음이 세는 **지금 그리는 줄
+      //    수**이고, 위에서 묶은 열쇠도 같은 기준으로 걸러 둬 둘이 어긋나지 않는다.
+      onDismissAll={dismissAll}
       // 🔴 `canDismiss` 는 넘기지 않는다 = **모든 줄에 ✕ 가 선다.** 제 줄도 지울 수
       //    있다. 한때 A/S 가 「처리해야 사라지는 제 할 일」은 못 지우게 가렸는데,
       //    2026-10-20 에 그 규칙을 **풀었다**(A/S 의 551641f) — 다른 시스템의 종에서는
