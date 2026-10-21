@@ -162,6 +162,24 @@ function ApprovalCard({ card, actions, error }: { card: IssueApprovalCard; actio
           남은 빈 상자는 「사유가 지워졌나」로 읽힌다. */}
       {card.reason ? <p className="rounded-md bg-zinc-50 px-2 py-1 text-xs break-keep text-zinc-700">신청 사유: “{card.reason}”</p> : null}
 
+      {/* 🔴 **바로 위 「신청 사유」와 다른 사람의 말이다** (2026-10-22). 저것은 결재를 올린 재고 담당자가
+          결재자에게 쓴 글이고, 이것은 **부품을 요청한 사람**이 신청에 적은 말이다(A/S 에서 온 신청이면
+          거기서 적은 글이 그대로 실려 온다). 🔴 이름표에 **누구의 말인지**를 적어 둔다 — 둘이 나란히
+          서는 자리라, 「요청 비고」 네 글자만으로는 어느 쪽이 누구 말인지 가를 수 없다.
+          🔴 비면 **이 줄을 아예 그리지 않는다** — 사유와 **같은 규칙**이다. 안 적었거나 재고 관리에서
+          직접 올린 신청은 늘 비어 있어서, 「요청 비고: -」가 모든 카드에 붙으면 화면만 길어진다.
+          🔴 **잘라서 숨기지 않는다**: 길 수 있지만(A/S 통로가 1000자까지 싣는다) 읽으라고 적은 글이다.
+          `whitespace-pre-wrap` 로 적은 사람의 줄바꿈을 살리고, `break-words` 로 긴 글이 카드를 밀어내지
+          않게만 한다. */}
+      {card.requestNote ? (
+        <p
+          className="rounded-md bg-zinc-50 px-2 py-1 text-xs break-keep break-words whitespace-pre-wrap text-zinc-700"
+          title="부품을 요청한 사람이 신청할 때 적은 말입니다. 「신청 사유」는 결재를 올린 재고 담당자가 결재자에게 쓴 글로, 서로 다른 말입니다."
+        >
+          요청 비고 (신청한 사람이 적은 말): “{card.requestNote}”
+        </p>
+      ) : null}
+
       <IssueLines lines={card.lines} />
       <IssueApprovalTrail status={card.status} currentStep={card.currentStep} steps={card.trail} />
 

@@ -18,6 +18,7 @@ import {
   PART_ISSUE_NOTHING_TO_EXECUTE,
   PART_ISSUE_STATUS_BADGE,
   PART_ISSUE_TRAIL_MARKS,
+  type IssueApprovalCard,
 } from "../src/lib/approval/part-issue-screen";
 import { partIssueLockFor } from "../src/lib/approval/part-issue-gate";
 import { PART_ISSUE_STATUS_LABELS, PART_ISSUE_STATUSES, type PartIssueStatus } from "../src/lib/approval/part-issue-rules";
@@ -386,5 +387,69 @@ describe("진행 그림의 출처 고르기 (2026-10-21, 조각 11f)", () => {
         else assert.equal(picked?.status, wanted[lock], `${a}+${b}`);
       }
     }
+  });
+});
+
+/**
+ * ============================================================================
+ * **요청 비고** — 신청한 사람이 적은 말이 결재 화면까지 온다 (2026-10-22)
+ * ============================================================================
+ * 값은 처음부터 신청에 저장돼 있었다(`stock_requests.payload` 의 `note`). [부품 요청]·[기록내역]은
+ * 이미 그리고 있었는데 「승인 요청건」만 **긁어 오지 않아** 안 보였다.
+ *
+ * 🔴 여기서 못 박는 것 셋:
+ *  1. **「신청 사유」와 섞이지 않았다.** `reason`(결재를 올린 재고 담당자가 결재자에게 쓴 글)과
+ *     `requestNote`(신청한 사람이 적은 말)는 **다른 사람의 말**이다. 이름이 비슷해 섞어 심기 쉽고,
+ *     섞이면 오류 없이 **화면만 거짓말**을 한다.
+ *  2. **비면 줄 자체가 없다.** 거의 모든 신청이 비어 있어, 「요청 비고: -」가 붙으면 카드가 길어진다.
+ *  3. 🔴 **묶음 셋이 같은 변환을 거친다**(결재할 것 · 실행할 것 · 내가 올린 것). 하나라도 빠지면
+ *     **그 묶음에서만** 비고가 안 보이고, 오류가 안 나 아무도 신고하지 않는다.
+ *
+ * 🔵 순수 함수가 아니라 **화면·조회의 모양**이라 소스 글자로 잰다 — 이 파일 머리말 6번과 같은 처방이다.
+ * ============================================================================
+ */
+describe("요청 비고가 「승인 요청건」까지 온다 (2026-10-22)", () => {
+  it("🔴 조회가 신청의 jsonb 를 긁어 와 **안전하게** 뽑는다 — 맹목적 형변환이 아니다", () => {
+    const server = src("src/lib/approval/part-issue.ts");
+    assert.ok(server.includes("requestPayload: stockRequests.payload"), "조회가 신청의 payload 를 안 긁어 온다 — 화면까지 올 길이 없다");
+    assert.ok(server.includes("requestNote: readRequestNote(r.requestPayload)"), "화면이 받는 모양에 비고를 안 담는다");
+    assert.ok(!/payload as (unknown as )?EntryInput/.test(server), "payload 를 EntryInput 으로 믿고 받는 길이 생겼다 — 옛 신청에는 그 칸이 없다");
+  });
+
+  it("🔴 **묶음 셋이 같은 변환(`toCard`)을 거친다** — 한 묶음만 따로 만드는 길이 없다", () => {
+    const data = src("src/lib/approval/part-issue-screen-data.ts");
+    assert.ok(data.includes("requestNote: view.requestNote"), "변환이 비고를 옮겨 적지 않는다");
+    // 🔵 (가) 결재할 것 · (나) 실행할 것 · (다) 내가 올린 것 — 셋 다 같은 함수를 지난다.
+    assert.equal(data.match(/toCard\(v, ctx\)/g)?.length, 3, "세 묶음 중 `toCard` 를 안 거치는 것이 생겼다 — 그 묶음에서만 비고가 사라진다");
+    assert.ok(/toDecide: toDecideViews\.map\(\(v\) => toCard\(v, ctx\)\)/.test(data), "(가) 결재할 건이 다른 길로 만들어진다");
+    assert.ok(/const toExecute = toExecuteViews\.map\(\(v\) => toCard\(v, ctx\)\)/.test(data), "(나) 실행할 건이 다른 길로 만들어진다");
+    assert.ok(/const mineAll = mineViews\.map\(\(v\) => toCard\(v, ctx\)\)/.test(data), "(다) 내가 올린 건이 다른 길로 만들어진다");
+  });
+
+  it("🔴 화면이 「신청 사유」와 **다른 이름표로** 그린다 — 누구의 말인지 알 수 있게", () => {
+    const screen = src("src/components/stock/IssueApprovalScreen.tsx");
+    assert.ok(screen.includes("요청 비고 (신청한 사람이 적은 말): “{card.requestNote}”"), "요청 비고를 안 그리거나 이름표에 누구 말인지가 없다");
+    assert.ok(screen.includes("신청 사유: “{card.reason}”"), "「신청 사유」 줄이 바뀌었다 — 이 조각은 그 줄을 건드리지 않는다");
+    assert.ok(!screen.includes("요청 비고: “{card.reason}”"), "「신청 사유」의 값을 요청 비고 자리에 심었다 — 섞였다");
+    assert.ok(!screen.includes("신청 사유: “{card.requestNote}”"), "요청 비고를 「신청 사유」 자리에 심었다 — 섞였다");
+  });
+
+  it("🔴 비어 있으면 **줄 자체를 그리지 않는다** — 사유와 같은 규칙", () => {
+    const screen = src("src/components/stock/IssueApprovalScreen.tsx");
+    assert.ok(screen.includes("{card.requestNote ? ("), "비었을 때를 가르는 울타리가 없다 — 모든 카드에 빈 상자가 붙는다");
+    assert.ok(!/requestNote \|\| ["“]/.test(screen), "비었을 때 「없음」 같은 글자를 지어낸다");
+    assert.ok(!/requestNote\?\?/.test(screen.replace(/\s/g, "")), "비었을 때 대신 쓸 글자를 지어낸다");
+  });
+
+  it("🔴 길어도 **잘라서 숨기지 않는다** — 읽으라고 적은 글이다", () => {
+    const screen = src("src/components/stock/IssueApprovalScreen.tsx");
+    assert.ok(!/card\.requestNote\.(slice|substring|substr)\(/.test(screen), "비고를 잘라서 보여 준다");
+    assert.ok(!/line-clamp[^"]*"[^"]*\{card\.requestNote\}/s.test(screen), "비고를 줄 수로 접어 숨긴다");
+  });
+
+  it("🔵 카드 타입이 비고를 **제 이름으로** 들고 있다 — 화면의 `note` 입력 칸 셋과 겹치지 않게", () => {
+    // 🔴 타입이 어긋나면 여기서 tsc 가 멈춘다(런타임 단언은 거드는 것일 뿐이다).
+    const card: Pick<IssueApprovalCard, "reason" | "requestNote"> = { reason: "담당자가 결재자에게 쓴 글", requestNote: "신청한 사람이 적은 말" };
+    assert.notEqual(card.reason, card.requestNote, "둘은 다른 사람의 말이다");
   });
 });

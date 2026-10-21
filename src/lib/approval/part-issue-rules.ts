@@ -490,6 +490,30 @@ export function readIssueQuantities(value: unknown): IssueQuantity[] | null {
   return out;
 }
 
+/**
+ * 반출 신청의 jsonb(`stock_requests.payload`)에 적힌 **요청 비고**를 안전하게 읽는다.
+ * 글자가 아니면 **빈 글자**다 (2026-10-22).
+ *
+ * 🔴 **`payload as EntryInput` 같은 맹목적 형변환을 쓰지 않는다.** 그 칸의 타입은
+ * `Record<string, unknown>` 이고, 무엇이 들었는지 DB 도 타입도 보증하지 않는다:
+ *  - **없음** — A/S 통로가 생기기 전에 올라온 옛 신청에는 `note` 칸이 **아예 없을 수 있다.**
+ *  - **글자가 아님** — 손으로 고친 행이나 옛 판의 모양이면 숫자·객체·`null` 이 들어 있을 수 있다.
+ *    그대로 화면에 실으면 `[object Object]` 가 「신청자가 적은 말」인 척 그려진다.
+ *  - **빈 글자** — 아무것도 안 적고 올린 신청. 화면은 그때 **줄 자체를 그리지 않는다.**
+ * 🔵 그래서 `null` 이 아니라 **빈 글자**를 돌려준다: 읽는 쪽이 「없다」와 「못 읽었다」를 가를 까닭이
+ *    없기 때문이다(둘 다 보여 줄 말이 없다는 뜻이고, 그 판정은 `readIssueQuantities` 처럼 재고를
+ *    움직이지 않는다).
+ *
+ * 🔴 **공백만 있는 글자도 빈 글자로 떨어뜨린다.** 안 그러면 따옴표만 남은 빈 상자가 그려져
+ *    「비고가 지워졌나」로 읽힌다(화면이 사유에 대해 같은 까닭으로 같은 일을 한다).
+ */
+export function readRequestNote(value: unknown): string {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return "";
+  const { note } = value as { note?: unknown };
+  if (typeof note !== "string") return "";
+  return note.trim();
+}
+
 /* ------------------------------------------------------------------ */
 /* 화면이 받는 모양 (11b)                                                */
 /* ------------------------------------------------------------------ */
@@ -529,6 +553,18 @@ export type PartIssueView = {
   /** 반출 신청 쪽 값 — 요약 글자와 종류. 결재 화면이 신청을 다시 읽지 않아도 되게 함께 싣는다. */
   requestSummary: string;
   requestType: EntryType;
+  /**
+   * **요청 비고** — 부품을 요청한 사람이 신청할 때 적은 말 (2026-10-22).
+   *
+   * 🔴 위의 `reason`(「신청 사유」)과 **다른 사람의 말이다.** 저것은 재고 담당자가 결재를 올리면서
+   *    결재자에게 쓴 글이고(`stock_issue_approvals.reason`), 이것은 **신청한 사람**이 적어 신청에
+   *    실려 온 글이다(`stock_requests.payload` 의 `note` — A/S 통로가 1000자로 잘라 싣는다).
+   *    이름이 비슷해 섞어 심기 쉽다 — 섞으면 화면이 누구의 말인지 말할 수 없게 된다.
+   * 🔵 **비어 있는 것이 정상이다**: 신청자가 안 적었거나, 재고 관리에서 직접 올린 신청은 늘 비어
+   *    있다. 그때 화면은 그 줄을 **아예 그리지 않는다**(사유와 같은 규칙).
+   * 🔴 jsonb 라 무엇이 들었는지 보증되지 않아 `readRequestNote` 하나로만 읽는다.
+   */
+  requestNote: string;
   /** 지금 결재 차례인 사람. 결재가 끝났거나 닫힌 건이면 `null`. */
   currentStep: { stepOrder: number; approverUserId: string; approverName: string } | null;
 };

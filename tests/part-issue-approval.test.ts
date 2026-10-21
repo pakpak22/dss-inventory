@@ -18,6 +18,7 @@ import {
   PART_ISSUE_STEP_STATUSES,
   planPartIssueApproval,
   readIssueQuantities,
+  readRequestNote,
   type PartIssueStatus,
 } from "../src/lib/approval/part-issue-rules";
 import { actingApproverSubs } from "../src/lib/approval/delegation";
@@ -356,6 +357,49 @@ describe("줄별 「이번에 줄 수량」", () => {
     assert.equal(readIssueQuantities([{ partId: "", quantity: 1 }]), null);
     assert.equal(readIssueQuantities([{ partId: "p1", quantity: "3" }]), null);
     assert.equal(readIssueQuantities([{ partId: "p1" }]), null);
+  });
+});
+
+/**
+ * **요청 비고** — 신청의 jsonb 에서 글자 하나를 꺼내는 자리 (2026-10-22).
+ *
+ * 🔴 네 갈래를 전부 못 박는다. 이 칸은 `Record<string, unknown>` 이라 **무엇이 들었는지 아무도
+ *    보증하지 않고**, 여기서 거르지 않으면 `[object Object]` 나 `undefined` 가 「신청한 분이 적은
+ *    말」인 척 결재 화면에 그려진다 — 오류가 나지 않아 아무도 신고하지 않는 결함이다.
+ * 🔴 **「신청 사유」(`reason`)는 이 함수가 보지 않는다.** 그것은 결재건의 제 칸이고 다른 사람의
+ *    말이다 — 여기서 그 칸까지 받아 주면 둘을 섞어 심는 길이 열린다.
+ */
+describe("요청 비고를 jsonb 에서 안전하게 — readRequestNote (네 갈래)", () => {
+  it("① 없음 — 옛 신청에는 `note` 칸이 아예 없을 수 있다", () => {
+    assert.equal(readRequestNote({}), "");
+    assert.equal(readRequestNote({ occurredOn: "2026-10-22", type: "USE" }), "");
+  });
+
+  it("② 글자가 아님 — 숫자·객체·배열·null 은 전부 빈 글자로 떨어진다", () => {
+    assert.equal(readRequestNote({ note: 7 }), "");
+    assert.equal(readRequestNote({ note: { ko: "비고" } }), "");
+    assert.equal(readRequestNote({ note: ["비고"] }), "");
+    assert.equal(readRequestNote({ note: null }), "");
+    assert.equal(readRequestNote({ note: true }), "");
+  });
+
+  it("③ 빈 글자 — 공백만 적은 것도 빈 글자다 (따옴표만 남은 상자를 그리지 않으려고)", () => {
+    assert.equal(readRequestNote({ note: "" }), "");
+    assert.equal(readRequestNote({ note: "   \n  " }), "");
+  });
+
+  it("④ 정상 — 글자는 그대로 (줄바꿈도 살린다, 읽으라고 적은 글이다)", () => {
+    assert.equal(readRequestNote({ note: "D240913 건, 급합니다" }), "D240913 건, 급합니다");
+    assert.equal(readRequestNote({ note: "  첫 줄\n둘째 줄  " }), "첫 줄\n둘째 줄");
+    const long = "가".repeat(1000);
+    assert.equal(readRequestNote({ note: long }), long, "1000자까지 들어오는 칸이다 — 잘라서 숨기지 않는다");
+  });
+
+  it("🔴 jsonb 자리에 객체가 아닌 것이 와도 던지지 않는다", () => {
+    assert.equal(readRequestNote(null), "");
+    assert.equal(readRequestNote(undefined), "");
+    assert.equal(readRequestNote("비고"), "");
+    assert.equal(readRequestNote([{ note: "비고" }]), "");
   });
 });
 

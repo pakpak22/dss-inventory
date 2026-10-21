@@ -27,6 +27,7 @@ import {
   PART_ISSUE_ROUTE_MISSING_SUB_MESSAGE,
   planPartIssueApproval,
   readIssueQuantities,
+  readRequestNote,
   requestStatusAfterPartIssue,
   type PartIssueDetail,
   type PartIssueStatus,
@@ -758,6 +759,13 @@ function listSelect() {
       executedAt: stockIssueApprovals.executedAt,
       requestSummary: stockRequests.summary,
       requestType: stockRequests.type,
+      /**
+       * 🔵 **요청 비고가 사는 곳**(2026-10-22). 신청자가 적은 말은 제 칸이 아니라 신청의 jsonb
+       *    안에 `note` 로 들어 있다 — 조인은 이미 있었고 긁어 오는 칸만 하나 늘었다.
+       * 🔴 **통째로 믿지 않는다**: 타입이 `Record<string, unknown>` 이라 `as EntryInput` 로 받으면
+       *    옛 신청의 없는 칸·글자 아닌 값이 그대로 화면까지 간다. 읽는 자리는 `readRequestNote` 하나다.
+       */
+      requestPayload: stockRequests.payload,
       stepOrder: stockIssueApprovalSteps.stepOrder,
       stepApproverUserId: stockIssueApprovalSteps.approverUserId,
       stepApproverName: stockIssueApprovalSteps.approverName,
@@ -785,6 +793,9 @@ function toView(r: ListRow): PartIssueView {
     executedAt: r.executedAt?.toISOString() ?? null,
     requestSummary: r.requestSummary,
     requestType: r.requestType,
+    // 🔴 **「신청 사유」(`reason`)와 섞지 않는다** — 바로 윗줄이 결재를 올린 사람의 말이고, 이것은
+    //    신청한 사람의 말이다(`PartIssueView.requestNote`). 글자가 아니면 빈 글자로 떨어진다.
+    requestNote: readRequestNote(r.requestPayload),
     currentStep:
       r.stepOrder !== null && r.stepApproverUserId !== null && r.stepApproverName !== null
         ? { stepOrder: r.stepOrder, approverUserId: r.stepApproverUserId, approverName: r.stepApproverName }

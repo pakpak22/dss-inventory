@@ -168,6 +168,17 @@ function toCard(
     id: view.id,
     status: view.status,
     reason: view.reason,
+    /**
+     * 🔴 **「신청 사유」 바로 옆에 서지만 다른 사람의 말이다** (2026-10-22) — 윗줄 `reason` 은 결재를
+     *    올린 재고 담당자가 결재자에게 쓴 글이고, 이것은 **요청한 사람**이 신청에 적은 말이다.
+     * 🔵 **조회는 이미 되짚어 와 있다**: 결재건은 반출 신청과 INNER JOIN 돼 있고, 서버가 그 신청의
+     *    jsonb 에서 안전하게 뽑아 `PartIssueView.requestNote` 로 싣는다(`part-issue.ts` 의 `toView`).
+     *    여기서는 **옮겨 적기만** 한다 — 소유구분이 바로 이 자리에서 빠져 「승인 요청건」에서만 안
+     *    보이던 일이 2026-10-21 에 있었다(`linesOf` 주석).
+     * 🔴 **이 함수가 세 묶음의 유일한 변환이다**(아래 `readPartIssueApprovalScreen` 의 `toCard` 셋).
+     *    한 묶음만 따로 만드는 길이 생기면 그 묶음에서만 비고가 사라지고, 오류가 안 나 아무도 모른다.
+     */
+    requestNote: view.requestNote,
     requestedByName: view.requestedByName,
     requestedAt: view.requestedAt,
     // 🔵 A/S 번호(`approverUserId`)는 싣지 않는다 — 그림에 필요한 것은 이름뿐이다.
