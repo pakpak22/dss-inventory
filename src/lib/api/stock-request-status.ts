@@ -1,6 +1,7 @@
 import type { RequestStatus } from "@/db/schema/stock-requests";
 import type { PartIssueLock } from "@/lib/approval/part-issue-gate";
-import { INTAKE_NUMBER_RE, isClosedRequest, requestStatusLabel, type EntryType } from "@/lib/stock/codes";
+import { OWNER_LABEL, type Owner } from "@/lib/parts/codes";
+import { CHARGE_LABEL, INTAKE_NUMBER_RE, isClosedRequest, requestStatusLabel, type ChargeType, type EntryType } from "@/lib/stock/codes";
 import { MAX_KEY } from "./stock-requests";
 
 /**
@@ -184,21 +185,75 @@ export function parseStatusQuery(params: URLSearchParams): ParseStatusQueryResul
 }
 
 /**
- * 줄 하나 — **요청 수량과 이미 나간 수량**.
+ * 줄 하나가 들고 있는 **부품 쪽 값** — 어느 부품인가 (2026-10-21 에 넷이 더해졌다).
  *
- * 🔵 A/S 화면이 「No. 165 ×2 중 1 나감」을 그리는 데 쓰는 값이다. 남은 수량은 뺄셈이라 칸을 두지 않는다
- *    (재고 쪽도 요약 칸을 두지 않고 세어서 안다 — `db/schema/stock-requests.ts` 의 회차 표 주석 3번).
  * 🔴 `no` 가 `null` 인 줄은 **그 사이 재고 쪽에서 지워진 부품**이다. 지어낸 번호를 넣지 않는다.
+ * 🔴 **지워진 부품이면 아래 글자 넷이 전부 빈 글자이고 `owner` 는 `null`** 이다 — 되짚을 부품이 없어서다.
+ *    「DSS」 같은 기본값을 넣으면 받는 쪽 화면이 거짓말을 한다(`lib/stock/requests.ts` 의 `RequestLineView.owner`).
  */
-export interface ApiRequestStatusLine {
+export interface ApiRequestStatusLinePart {
   no: number | null;
   /** 품명. 지워진 부품이면 「(지워진 부품)」 — 재고 관리 화면이 쓰는 글자 그대로다. */
   name: string;
+  /**
+   * 그 부품을 **알아보는 값 넷** (2026-10-21, 쓰는 분 요청: 「A/S 의 반출 신청 줄에서도 어느 부품인지 보이게」).
+   *
+   * 🔵 **조회는 전부터 싣고 있었다** — `RequestLineView` 가 2026-10-16 부터 이 넷을 들고 다녔고(재고 관리
+   *    화면이 쓴다), 끊겨 있던 자리는 **이 통로가 칸을 손으로 옮겨 적는 아래 `toApiRequestStatus`** 였다.
+   *    조회를 건드리지 않고 옮겨 적는 줄만 늘렸다.
+   * 🔴 **빈 글자를 지어 채우지 않는다.** 재고 자료는 엑셀에서 넘어와 **빈칸 대신 `-` 가 적힌 줄이 많은데**,
+   *    그 `-` 를 값으로 셀지 말지는 **보는 쪽이 정한다**(A/S 의 `partFieldValue`, 재고 쪽의 `DASH_ONLY`).
+   *    여기서 미리 다듬으면 두 시스템이 같은 칸을 다르게 읽게 된다.
+   */
+  customerName: string;
+  name2: string;
+  kyosanPartNo: string;
+  drawingNo: string;
+  /**
+   * **소유구분** — 🔴 **부품의 속성이다**(`parts.owner`). 어느 신청에서 보든 같은 값이라 이 **부품 쪽 묶음**에
+   * 산다(아래 `ApiRequestStatusLineValues` 머리말).
+   *
+   * 🔵 모양이 `{ code, label }` 인 까닭: 부품 목록 통로(`GET /api/v1/parts`)의 `owner` 와 **같은 모양**이다.
+   *    받는 쪽이 코드로 가르고 글자는 그대로 그린다 — 글자를 저쪽에서 다시 지으면 두 화면이 다른 말을 한다.
+   * 🔴 **부품을 못 찾으면 `null`** 이고, 그때 받는 쪽은 아무것도 안 그린다(위 머리말).
+   */
+  owner: { code: Owner; label: string } | null;
+}
+
+/**
+ * 줄 하나가 들고 있는 **그 줄의 값** — 얼마를 달라고 했고 얼마가 나갔나, 그리고 유상/무상.
+ *
+ * ── 🔴 **부품의 것과 줄의 것을 한 묶음으로 뭉뚱그리지 않는다** (2026-10-21) ──
+ * **소유구분은 부품을 따라간다** — 어느 신청에서 보든 같다. **유상/무상은 그 줄의 값이다** — 같은 부품이라도
+ * 신청마다, 한 신청 안에서도 줄마다 다를 수 있다(`src/db/schema/stock.ts` 의 그 칸 주석). 섞어 두면
+ * 「이 **부품**은 유상인가요?」라는 **답이 없는 물음**이 생기고, 틀리면 비용이 잘못 간다.
+ * 🔵 재고 관리 쪽도 같은 가름을 타입으로 세워 두었다(`lib/stock/request-item-detail.ts` 의
+ *    `RequestItemPart` ↔ `RequestItemLine`). 통로에서도 같은 결을 따른다.
+ */
+export interface ApiRequestStatusLineValues {
   /** 신청한 수량 */
   quantity: number;
   /** 이 신청에서 **이미 나간** 수량. 아직 하나도 안 나갔으면 0 */
   issued: number;
+  /**
+   * **유상/무상** — 🔴 **그 줄의 값이다**(위 머리말). `{ code, label }` 모양은 위 `owner` 와 같은 까닭이다.
+   *
+   * 🔴 **`null` 이 정상인 자리가 있다** — 이 값은 **사용(반출)에서만** 있다. 대여·폐기 신청의 줄에는 처음부터
+   *    없는 칸이라, 못 찾은 것이 아니라 **없는 것**이다. 지어내지 않는다.
+   * 🔵 A/S 가 올리는 신청은 전부 반출이고 줄마다 이 값을 **반드시** 실어 보내므로(4-2절), A/S 에서 올라온
+   *    신청에서는 언제나 들어 있다.
+   */
+  chargeType: { code: ChargeType; label: string } | null;
 }
+
+/**
+ * 줄 하나 — 부품 쪽 값과 줄 쪽 값을 **둘 다** 들고 있다.
+ *
+ * 🔵 A/S 화면이 「No. 165 ×2 중 1 나감」을 그리는 데 쓰는 값이다. 남은 수량은 뺄셈이라 칸을 두지 않는다
+ *    (재고 쪽도 요약 칸을 두지 않고 세어서 안다 — `db/schema/stock-requests.ts` 의 회차 표 주석 3번).
+ * 🔴 **합치는 자리는 여기 하나다** — 섞인 채로 다루는 코드가 한 곳뿐이라야 위의 가름이 살아 있다.
+ */
+export type ApiRequestStatusLine = ApiRequestStatusLinePart & ApiRequestStatusLineValues;
 
 /**
  * 신청 한 건의 지금 상태.
@@ -309,7 +364,27 @@ export interface RequestStatusSource {
   requesterSub: string | null;
   requestedByName: string;
   requestedAt: string;
-  lines: readonly { partNo: number | null; partName: string; quantity: number; issued: number }[];
+  /**
+   * 신청 줄들.
+   *
+   * 🔵 **칸 이름이 `RequestLineView` 의 것 그대로**다 — 그 타입이 이 모양을 **이미** 만족하고 있어서
+   *    (2026-10-16 의 자세한 내용 넷과 2026-10-21 의 유상/무상까지), 통로가 할 일은 **옮겨 적는 것뿐**이다.
+   * 🔴 **여기 적은 칸만 바깥으로 나간다.** 화면 줄에는 `partId`·`available` 같은 칸이 더 있는데, 손으로
+   *    옮겨 적는 아래 `toApiRequestStatus` 가 그 경계를 긋는다 — 화면 줄에 칸이 늘어도 A/S 가 받는 모양은
+   *    저절로 넓어지지 않는다.
+   */
+  lines: readonly {
+    partNo: number | null;
+    partName: string;
+    quantity: number;
+    issued: number;
+    customerName: string;
+    name2: string;
+    kyosanPartNo: string;
+    drawingNo: string;
+    owner: Owner | null;
+    chargeType: ChargeType | null;
+  }[];
   decidedByName: string | null;
   decidedAt: string | null;
   decisionNote: string;
@@ -342,7 +417,22 @@ export function toApiRequestStatus(requestKey: string | null, r: RequestStatusSo
     status: { code: r.status, label: requestStatusLabel(r.status, closed, r.issueLock) },
     closed,
     requestedAt: r.requestedAt,
-    lines: r.lines.map((l) => ({ no: l.partNo, name: l.partName, quantity: l.quantity, issued: l.issued })),
+    // 🔴 **칸을 하나씩 손으로 옮겨 적는다** — 화면 줄을 통째로 펴 보내지 않는다(위 `RequestStatusSource.lines`).
+    //    🔵 부품 쪽 값(넷 + 소유)과 줄 쪽 값(수량 둘 + 유상/무상)을 **따로 적는 까닭**은 둘의 성격이 다르기
+    //       때문이다(`ApiRequestStatusLineValues` 머리말). 글자는 `OWNER_LABEL`·`CHARGE_LABEL` 한 표에서
+    //       온다 — 여기 손으로 적으면 재고 관리 화면과 A/S 가 같은 값을 다른 말로 부른다.
+    lines: r.lines.map((l) => ({
+      no: l.partNo,
+      name: l.partName,
+      customerName: l.customerName,
+      name2: l.name2,
+      kyosanPartNo: l.kyosanPartNo,
+      drawingNo: l.drawingNo,
+      owner: l.owner === null ? null : { code: l.owner, label: OWNER_LABEL[l.owner] },
+      quantity: l.quantity,
+      issued: l.issued,
+      chargeType: l.chargeType === null ? null : { code: l.chargeType, label: CHARGE_LABEL[l.chargeType] },
+    })),
     // 🔵 결정 시각이 있으면 결정된 것이다 — 상태로 가르지 않는다. 결정 칸을 적는 자리가 넷(확인·마감·반려·취소)이라,
     //    상태 목록을 여기 또 적으면 다섯째가 생기는 날 조용히 빠진다.
     decision: r.decidedAt ? { byName: r.decidedByName ?? "", at: r.decidedAt, note: r.decisionNote } : null,

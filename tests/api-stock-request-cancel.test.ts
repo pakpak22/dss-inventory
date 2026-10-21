@@ -171,7 +171,22 @@ describe("돌려주는 모양 — 상태 통로와 같은 줄 (2026-10-16)", () 
     requesterSub: "portal-sub-aaaa-1111",
     requestedByName: "예시 신청자",
     requestedAt: "2026-10-16T01:00:00.000Z",
-    lines: [{ partNo: 165, partName: "예시 증폭기 PCB", quantity: 2, issued: 0 }],
+    // 🔵 2026-10-21 에 줄이 넓어졌다 — 부품 쪽 값 다섯(자세한 내용 넷 · 소유)과 줄 쪽 값 유상/무상.
+    //    거두는 통로는 **상태 통로가 빚은 줄을 그대로** 싣기만 하므로(아래 첫 시험), 여기서는 모양만 맞춘다.
+    lines: [
+      {
+        partNo: 165,
+        partName: "예시 증폭기 PCB",
+        quantity: 2,
+        issued: 0,
+        customerName: "증폭기 조립품",
+        name2: "13M",
+        kyosanPartNo: "KY-7788",
+        drawingNo: "DWG-1001",
+        owner: "KYOSAN",
+        chargeType: "PAID",
+      },
+    ],
     decidedByName: "예시 신청자",
     decidedAt: "2026-10-16T02:00:00.000Z",
     decisionNote: "",
@@ -187,7 +202,11 @@ describe("돌려주는 모양 — 상태 통로와 같은 줄 (2026-10-16)", () 
     assert.equal(res.request.status.code, "CANCELLED");
     assert.equal(res.request.status.label, REQUEST_STATUS_LABEL.CANCELLED);
     assert.equal(res.request.requestKey, "AS-REQ-2026-0007");
-    assert.deepEqual(res.request.lines, [{ no: 165, name: "예시 증폭기 PCB", quantity: 2, issued: 0 }]);
+    // 🔵 줄의 칸은 **상태 통로가 정한다** — 여기서 다시 적으면 저쪽이 칸을 늘린 날 이 시험만 옛것이 되고,
+    //    「같은 줄 모양」이라는 이 조각의 뜻은 바로 위 `deepEqual(res.request, row)` 가 이미 못 박고 있다.
+    assert.deepEqual(res.request.lines, toApiRequestStatus("AS-REQ-2026-0007", SOURCE).lines);
+    assert.equal(res.request.lines[0].no, 165);
+    assert.equal(res.request.lines[0].name, "예시 증폭기 PCB");
   });
 
   it("🔴 **신청자도 그대로 실린다** — 거둔 뒤에도 저쪽이 「내 줄」을 가릴 수 있어야 한다 (2026-10-16)", () => {

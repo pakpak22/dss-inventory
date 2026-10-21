@@ -482,7 +482,35 @@ describe("🔴 조회·중간이 둘을 실어 나른다, 쓰기는 그대로다
     assert.ok(!src("src/db/schema/stock-requests.ts").includes("chargeType"), "신청 표에 유상/무상 칸을 만들었다 — payload 에 이미 있다");
   });
 
-  it("🔵 **바깥(A/S) 통로로는 안 나간다** — 칸을 하나씩 손으로 옮겨 적는 자리라 저절로 막힌다", () => {
-    assert.ok(!src("src/lib/api/stock-request-status.ts").includes("chargeType"), "A/S 가 받는 모양에 유상/무상이 끼어들었다");
+  /**
+   * 🔴 **2026-10-21 에 뒤집힌 시험이다.** 이 자리는 원래 「바깥(A/S) 통로로는 **안 나간다**」를 지키고
+   * 있었다 — 그날 아침까지는 참말이었다. 같은 날 오후 쓰는 분 요청으로 **A/S 의 반출 신청 줄에도 같은
+   * 내용을 보이기로** 했고(「어느 부품인지 가릴 수 없다」), 그래서 통로를 **넓혔다.**
+   *
+   * 🔴 **그렇다고 단언을 지우지 않는다.** 원래 시험이 지키던 것은 「유상/무상이 안 나간다」가 아니라
+   *    **「칸을 하나씩 손으로 옮겨 적어 경계가 저절로 서 있다」**였다. 그 울타리는 그대로이고, 여기서
+   *    재는 것도 그것이다 — **화면 줄에만 있는 칸은 여전히 안 나간다.**
+   * 🔵 `partId`(A/S 가 쓸 수 없는 우리 UUID)와 `available`(지금 재고. 재고 담당의 정보다)이 그 둘이다.
+   *    통로가 `{ ...l }` 로 줄을 통째로 펴 보내는 날 이 시험이 먼저 깨진다.
+   */
+  it("🔴 바깥(A/S) 통로는 **칸을 하나씩 손으로 옮겨 적는다** — 화면 줄에만 있는 칸은 안 나간다", () => {
+    /* 🔵 **주석 줄은 뺀다** — 이 파일의 머리말이 「`partId` 는 안 나간다」를 글로 적어 두고 있어서,
+       날글자로 재면 그 설명 자체에 걸린다. 가르는 법은 이 저장소가 쓰는 그것이다(줄의 첫 글자). */
+    const api = src("src/lib/api/stock-request-status.ts")
+      .split("\n")
+      .filter((l) => {
+        const t = l.trim();
+        return !(t.startsWith("*") || t.startsWith("//") || t.startsWith("/*"));
+      })
+      .join("\n");
+    // ㉠ 넓힌 것 — 2026-10-21 에 A/S 도 받기로 한 값들.
+    for (const field of ["customerName", "name2", "kyosanPartNo", "drawingNo", "owner", "chargeType"]) {
+      assert.ok(api.includes(`${field}:`), `A/S 가 받는 줄에 ${field} 가 안 실린다`);
+    }
+    // ㉡ 🔴 넓히지 않은 것 — 그 경계가 아직 서 있는가.
+    assert.ok(!api.includes("partId"), "우리 쪽 UUID 가 바깥으로 새어 나간다 — A/S 는 부품을 No. 로 가리킨다");
+    assert.ok(!api.includes("available"), "지금 재고가 바깥으로 새어 나간다 — 재고 담당의 정보다");
+    // ㉢ 🔴 통째로 펴 보내는 길이 생기지 않았다 — 그 한 줄이 위 둘을 한꺼번에 무너뜨린다.
+    assert.ok(!/lines:\s*r\.lines(?!\.map)/.test(api), "신청 줄을 통째로 펴 보낸다 — 칸이 느는 대로 따라 나간다");
   });
 });

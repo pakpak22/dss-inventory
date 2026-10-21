@@ -294,8 +294,30 @@ Authorization: Bearer <INVENTORY_API_TOKEN>
       "closed": false,
       "requestedAt": "2026-10-15T01:00:00.000Z",
       "lines": [
-        { "no": 165, "name": "AMP-DEH-DV2H(13M)", "quantity": 8, "issued": 5 },
-        { "no": 7, "name": "VVC-200", "quantity": 1, "issued": 0 }
+        {
+          "no": 165,
+          "name": "AMP-DEH-DV2H(13M)",
+          "customerName": "증폭기 조립품",
+          "name2": "13M",
+          "kyosanPartNo": "KY-7788",
+          "drawingNo": "DWG-1001",
+          "owner": { "code": "KYOSAN", "label": "KYOSAN" },
+          "quantity": 8,
+          "issued": 5,
+          "chargeType": { "code": "PAID", "label": "유상" }
+        },
+        {
+          "no": 7,
+          "name": "VVC-200",
+          "customerName": "",
+          "name2": "",
+          "kyosanPartNo": "",
+          "drawingNo": "",
+          "owner": { "code": "DSS", "label": "DSS" },
+          "quantity": 1,
+          "issued": 0,
+          "chargeType": { "code": "FREE", "label": "무상" }
+        }
       ],
       "decision": null,
       "hold": null
@@ -309,7 +331,20 @@ Authorization: Bearer <INVENTORY_API_TOKEN>
       "status": { "code": "REJECTED", "label": "반려" },
       "closed": false,
       "requestedAt": "2026-10-14T06:00:00.000Z",
-      "lines": [{ "no": 165, "name": "AMP-DEH-DV2H(13M)", "quantity": 2, "issued": 0 }],
+      "lines": [
+        {
+          "no": 165,
+          "name": "AMP-DEH-DV2H(13M)",
+          "customerName": "증폭기 조립품",
+          "name2": "13M",
+          "kyosanPartNo": "KY-7788",
+          "drawingNo": "DWG-1001",
+          "owner": { "code": "KYOSAN", "label": "KYOSAN" },
+          "quantity": 2,
+          "issued": 0,
+          "chargeType": { "code": "PAID", "label": "유상" }
+        }
+      ],
       "decision": { "byName": "정영빈", "at": "2026-10-14T08:00:00.000Z", "note": "재고가 없습니다" },
       "hold": null
     }
@@ -328,7 +363,10 @@ Authorization: Bearer <INVENTORY_API_TOKEN>
 | `status.label` | **재고 관리 화면에 뜨는 글자 그대로**입니다. 그대로 보여 주시면 양쪽이 같은 말을 합니다 |
 | `closed` | **마감** — 「준 것은 그대로 두고 남은 것만 접은」 것. 🔴 재고 쪽은 마감을 상태값으로 두지 않아서 `status.code` 는 `CONFIRMED` 이고 `label` 만 「마감」입니다. **가르려면 이 칸을 보십시오** |
 | `lines[].no` · `name` | 부품 No. 와 품명. 그 사이 재고 쪽에서 지워진 부품이면 `no` 가 `null` 이고 이름은 「(지워진 부품)」입니다 |
+| `lines[].customerName` · `name2` · `kyosanPartNo` · `drawingNo` | 🔵 **2026-10-21 에 더한 칸 넷**(옛 호출은 그대로 돕니다). 그 부품을 **알아보는 값**입니다 — 같은 품명이 여럿인 묶음이 실제로 16개 있어서(2절), 품명만으로는 어느 것인지 가릴 수 없습니다. 🔴 **없으면 빈 글자**이고, 지워진 부품이면 넷 다 빈 글자입니다. 🔴 **`-` 만 적힌 칸을 다듬지 않고 그대로 드립니다** — 자료가 엑셀에서 넘어와 빈칸 대신 `-` 가 적힌 줄이 많은데, 그것을 값으로 셀지는 **보는 쪽이 정하는 일**입니다(재고 쪽도 화면에서 가립니다) |
+| `lines[].owner` | 🔵 **2026-10-21 에 더한 칸.** **소유구분** — `{ code, label }` 이고 모양은 2절의 부품 `owner` 와 같습니다. 🔴 **부품의 속성입니다** — 어느 신청에서 보든 같은 값입니다. 🔴 **지워진 부품이면 `null`** 이고, 「DSS」 같은 기본값을 지어내지 않습니다 |
 | `lines[].quantity` · `issued` | **신청한 수량**과 **이미 나간 수량**. 남은 것은 뺄셈입니다(재고 쪽도 세어서 압니다). 🔵 한 신청에서 여러 번 나누어 나갈 수 있습니다 |
+| `lines[].chargeType` | 🔵 **2026-10-21 에 더한 칸.** **유상/무상** — `{ code, label }`, 코드는 4-2절에서 보내신 그 값입니다(`PAID` · `FREE`). 🔴 **부품의 속성이 아니라 그 줄의 값입니다** — 같은 부품이라도 신청마다, 한 신청 안에서도 **줄마다 다를 수 있습니다.** 🔴 반출이 아닌 신청(대여·폐기)의 줄에는 **처음부터 없는 칸이라 `null`** 입니다. 지워진 부품이어도 이 값은 남습니다(부품 표가 아니라 신청 줄에서 오기 때문입니다) |
 | `decision` | 결정한 **사람·시각·사유**. 아직 결정 전이면 `null` 입니다 — 일부만 나간 신청도 아직 결정이 아닙니다. 반려 사유가 `note` 에 옵니다 |
 | `hold` | 지금 **멈춰 둔** 것이면 `{ reason, byName, at }`, 아니면 `null`. 🔵 **사유까지 드립니다** — 반려 사유를 드리면서 보류 사유를 가리면 「언제까지 기다리나」를 전화로 물어야 하기 때문입니다. 같은 사유가 재고 관리 화면에도 그대로 보입니다 |
 | `notFound` | 🔴 **못 찾은 열쇠**. 아래 |
@@ -405,7 +443,20 @@ Content-Type: application/json
     "status": { "code": "CANCELLED", "label": "취소" },
     "closed": false,
     "requestedAt": "2026-10-16T00:36:36.435Z",
-    "lines": [{ "no": 1, "name": "AMP-DEH-DV2H(13M)", "quantity": 1, "issued": 0 }],
+    "lines": [
+      {
+        "no": 1,
+        "name": "AMP-DEH-DV2H(13M)",
+        "customerName": "증폭기 조립품",
+        "name2": "13M",
+        "kyosanPartNo": "KY-7788",
+        "drawingNo": "DWG-1001",
+        "owner": { "code": "KYOSAN", "label": "KYOSAN" },
+        "quantity": 1,
+        "issued": 0,
+        "chargeType": { "code": "PAID", "label": "유상" }
+      }
+    ],
     "decision": { "byName": "홍길동", "at": "2026-10-16T00:36:44.362Z", "note": "" },
     "hold": null
   }

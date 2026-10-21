@@ -15,7 +15,8 @@ import {
 } from "../src/lib/api/stock-request-status";
 import { checkBearerToken } from "../src/lib/api/token-gate";
 import { env } from "../src/lib/env";
-import { AWAITING_EXECUTION_REQUEST_LABEL, CLOSED_REQUEST_LABEL, INTAKE_NUMBER_RE, REQUEST_STATUS_LABEL } from "../src/lib/stock/codes";
+import { OWNER_LABEL } from "../src/lib/parts/codes";
+import { AWAITING_EXECUTION_REQUEST_LABEL, CHARGE_LABEL, CLOSED_REQUEST_LABEL, INTAKE_NUMBER_RE, REQUEST_STATUS_LABEL } from "../src/lib/stock/codes";
 
 /**
  * A/S 가 **올린 신청의 지금 상태를 물어 가는 통로**의 울타리 (2026-10-15, `GET /api/v1/stock-requests`).
@@ -25,7 +26,28 @@ import { AWAITING_EXECUTION_REQUEST_LABEL, CLOSED_REQUEST_LABEL, INTAKE_NUMBER_R
  * 🔵 덮는 것 다섯: 여러 열쇠 · 없는 열쇠 · 상한 · 마감 판정 · 토큰(읽기 전용).
  */
 
-const LINE = { partNo: 165, partName: "AMP-DEH-DV2H(13M)", quantity: 2, issued: 0 };
+/**
+ * 🔵 **통로가 받는 줄의 모양을 그대로 빌린다** — 여기 손으로 적으면 통로가 칸을 늘린 날 본보기만 옛것이
+ *    되고, 그 칸은 **시험이 영영 안 재는 칸**이 된다.
+ */
+type SourceLine = RequestStatusSource["lines"][number];
+
+/**
+ * 줄 하나의 본보기. 🔴 **칸마다 서로 다른 값**을 넣어 둔다 — 같은 값이 둘이면 옮겨 적다 뒤바뀐 것을
+ * 시험이 못 본다(`customerName` 과 `name2` 처럼 둘 다 글자인 칸이 그렇다).
+ */
+const LINE: SourceLine = {
+  partNo: 165,
+  partName: "AMP-DEH-DV2H(13M)",
+  quantity: 2,
+  issued: 0,
+  customerName: "증폭기 조립품",
+  name2: "13M",
+  kyosanPartNo: "KY-7788",
+  drawingNo: "DWG-1001",
+  owner: "KYOSAN",
+  chargeType: "PAID",
+};
 
 const SOURCE: RequestStatusSource = {
   id: "0c0f1111-1111-4111-8111-111111111111",
@@ -187,14 +209,133 @@ describe("돌려주는 모양 — 화면이 그릴 수 있을 만큼 (2026-10-15
 
   it("🔴 줄마다 **요청 수량과 이미 나간 수량** (남은 수량은 뺄셈이라 칸을 두지 않는다)", () => {
     const q = toApiRequestStatus("AS-1", source({ status: "PARTIAL", lines: [{ ...LINE, quantity: 8, issued: 5 }] }));
-    assert.deepEqual(q.lines, [{ no: 165, name: "AMP-DEH-DV2H(13M)", quantity: 8, issued: 5 }]);
+    assert.deepEqual(q.lines, [
+      {
+        no: 165,
+        name: "AMP-DEH-DV2H(13M)",
+        customerName: "증폭기 조립품",
+        name2: "13M",
+        kyosanPartNo: "KY-7788",
+        drawingNo: "DWG-1001",
+        owner: { code: "KYOSAN", label: OWNER_LABEL.KYOSAN },
+        quantity: 8,
+        issued: 5,
+        chargeType: { code: "PAID", label: CHARGE_LABEL.PAID },
+      },
+    ]);
   });
 
   it("그 사이 지워진 부품은 번호가 null 이다 — 지어내지 않는다", () => {
-    const q = toApiRequestStatus("AS-1", source({ lines: [{ partNo: null, partName: "(지워진 부품)", quantity: 1, issued: 0 }] }));
+    const q = toApiRequestStatus(
+      "AS-1",
+      source({ lines: [{ ...GONE_LINE, quantity: 1, issued: 0 }] }),
+    );
     assert.equal(q.lines[0].no, null);
     assert.equal(q.lines[0].name, "(지워진 부품)");
   });
+});
+
+/**
+ * ============================================================================
+ * 🔴 줄에 **어느 부품인지**가 실린다 (2026-10-21, 쓰는 분 요청)
+ * ============================================================================
+ * A/S 의 반출 신청 줄에는 `No. 165 AMP-… — 요청 2 / 불출 0` 만 떠서, 같은 품명이 여럿인 묶음
+ * (REQUIREMENTS 4-1절 — 실제로 16개 있다)에서는 **어느 것인지 가릴 수 없었다.**
+ *
+ * 🔵 **조회는 전부터 싣고 있었다** — `RequestLineView` 가 2026-10-16 부터 자세한 내용 넷을,
+ *    2026-10-21 에 유상/무상을 들고 다녔고 재고 관리 화면이 그것을 그리고 있었다. 끊겨 있던
+ *    자리는 **이 통로가 칸을 손으로 옮겨 적는 `toApiRequestStatus`** 하나였다.
+ * 🔴 **부품의 것과 줄의 것을 갈라 둔다** — 소유구분은 부품을 따라가고 유상/무상은 그 줄의 값이다
+ *    (`ApiRequestStatusLineValues` 머리말). 아래 두 묶음이 그 가름을 재는 자리다.
+ * ============================================================================
+ */
+/** 그 사이 지워진 부품의 줄. 🔴 되짚을 부품이 없어 글자 넷이 **빈 글자**이고 소유는 `null` 이다. */
+const GONE_LINE: SourceLine = {
+  partNo: null,
+  partName: "(지워진 부품)",
+  quantity: 1,
+  issued: 0,
+  customerName: "",
+  name2: "",
+  kyosanPartNo: "",
+  drawingNo: "",
+  owner: null,
+  chargeType: "FREE",
+};
+
+describe("🔴 줄에 어느 부품인지가 실린다 — 부품 쪽 값 (2026-10-21)", () => {
+  const lineOf = (over: Partial<SourceLine> = {}) => toApiRequestStatus("AS-1", source({ lines: [{ ...LINE, ...over }] })).lines[0];
+
+  it("🔴 자세한 내용 넷이 그대로 간다 — 고객사 품명 · 품명2 · 교산 품번 · 도번", () => {
+    const l = lineOf();
+    assert.equal(l.customerName, "증폭기 조립품");
+    assert.equal(l.name2, "13M");
+    assert.equal(l.kyosanPartNo, "KY-7788");
+    assert.equal(l.drawingNo, "DWG-1001");
+  });
+
+  it("🔴 `-` 만 적힌 칸을 여기서 다듬지 않는다 — 값으로 셀지는 보는 쪽이 정한다", () => {
+    // 자료가 엑셀에서 넘어와 빈칸 대신 `-` 가 적힌 줄이 많다. 미리 다듬으면 두 시스템이 같은 칸을
+    // 다르게 읽게 된다(A/S 의 `partFieldValue` ↔ 재고 쪽 `DASH_ONLY`).
+    assert.equal(lineOf({ kyosanPartNo: "-" }).kyosanPartNo, "-");
+  });
+
+  it("🔴 소유구분은 코드와 글자를 함께 — 글자는 `OWNER_LABEL` 한 표에서 온다", () => {
+    assert.deepEqual(lineOf().owner, { code: "KYOSAN", label: OWNER_LABEL.KYOSAN });
+    assert.deepEqual(lineOf({ owner: "SERVICE_SPARE" }).owner, { code: "SERVICE_SPARE", label: OWNER_LABEL.SERVICE_SPARE });
+  });
+
+  it("🔴 부품을 못 찾으면 소유는 `null` 이고 글자 넷은 빈 글자다 — 기본값을 지어내지 않는다", () => {
+    const l = toApiRequestStatus("AS-1", source({ lines: [GONE_LINE] })).lines[0];
+    assert.equal(l.owner, null);
+    assert.deepEqual([l.customerName, l.name2, l.kyosanPartNo, l.drawingNo], ["", "", "", ""]);
+  });
+});
+
+describe("🔴 유상/무상은 **그 줄의 값**이다 — 부품의 속성이 아니다 (2026-10-21)", () => {
+  const chargeOf = (chargeType: SourceLine["chargeType"]) =>
+    toApiRequestStatus("AS-1", source({ lines: [{ ...LINE, chargeType }] })).lines[0].chargeType;
+
+  it("코드와 글자를 함께 — 글자는 `CHARGE_LABEL` 한 표에서 온다", () => {
+    assert.deepEqual(chargeOf("PAID"), { code: "PAID", label: CHARGE_LABEL.PAID });
+    assert.deepEqual(chargeOf("FREE"), { code: "FREE", label: CHARGE_LABEL.FREE });
+  });
+
+  it("🔴 없으면 `null` 이다 — 대여·폐기 줄에는 처음부터 없는 칸이라 **없는 것이지 못 찾은 것이 아니다**", () => {
+    assert.equal(chargeOf(null), null);
+  });
+
+  it("🔴 **같은 신청 안에서도 줄마다 다를 수 있다** — 부품에 매달린 값이면 이 시험이 설 수 없다", () => {
+    const q = toApiRequestStatus(
+      "AS-1",
+      source({
+        lines: [
+          { ...LINE, chargeType: "PAID" },
+          // 🔴 **같은 부품 번호**인데 다른 줄이다. 부품의 속성으로 다루면 둘이 같은 값이 된다.
+          { ...LINE, chargeType: "FREE" },
+        ],
+      }),
+    );
+    assert.deepEqual(
+      q.lines.map((l) => l.chargeType?.code),
+      ["PAID", "FREE"],
+    );
+    // 🔵 소유는 부품의 것이라 같은 부품이면 같다 — 그 가름이 실제로 서 있는지 함께 본다.
+    assert.deepEqual(
+      q.lines.map((l) => l.owner?.code),
+      ["KYOSAN", "KYOSAN"],
+    );
+  });
+
+  it("🔴 부품을 못 찾아도 유상/무상은 남는다 — 부품 표가 아니라 신청 줄에서 오는 값이다", () => {
+    assert.deepEqual(toApiRequestStatus("AS-1", source({ lines: [GONE_LINE] })).lines[0].chargeType, {
+      code: "FREE",
+      label: CHARGE_LABEL.FREE,
+    });
+  });
+});
+
+describe("돌려주는 모양 — 결정과 보류 (2026-10-15)", () => {
 
   it("결정 전에는 decision 이 null 이다 (일부 나간 신청도 아직 결정이 아니다)", () => {
     assert.equal(toApiRequestStatus("AS-1", source()).decision, null);
