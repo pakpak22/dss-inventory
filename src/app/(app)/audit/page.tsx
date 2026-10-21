@@ -298,7 +298,9 @@ export default async function AuditPage({ searchParams }: { searchParams: Promis
           </button>
         </form>
       </div>
-      <SettingsNav current="audit" />
+      {/* 🔵 `isAdmin` 은 탭 줄을 가르는 값일 뿐 울타리가 아니다. 이 화면은 바로 위 `requireRole("ADMIN")` 을
+          지나왔으므로 여기 선 사람은 관리자다 — 모두가 쓰는 탭 둘(결재권 위임 · O/H 템플릿)만 보일 까닭이 없다. */}
+      <SettingsNav current="audit" isAdmin />
 
       <p className="text-xs text-zinc-500">
         누가 언제 무엇을 했는지 전부 쌓이는 곳입니다(부품 등록·수정·삭제, 수량 기록, 로그인). 수량이 어떻게 움직였는지 보려면{" "}

@@ -22,7 +22,9 @@ export default async function WorkbookApplyPage({ searchParams }: { searchParams
       <h1 className="text-xl font-semibold text-zinc-900">
         설정 <span className="font-normal text-zinc-500">· 엑셀 상태 · 엑셀 기준 적용</span>
       </h1>
-      <SettingsNav current="workbook" />
+      {/* 🔵 `isAdmin` 은 탭 줄을 가르는 값일 뿐 울타리가 아니다. 이 화면은 바로 위 `requireRole("ADMIN")` 을
+          지나왔으므로 여기 선 사람은 관리자다 — 모두가 쓰는 탭 둘(결재권 위임 · O/H 템플릿)만 보일 까닭이 없다. */}
+      <SettingsNav current="workbook" isAdmin />
 
       {planned.available ? (
         <>

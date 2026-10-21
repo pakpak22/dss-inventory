@@ -20,9 +20,11 @@ export interface AppHeaderProps {
   services: DssService[];
   currentServiceId: string;
   /**
-   * 관리자 메뉴(설정)를 보일지.
-   * 숨기는 것은 편의일 뿐이고 실제 차단은 각 화면의 requireRole 이 한다.
-   * 🔵 「대기 N」 배지는 이제 이 값을 보지 않는다 — 역할과 무관하게 「부품 요청」 옆에 선다(아래 `PendingBadge`).
+   * 🔴 「설정」을 **보일지**가 아니라 **어디로 보낼지**를 가른다 (2026-10-21). 설정 안에 모두가 쓰는
+   * 탭이 둘(결재권 위임 · O/H 템플릿) 생겨 링크 자체는 누구에게나 선다 — 다만 관리자 전용 첫 탭으로
+   * 보내면 일반 사용자가 `/forbidden` 으로 튀므로 갈 곳만 갈린다(아래 「설정」 링크의 주석).
+   * 실제 차단은 여기가 아니라 각 화면의 `requireRole`/`requireSession` 이 한다.
+   * 🔵 「대기 N」 배지는 이 값을 보지 않는다 — 역할과 무관하게 「부품 요청」 옆에 선다(아래 `PendingBadge`).
    */
   isAdmin: boolean;
   /** 기록·관리자 메뉴(수량 변경 기록·부품 요청)를 보일지. 🔵 「부품 요청」은 2026-10-15 부터 신청자도 **보기만** 한다. */
@@ -108,13 +110,17 @@ export function AppHeader({ user, portalUrl, services, currentServiceId, isAdmin
             <Link href="/approvals" className={NAV_LINK}>
               승인 요청건
             </Link>
-            {isAdmin && (
-              /* 🔵 「변경 이력」(/audit)은 설정의 탭으로 옮겼다 (2026-10-15 사용자 요청). 주소는 그대로다 —
-                 옮기면 열려 있는 탭·즐겨찾기가 깨지고 얻는 것이 없다. */
-              <Link href="/settings/items" className={NAV_LINK}>
-                설정
-              </Link>
-            )}
+            {/* 🔴 「설정」은 **로그인한 모두**에게 보인다 (2026-10-21) — 설정 안에 모두가 쓰는 탭이 둘
+                (결재권 위임 · O/H 템플릿) 생겼기 때문이다. 역할로 가리면 결재선에 든 보기 권한자가
+                자기 위임을 만들러 갈 길이 없다.
+                🔴 **가는 곳이 역할에 따라 다르다.** 모두에게 `/settings/items`(관리자 전용)를 물리면
+                일반 사용자는 누르자마자 `/forbidden` 으로 튄다 — 「설정이 고장났다」로 읽힌다. 자기에게
+                열려 있는 첫 탭으로 보낸다(그 차례는 `SettingsNav` 의 ITEMS 순서와 같다).
+                🔵 「변경 이력」(/audit)은 설정의 탭으로 옮겼다 (2026-10-15 사용자 요청). 주소는 그대로다 —
+                옮기면 열려 있는 탭·즐겨찾기가 깨지고 얻는 것이 없다. */}
+            <Link href={isAdmin ? "/settings/items" : "/settings/delegations"} className={NAV_LINK}>
+              설정
+            </Link>
           </nav>
         </div>
         <div className="flex items-center gap-3">

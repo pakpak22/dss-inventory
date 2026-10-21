@@ -1,7 +1,5 @@
-import { DelegationSection } from "@/components/approval/DelegationSection";
+import Link from "next/link";
 import { IssueApprovalScreen } from "@/components/stock/IssueApprovalScreen";
-import { delegationNotice } from "@/lib/approval/delegation-screen";
-import { readDelegationScreen } from "@/lib/approval/delegation-screen-data";
 import { partIssueNotice } from "@/lib/approval/part-issue-screen";
 import { readPartIssueApprovalScreen } from "@/lib/approval/part-issue-screen-data";
 import { roleAtLeast } from "@/lib/auth/role";
@@ -26,12 +24,11 @@ import { requireSession } from "@/lib/auth/session";
  *    그때까지 이 화면이 비어 있는 것은 **정상**이고, 그래서 묶음마다 0건이라고 **말한다**
  *    (감추지 않는다 — `part-issue-screen.ts` 의 문구 상수들).
  *
- * ── 🔴 **결재권 위임도 여기 있다** (2026-10-21, 조각 3) ─────────────────
- * 결재자가 이미 가는 화면이라서다 — 설정 깊은 곳에 두면 **출장 전에 못 찾는다.** 문이
- * `requireSession` 인 것이 그쪽에도 그대로 걸린다: 위임을 만드는 사람은 결재자이고, 결재자는
- * 역할과 무관하게 누구나 될 수 있다(위 첫 줄과 **같은 까닭**이다).
- * 🔴 두 구역이 **같은 번호를 쓴다** — 「내 차례인가」도 「내가 맡긴 것인가」도 포털 번호
- *    (`authSub`)다. `users.id` 를 넘기면 두 목록이 조용히 빈 목록이 된다.
+ * ── 🔵 **결재권 위임은 설정의 탭으로 옮겼다** (2026-10-21 사용자 요청) ───
+ * 구역은 `/settings/delegations` 로 갔고 **여기에는 한 줄 링크만** 남는다 — 결재자가 날마다 오는
+ * 화면이 여기라, 출장 전에 여기서 바로 갈 수 있어야 하기 때문이다. 🔴 **위임 자료를 읽던 것도
+ * 함께 옮겼다**: 그냥 두면 이 화면이 쓰지도 않을 A/S 명부 호출(망을 타고, 최대 5초)을 매번
+ * 기다린다. 옮겨 간 쪽의 문도 `requireSession` 이다(위 첫 줄과 **같은 까닭**이다).
  */
 export const metadata = { title: "승인 요청건" };
 
@@ -44,11 +41,8 @@ export default async function ApprovalsPage({ searchParams }: { searchParams: Pr
    *    건인가」는 이 시스템의 `users.id` 다. 바꿔 넘기면 「내가 결재할 건」이 영원히 빈
    *    목록이 되는데, 오류가 나지 않아 아무도 모른다(2026-10-15 에 실제로 있었던 결함).
    */
-  // 🔵 두 자료 묶음이 서로를 기다리지 않는다 — 위임 쪽은 A/S 명부(망 호출, 최대 5초)를 품고 있다.
-  const [data, delegation] = await Promise.all([
-    readPartIssueApprovalScreen({ userId: session.user.id, approverSub: session.user.authSub, isAdmin }),
-    readDelegationScreen(session.user.authSub),
-  ]);
+  // 🔵 읽는 묶음은 하나다 — 위임 쪽(A/S 명부를 품은 망 호출)은 `/settings/delegations` 로 옮겼다(머리말).
+  const data = await readPartIssueApprovalScreen({ userId: session.user.id, approverSub: session.user.authSub, isAdmin });
 
   return (
     <div className="flex flex-col gap-6">
@@ -61,14 +55,15 @@ export default async function ApprovalsPage({ searchParams }: { searchParams: Pr
         /* 단추를 누르고 돌아왔을 때의 한 줄. 🔵 실패는 여기로 오지 않는다 — 그 카드 자리에 서버 문구가 그대로 뜬다. */
         notice={partIssueNotice(sp)}
       />
-      {/* 🔵 결재 목록 **아래**에 둔다 — 날마다 보는 것은 위쪽이고, 위임은 어쩌다 한 번 하는 일이다. */}
-      <DelegationSection
-        directory={delegation.directory}
-        made={delegation.made}
-        acting={delegation.acting}
-        today={delegation.today}
-        notice={delegationNotice(sp)}
-      />
+      {/* 🔵 결재 목록 **아래**의 한 줄. 위임은 어쩌다 한 번 하는 일이라 자리는 작게 두되, **길은 남긴다** —
+          결재자가 날마다 오는 화면이 여기라서 출장 전에 찾는 자리도 여기다(머리말). */}
+      <p className="border-t border-zinc-200 pt-5 text-sm break-keep text-zinc-600">
+        출장·휴가로 자리를 비우십니까?{" "}
+        <Link href="/settings/delegations" className="font-medium text-zinc-900 underline underline-offset-2 hover:text-zinc-600">
+          설정 · 결재권 위임
+        </Link>
+        {" "}에서 그 기간 동안 내 결재 차례를 다른 분이 대신 누르게 할 수 있습니다.
+      </p>
     </div>
   );
 }

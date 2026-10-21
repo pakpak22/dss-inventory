@@ -16,13 +16,15 @@ import { asUserChoiceLabel, AS_DIRECTORY_MESSAGES, type AsUserChoiceDirectory } 
 
 /**
  * ============================================================================
- * 결재권 위임 — 「승인 요청건」 화면 안의 구역 (2026-10-21, 조각 3)
+ * 결재권 위임 — 설정의 탭 `/settings/delegations` (2026-10-21, 조각 3)
  * ============================================================================
  * 결재권자가 출장·휴가로 자리를 비우면 그 건이 **선다.** 그 자리를 메우는 길을 여는 화면이다.
  *
- * ── 🔴 왜 설정이 아니라 **여기**인가 ───────────────────────────────────
- * 결재자가 이미 가는 화면이기 때문이다. 설정 깊은 곳에 두면 출장 전에 못 찾고, 못 찾으면
- * 그 건은 그 사람이 돌아올 때까지 선다.
+ * ── 🔵 자리를 한 번 옮겼다 ─────────────────────────────────────────────
+ * 처음에는 「승인 요청건」(`/approvals`) 안의 구역이었다 — 결재자가 이미 가는 화면이라서다.
+ * 2026-10-21 사용자 요청으로 **설정의 탭**으로 옮겼고, 못 찾는 일이 없도록 `/approvals` 에는
+ * **한 줄 링크**를 남겼다. 🔴 그 탭의 문은 `requireSession` 이다 — 설정의 다른 탭처럼
+ * `requireRole("ADMIN")` 으로 막으면 결재선에 든 보기 권한자가 자기 위임을 영영 못 만든다.
  *
  * ── 🔴 묶음 셋 ─────────────────────────────────────────────────────────
  *  (가) **새 위임 만들기** — 누구에게 · 언제부터 언제까지 · 사유(선택)
@@ -99,14 +101,20 @@ export function DelegationSection({
 }) {
   const [createState, create, creating] = useActionState<DelegationActionState, FormData>(createDelegationAction, EMPTY_STATE);
   const [revokeState, revoke, revoking] = useActionState<DelegationActionState, FormData>(revokeDelegationAction, EMPTY_STATE);
-  /** 🔵 접어 둔다 — 위임은 어쩌다 한 번 하는 일이라, 늘 펴 두면 결재 목록이 그만큼 아래로 밀린다. */
+  /**
+   * 🔵 접어 둔다 — 위임은 어쩌다 한 번 하는 일이라, 늘 펴 두면 **이미 맡긴 것·대신하는 것** 두
+   *    목록이 그만큼 아래로 밀린다. 이 화면에 오는 사람은 새로 맡기러 오기도 하지만 「내가 뭘
+   *    맡겨 뒀더라」를 보러 오기도 한다.
+   */
   const [open, setOpen] = useState(false);
 
   const busy = creating || revoking;
   const candidates = directory.status === "ok" ? directory.users : [];
 
   return (
-    <section className="flex flex-col gap-4 border-t border-zinc-200 pt-5">
+    /* 🔵 위쪽 구분선을 걷어냈다 — 결재 목록 **아래**에 이어 붙던 때의 것이고, 이제는 자기 화면의
+       맨 위다. 두면 바로 위 `SettingsNav` 의 아랫줄과 **두 줄이 겹쳐** 보인다. */
+    <section className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-sm font-semibold text-zinc-900">결재권 위임</h2>
         <button type="button" className={BTN} onClick={() => setOpen((v) => !v)} aria-expanded={open}>

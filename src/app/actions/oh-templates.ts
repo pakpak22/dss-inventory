@@ -1,6 +1,6 @@
 "use server";
 
-import { requireRole } from "@/lib/auth/session";
+import { requireSession } from "@/lib/auth/session";
 import { fetchAsProductModels } from "@/lib/oh/as-product-models";
 import {
   OH_PRICE_FIELD_ERROR_PREFIX,
@@ -28,8 +28,14 @@ import { AS_PRODUCT_MODEL_MESSAGES } from "@/lib/oh/product-models";
  * 확인과 품명 채우기·감사 기록)은 `src/lib/oh/mutations.ts` 가 자기 트랜잭션 안에서 한다.
  *
  * 🔴 **인가를 액션 안에서 다시 본다.** 화면이 메뉴를 숨기는 것은 편의일 뿐 차단이 아니다 —
- * 서버 액션은 네트워크 경계 너머에서 불리고, 그 경계에서 타입은 아무것도 막지 못한다. 모양은
- * `src/app/actions/part-items.ts` 와 같다(`requireRole` 은 자격이 모자라면 `/forbidden` 으로 돌린다).
+ * 서버 액션은 네트워크 경계 너머에서 불리고, 그 경계에서 타입은 아무것도 막지 못한다.
+ *
+ * ── 🔴 문은 **다섯 다** `requireSession` 이다 (2026-10-21 사용자 결정) ───
+ * 그 전까지는 다섯 다 `requireRole("ADMIN")` 이었다. 🔴 **화면(`src/app/(app)/settings/oh-templates/page.tsx`)과
+ * 함께 여섯을 한꺼번에 열었다.** 하나라도 되돌리면 **화면은 보이는데 저장이 거절되거나**, 그 반대가
+ * 된다 — **후자가 더 나쁘다**(화면에 아무 표시도 안 남고 조용히 통과한다). 🔵 이것은 O/H 템플릿만의
+ * 결정이다: 같은 모양으로 적힌 `src/app/actions/part-items.ts` · `parts.ts` 의 `requireRole` 은
+ * **그대로다.** 「모양을 맞춘다」며 따라 바꾸지 마라.
  *
  * 🔴 **화면이 보낸 값을 그대로 믿지 않는다.** 검증을 여기서 한 번 더 태운다 — 화면과 **같은 순수
  * 함수**를 부르므로 규칙이 두 벌이 되지 않는다.
@@ -43,6 +49,13 @@ import { AS_PRODUCT_MODEL_MESSAGES } from "@/lib/oh/product-models";
  */
 
 const UNEXPECTED = "처리하지 못했습니다. 잠시 뒤 다시 시도하십시오.";
+
+/**
+ * 세션이 끊겼을 때 통합 로그인에서 돌아올 자리. 🔵 자격이 모자라서가 **아니라** 세션이 없을 때만
+ * 쓰인다 — `requireSession` 은 `/forbidden` 으로 돌리지 않는다. 비워 두면 「저장」을 누른 사람이
+ * 로그인 뒤 첫 화면(`/`)에 떨어져 자기가 뭘 하던 중이었는지를 잃는다.
+ */
+const OH_TEMPLATES = "/settings/oh-templates";
 
 export type OhActionResult =
   | { ok: true; id?: string; version?: number; message: string }
@@ -62,7 +75,7 @@ export type SaveOhTemplateActionInput = {
 };
 
 export async function saveOhTemplateAction(input: SaveOhTemplateActionInput): Promise<OhActionResult> {
-  const session = await requireRole("ADMIN");
+  const session = await requireSession(OH_TEMPLATES);
 
   const validation = validateOhTemplateFields(input.fields ?? {});
   if (!validation.ok) {
@@ -119,7 +132,7 @@ export async function saveOhTemplateAction(input: SaveOhTemplateActionInput): Pr
 }
 
 export async function deleteOhTemplateAction(input: { id: string; reason: string }): Promise<OhActionResult> {
-  const session = await requireRole("ADMIN");
+  const session = await requireSession(OH_TEMPLATES);
 
   if (!isValidOhTemplateId(input.id)) return { ok: false, message: "해당 템플릿을 찾을 수 없습니다." };
   const reason = typeof input.reason === "string" ? input.reason.trim() : "";
@@ -149,7 +162,7 @@ export async function deleteOhTemplateAction(input: { id: string; reason: string
  * 것은 **새 사실을 만드는 일**이기 때문이다.
  */
 export async function linkProductModelAction(input: { templateId: string; productModelId: string }): Promise<OhActionResult> {
-  const session = await requireRole("ADMIN");
+  const session = await requireSession(OH_TEMPLATES);
 
   if (!isValidOhTemplateId(input.templateId) || !isValidOhTemplateId(input.productModelId)) {
     return { ok: false, message: "요청 정보를 확인할 수 없습니다." };
@@ -186,7 +199,7 @@ export async function linkProductModelAction(input: { templateId: string; produc
 }
 
 export async function unlinkProductModelAction(input: { linkId: string }): Promise<OhActionResult> {
-  const session = await requireRole("ADMIN");
+  const session = await requireSession(OH_TEMPLATES);
 
   if (!isValidOhTemplateId(input.linkId)) return { ok: false, message: "요청 정보를 확인할 수 없습니다." };
 
@@ -205,7 +218,7 @@ export async function unlinkProductModelAction(input: { linkId: string }): Promi
  * 🔴 빈 값은 0 이 아니라 **지우기**다 — `parseOhPriceValue` 가 둘을 가른다.
  */
 export async function setOhPriceAction(input: { partId: string; unitPrice: unknown }): Promise<OhActionResult> {
-  const session = await requireRole("ADMIN");
+  const session = await requireSession(OH_TEMPLATES);
 
   if (!isValidOhTemplateId(input.partId)) return { ok: false, message: "부품을 확인할 수 없습니다." };
   const parsed = parseOhPriceValue(input.unitPrice);

@@ -4,8 +4,8 @@ import { isActiveDelegation, type ApprovalDelegationPeriod } from "./delegation"
  * ============================================================================
  * 결재권 위임 화면 — 순수 규칙 · 문구 · 화면이 받는 모양 (2026-10-21, 조각 3)
  * ============================================================================
- * 「승인 요청건」(`/approvals`) 안에 붙는 위임 구역
- * (`src/components/approval/DelegationSection.tsx`)이 쓰는 **판정과 글자**를 여기 모은다.
+ * 설정의 탭 「결재권 위임」(`/settings/delegations`, 2026-10-21 에 `/approvals` 에서 옮겨 옴)이
+ * 그리는 구역(`src/components/approval/DelegationSection.tsx`)이 쓰는 **판정과 글자**를 여기 모은다.
  * 까닭은 `./part-issue-screen.ts` 머리말 그대로다:
  *
  *  1. 🔴 **이 저장소에는 화면 렌더 시험이 없다.** 화면 안에 적은 규칙은 아무도 돌려 보지 못한

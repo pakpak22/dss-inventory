@@ -41,7 +41,13 @@ function bodyOf(source: string, declaration: string): string {
 const MUTATIONS = "src/lib/approval/delegation-mutations.ts";
 const ACTIONS = "src/app/actions/approval-delegations.ts";
 const QUERIES = "src/lib/approval/delegation-queries.ts";
-const PAGE = "src/app/(app)/approvals/page.tsx";
+/**
+ * 🔴 **`/approvals` 가 아니다** — 2026-10-21 에 위임 구역이 **설정의 탭**으로 옮겨 갔다(사용자 요청).
+ * 자리는 바뀌었어도 **묻는 것은 그대로다**: 그 화면의 문이 `requireSession` 인가, 위임 자료에
+ * **포털 번호**를 넘기는가. 🔴 설정의 다른 탭은 전부 `requireRole("ADMIN")` 이라, 여기가 그 모양을
+ * 따라가면 결재선에 든 보기 권한자가 자기 위임을 영영 못 만든다 — 이 시험이 잡아야 할 바로 그 일이다.
+ */
+const PAGE = "src/app/(app)/settings/delegations/page.tsx";
 
 describe("① 🔴 맡기는 사람은 **세션에서 나온다** — 화면이 보낸 값이 아니다", () => {
   const create = bodyOf(src(MUTATIONS), "export async function createApprovalDelegation(");
@@ -111,10 +117,10 @@ describe("③ 🔴 문은 `requireSession` 이다 — `requireRole` 이 아니�
     }
   });
 
-  it("화면(`/approvals`)도 세션만 보고, 위임 자료에 **포털 번호**를 넘긴다", () => {
-    const page = bodyOf(src(PAGE), "export default async function ApprovalsPage(");
+  it("화면(`/settings/delegations`)도 세션만 보고, 위임 자료에 **포털 번호**를 넘긴다", () => {
+    const page = bodyOf(src(PAGE), "export default async function DelegationsSettingsPage(");
     assert.match(page, /requireSession\(/);
-    assert.ok(!page.includes("requireRole"), "이 화면은 결재자 누구나 들어온다");
+    assert.ok(!page.includes("requireRole"), "이 화면은 결재자 누구나 들어온다 — 설정의 다른 탭을 따라 ADMIN 으로 막았다");
     assert.match(page, /readDelegationScreen\(session\.user\.authSub\)/, "users.id 를 넘기면 두 목록이 조용히 빈 목록이 된다");
   });
 });
