@@ -193,6 +193,8 @@ describe("돌려주는 모양 — 상태 통로와 같은 줄 (2026-10-16)", () 
     decidedByName: "예시 신청자",
     decidedAt: "2026-10-16T02:00:00.000Z",
     decisionNote: "",
+    // 🔵 거둔 신청에는 결재 반려도 없다 — 같은 까닭(통로가 `null` 로 적어 보낸다, 위 주석).
+    decidedVia: null,
     hold: null,
     // 🔵 거둔 신청에는 살아 있는 결재건이 없다 — 바깥에서 거둘 수 있는 것은 아직 대기인 신청뿐이다(통로의 주석).
     issueLock: null,

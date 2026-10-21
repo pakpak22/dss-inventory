@@ -80,7 +80,9 @@ async function respond(requestKey: string, cancelled: boolean) {
    *    상태가 아니다. 그래서 여기서는 결재건을 **읽지 않고** `null` 이라고 적어서 말한다 —
    *    읽어 본 적이 없다는 사실을 칸에 드러내 두면, 나중에 거두는 규칙이 넓어질 때 여기가 눈에 걸린다.
    */
-  return NextResponse.json(toApiCancelResponse(cancelled, toApiRequestStatus(requestKey, { ...row.request, issueLock: null })), { headers: NO_STORE });
+  // 🔵 **같은 까닭으로 `decidedVia` 도 `null` 이다**(2026-10-22) — 거둔 신청은 `decidedAt` 자체가 없어
+  //    `decision` 이 통째로 `null` 이 되므로(`toApiRequestStatus`), `decidedVia` 값은 어차피 안 쓰인다.
+  return NextResponse.json(toApiCancelResponse(cancelled, toApiRequestStatus(requestKey, { ...row.request, issueLock: null, decidedVia: null })), { headers: NO_STORE });
 }
 
 function deny(d: CancelDenial) {

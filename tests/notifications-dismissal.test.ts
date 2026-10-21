@@ -483,7 +483,15 @@ describe("열쇠의 접두사", () => {
     const feed = buildInventoryNotificationItems({
       role: "ADMIN",
       pending: { count: 2, oldestAt: new Date("2026-10-13T00:00:00+09:00") },
-      rejected: [{ id: "11111111-1111-4111-8111-111111111111", summary: "가짜 신청", decidedByName: "담당자", decidedAt: new Date("2026-10-13T00:00:00+09:00") }],
+      rejected: [
+        {
+          id: "11111111-1111-4111-8111-111111111111",
+          summary: "가짜 신청",
+          decidedByName: "담당자",
+          decidedAt: new Date("2026-10-13T00:00:00+09:00"),
+          decidedBy: { kind: "UNDECIDED" },
+        },
+      ],
       issueApprovalsToDecide: { count: 1, oldestAt: new Date("2026-10-13T00:00:00+09:00") },
       decidedIssueApprovals: [],
       lowStockParts: [{ no: 7, name: "가짜부품", name2: "", quantity: 1, limitQuantity: 5 }],

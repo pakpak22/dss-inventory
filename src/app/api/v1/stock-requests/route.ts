@@ -4,6 +4,9 @@ import { db } from "@/db/client";
 import { parts } from "@/db/schema/parts";
 import { listOpenPartIssueStatusesByRequest } from "@/lib/approval/part-issue";
 import { partIssueLockFor, type PartIssueLock } from "@/lib/approval/part-issue-gate";
+// 🔴 「누가 반려했나」는 재고 관리 화면의 반려 사유 상자와 **같은 조회**에서 받는다
+//    (2026-10-22, 「세 번째 자리를 같은 이름으로」) — 손으로 새로 적지 않는다.
+import { readPartIssueRejectionActorsByRequest } from "@/lib/approval/part-issue-screen-data";
 import { NO_STORE, checkApiToken, checkApiWriteToken } from "@/lib/api/auth";
 import { buildIntakeStatusResponse, buildStatusResponse, parseStatusQuery } from "@/lib/api/stock-request-status";
 import { buildApiUseRequest, parseApiStockRequest, resolveApiRequestLines, toApiStockRequest } from "@/lib/api/stock-requests";
@@ -105,9 +108,14 @@ export async function GET(request: NextRequest) {
     // 🔵 열쇠가 없는 신청(재고 관리에서 직접 올린 것)도 함께 온다 — 차례와 `notFound` 는 순수 함수가 정한다.
     const rows = await listRequestsByIntakeNumbers(parsed.query.intakeNumbers);
     const locks = await issueLocksOf(rows.map((r) => r.request.id));
+    // 🔴 「누가 반려했나」도 **묶음으로 한 번에** 읽는다 — 바로 위 잠금과 같은 까닭이다(머리말).
+    const decisionActors = await readPartIssueRejectionActorsByRequest(rows.map((r) => r.request.id));
     return NextResponse.json(
       buildIntakeStatusResponse(
-        rows.map((r) => ({ requestKey: r.externalKey, request: { ...r.request, issueLock: locks.get(r.request.id) ?? null } })),
+        rows.map((r) => ({
+          requestKey: r.externalKey,
+          request: { ...r.request, issueLock: locks.get(r.request.id) ?? null, decidedVia: decisionActors.get(r.request.id) ?? null },
+        })),
         generatedAt,
       ),
       { headers: NO_STORE },
@@ -116,8 +124,12 @@ export async function GET(request: NextRequest) {
 
   const found = await listRequestsByExternalKeys(parsed.query.keys);
   const locks = await issueLocksOf(found.map((f) => f.request.id));
+  // 🔴 「누가 반려했나」도 **묶음으로 한 번에** 읽는다 — 바로 위 잠금과 같은 까닭이다(머리말).
+  const decisionActors = await readPartIssueRejectionActorsByRequest(found.map((f) => f.request.id));
   // 🔵 찾은 것을 열쇠로 묶어 순수 함수에 넘긴다 — 「물어본 차례 그대로」와 「못 찾은 열쇠」를 거기서 가린다.
-  const byKey = new Map(found.map((f) => [f.externalKey, { ...f.request, issueLock: locks.get(f.request.id) ?? null }]));
+  const byKey = new Map(
+    found.map((f) => [f.externalKey, { ...f.request, issueLock: locks.get(f.request.id) ?? null, decidedVia: decisionActors.get(f.request.id) ?? null }]),
+  );
   return NextResponse.json(buildStatusResponse(parsed.query.keys, byKey, generatedAt), { headers: NO_STORE });
 }
 

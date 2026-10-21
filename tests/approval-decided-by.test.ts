@@ -5,7 +5,8 @@ import { describe, it } from "node:test";
 import { APPROVAL_DELEGATE_UNNAMED, approvalDecidedByName, approvalDelegateSuffix } from "../src/lib/approval/delegate-label";
 import { approvalStepActor, type ApprovalStepActor } from "../src/lib/approval/delegation";
 import { PART_ISSUE_TRAIL_DELEGATE_UNNAMED, partIssueTrailDelegateLabel } from "../src/lib/approval/part-issue-screen";
-import { buildInventoryNotificationItems, type DecidedIssueApprovalSource } from "../src/lib/notifications/bell-items";
+import { toApiRequestStatus, type RequestStatusSource } from "../src/lib/api/stock-request-status";
+import { buildInventoryNotificationItems, type DecidedIssueApprovalSource, type RejectedRequestSource } from "../src/lib/notifications/bell-items";
 import { requestDecisionNote, type RequestDecisionActor } from "../src/lib/stock/codes";
 
 /**
@@ -286,5 +287,155 @@ describe("⑧ 🔴 반려 사유 상자가 **원래 결재권자에 닿는 길**
       server.includes("decidedBy: actor.id, decidedByName: actor.name, decidedAt: now, decisionNote: note"),
       "결재 반려가 신청에 적는 값이 바뀌었다 — 감사 쪽 근거가 사라진다",
     );
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 세 번째 자리 — 알림 종의 「반출 신청이 반려되었습니다」(②) 와           */
+/* A/S 로 내주는 통로(`decision.byName`) (2026-10-22)                    */
+/* ------------------------------------------------------------------ */
+
+/** 알림 종의 ② 줄 — 「반출 신청이 반려되었습니다」(`notifications/bell-items.ts`). */
+function rejectedLineDetail(over: Partial<RejectedRequestSource> = {}): string {
+  const feed = buildInventoryNotificationItems({
+    role: "STAFF",
+    pending: { count: 0, oldestAt: null },
+    rejected: [
+      {
+        id: "66666666-6666-4666-8666-666666666666",
+        summary: "사용 · 2026-10-22 · D260003 · No. 7 가짜부품 ×2",
+        // 🔴 **그릴 이름의 주(主)** — 결재를 거쳤으면 결재선에 적힌 분(`listRejectedRequestsFor`
+        //    가 신청 표의 값보다 이 이름을 앞세운다), 결재를 거치지 않았으면 반려한 그 담당자다.
+        //    여기(기본값)는 「결재를 거쳐 대리인이 반려한」 경우라 **결재선에 적힌 분**이 온다.
+        decidedByName: OWNER,
+        decidedAt: DECIDED_AT,
+        decidedBy: DELEGATED,
+        ...over,
+      },
+    ],
+    issueApprovalsToDecide: { count: 0, oldestAt: null },
+    decidedIssueApprovals: [],
+    lowStockParts: [],
+    now: NOW,
+    baseUrl: BASE,
+    sourceId: "dss-inventory",
+  });
+  assert.equal(feed.items.length, 1, "종에 줄이 하나가 아니다");
+  return feed.items[0].detail;
+}
+
+/** A/S 가 되읽는 신청 한 줄의 재료. 🔴 **운영이 지나는 길 그대로**(`decidedVia`)를 바꿔 가며 잰다. */
+const API_SOURCE: RequestStatusSource = {
+  id: "77777777-7777-4777-8777-777777777777",
+  type: "USE",
+  status: "REJECTED",
+  intakeNumber: "D260003",
+  requesterSub: null,
+  requestedByName: "예시 신청자",
+  requestedAt: "2026-10-22T09:00:00.000Z",
+  note: "",
+  lines: [],
+  // 🔴 신청 표에 적힌 이름 — 결재를 거치지 않았을 때(`decidedVia: null`)는 이 값 하나만 나간다.
+  decidedByName: DELEGATE,
+  decidedAt: DECIDED_AT.toISOString(),
+  decisionNote: "재고가 없습니다",
+  decidedVia: null,
+  hold: null,
+  issueLock: null,
+};
+
+/** A/S 가 받는 `decision.byName`. */
+function apiByName(decidedVia: RequestDecisionActor | null): string {
+  const q = toApiRequestStatus("AS-1", { ...API_SOURCE, decidedVia });
+  assert.ok(q.decision, "decision 이 서지 않았다 — decidedAt 이 있는데 null 이 왔다");
+  return q.decision.byName;
+}
+
+describe("⑨ 🔴 알림 종의 두 줄(②·③)이 같은 말을 한다 — 「반출 신청이 반려되었습니다」 ↔ 「불출 결재가 반려되었습니다」", () => {
+  it("대리인이 반려하면 둘 다 같은 이름 글자다", () => {
+    const name = `${OWNER} (${DELEGATE} 대리)`;
+    assert.ok(rejectedLineDetail({}).includes(`${name} 반려`), rejectedLineDetail({}));
+    assert.ok(bellDetail({}).includes(`${name} 반려`), bellDetail({}));
+  });
+
+  it("본인이 반려하면 둘 다 꼬리가 없다", () => {
+    assert.ok(rejectedLineDetail({ decidedBy: SELF, decidedByName: OWNER }).includes(`${OWNER} 반려`));
+    assert.ok(!rejectedLineDetail({ decidedBy: SELF, decidedByName: OWNER }).includes("대리"));
+  });
+
+  it("🔴 결재를 거치지 않았으면(`UNDECIDED`) 신청 표의 이름 하나다 — 담당자가 화면에서 직접 반려한 경우", () => {
+    const detail = rejectedLineDetail({ decidedBy: { kind: "UNDECIDED" }, decidedByName: "담당자" });
+    assert.ok(detail.includes("담당자 반려"), detail);
+    assert.ok(!detail.includes("대리"), detail);
+  });
+
+  it("🔴 옛 줄(`UNRECORDED`)도 이름 하나다 — 과거를 지어내지 않는다", () => {
+    const detail = rejectedLineDetail({ decidedBy: UNRECORDED, decidedByName: OWNER });
+    assert.ok(detail.includes(`${OWNER} 반려`), detail);
+    assert.ok(!detail.includes("대리"), detail);
+  });
+});
+
+describe("⑩ 🔴 A/S 로 내주는 통로(`decision.byName`)도 같은 말을 한다 (2026-10-22, 쓰는 분 결정)", () => {
+  it("세 자리(반려 사유 상자 · 알림 종 · A/S 통로)가 같은 글자를 쓴다 — 대리인이 반려했을 때", () => {
+    const name = `${OWNER} (${DELEGATE} 대리)`;
+    assert.equal(box(via(DELEGATED)).byName, name);
+    assert.ok(bellDetail({}).includes(`${name} 반려`));
+    assert.equal(apiByName(via(DELEGATED)), name);
+  });
+
+  it("본인이 반려했으면 세 자리 모두 꼬리가 없다", () => {
+    assert.equal(apiByName(via(SELF)), OWNER);
+    assert.ok(!apiByName(via(SELF)).includes("대리"));
+  });
+
+  it("🔴 결재를 거치지 않았으면(`decidedVia: null`) 신청 표의 이름 하나다 — 지금까지와 한 글자도 다르지 않다", () => {
+    assert.equal(apiByName(null), DELEGATE);
+  });
+
+  it("🔵 모양은 그대로다 — `byName` 은 여전히 글자 하나다(칸을 더하거나 쪼개지 않는다)", () => {
+    assert.equal(typeof apiByName(via(DELEGATED)), "string");
+  });
+
+  it("🔴 **같은 함수를 쓴다** — `approvalDecidedByName` 을 새로 적지 않는다(넷째 벌을 만들지 않는다)", () => {
+    const status = src("src/lib/api/stock-request-status.ts");
+    assert.ok(status.includes("approvalDecidedByName("), "A/S 통로가 이름을 손으로 짓는다");
+    assert.ok(!/decidedVia\.decidedBy\.kind|kind === "DELEGATED"|kind === "UNRECORDED"/.test(status), "A/S 통로가 갈래를 직접 가른다");
+  });
+
+  it("🔴 **같은 울타리를 쳤다** — 재고 관리 화면의 반려 사유 상자와 같은 조회를 묶음으로 부른다", () => {
+    const route = src("src/app/api/v1/stock-requests/route.ts");
+    assert.ok(route.includes("readPartIssueRejectionActorsByRequest("), "통로가 그 조회를 안 부른다 — 결재 반려 이름이 안 실린다");
+    for (const call of ["readPartIssueRejectionActorsByRequest(rows.map((r) => r.request.id))", "readPartIssueRejectionActorsByRequest(found.map((f) => f.request.id))"]) {
+      assert.ok(route.includes(call), `묻는 법 한쪽이 반려 이름을 안 싣는다: ${call}`);
+    }
+  });
+});
+
+describe("⑪ 🔴 결정 시각이 안 맞으면 짝으로 안 본다 — `listRejectedRequestsFor` 도 같은 울타리", () => {
+  const server = src("src/lib/stock/requests.ts");
+
+  it("🔴 신청의 결정 시각과 단계의 결정 시각을 견준다", () => {
+    assert.ok(
+      server.includes("eq(rejectedStep.decidedAt, stockRequests.decidedAt)"),
+      "시각을 견주지 않는다 — 옛 결재건(거둔 뒤 담당자가 직접 반려)에 엉뚱한 대리인 이름이 붙는다",
+    );
+  });
+
+  it("🔴 반려 상태로 먼저 좁힌 뒤에 신청과 잇는다 — 한 신청에 결재건이 여러 번 서도 줄이 안 불어난다", () => {
+    assert.ok(
+      server.includes('.where(eq(stockIssueApprovalSteps.status, "REJECTED"))'),
+      "반려 상태로 좁히지 않는다 — 거둔 결재건까지 겹쳐 신청이 두 줄로 불어날 수 있다",
+    );
+  });
+
+  it("🔴 **갈래는 이 파일에서 가르지 않는다** — 원장으로 가는 안쪽 함수가 있는 자리라 결재 모듈을 안 가져온다", () => {
+    // 🔵 `tests/part-issue-gate.test.ts` ⑤ 와 같은 울타리를 여기서도 못 박는다 — 두 시험이
+    //    갈리면 한쪽만 고치는 날 이 파일이 조용히 결재 모듈을 끌어온다.
+    //    🔴 **`import` 줄만 잰다** — 주석에 그 경로를 설명으로 적은 것까지 걸리면(이 파일이
+    //    바로 그렇다) 시험이 항상 빨개져 아무도 안 보게 된다. 그 시험과 같은 정규식을 쓴다.
+    assert.equal(server.match(/^import .*@\/lib\/approval\/.*$/gm), null, "이 파일이 결재 모듈을 가져온다 — tests/part-issue-gate.test.ts ⑤ 가 깨진다");
+    const queries = src("src/lib/notifications/queries.ts");
+    assert.ok(queries.includes("approvalStepActor(r.rejectedStep)"), "부르는 쪽(notifications/queries.ts)이 원본 칸을 받아 가르지 않는다");
   });
 });

@@ -5,6 +5,7 @@ import { auditLogs } from "@/db/schema/audit-logs";
 import { parts } from "@/db/schema/parts";
 import { stockBalances } from "@/db/schema/stock-balances";
 import { stockTransactions } from "@/db/schema/stock";
+import { stockIssueApprovals, stockIssueApprovalSteps } from "@/db/schema/stock-issue-approvals";
 import { stockRequestIssues, stockRequests, type RequestSource, type RequestStatus } from "@/db/schema/stock-requests";
 import { auditValues } from "@/lib/audit";
 import type { Owner } from "@/lib/parts/codes";
@@ -1045,12 +1046,74 @@ export async function summarizePendingRequests(): Promise<{ count: number; oldes
   };
 }
 
+/**
+ * 반려된 단계의 **원본 칸** — 결재를 거쳐 반려된 신청만 값이 있다. 갈래(본인·대리인·옛 줄·
+ * 아직 안 누름)를 가르는 일은 **여기서 하지 않는다.**
+ *
+ * 🔴 **이 파일은 원장으로 가는 안쪽 함수(`confirmRequest`)가 있는 자리라 `@/lib/approval/*` 를
+ *    가져오지 않는다** — 「원장으로 가는 안쪽 함수에는 문이 없다」 울타리
+ *    (`tests/part-issue-gate.test.ts` ⑤)가 이 파일에서 결재 모듈을 가져오는 import 줄 자체를
+ *    막는다. 그래서 `approvalStepActor`(갈래를 가르는 함수)도, 그 결과 타입(`ApprovalStepActor`)
+ *    도 여기서 쓰지 않는다 — **부르는 쪽**(`notifications/queries.ts`, 이미 `@/lib/approval/part-issue`
+ *    를 가져오고 있다)이 이 원본 칸을 받아 `approvalStepActor` 로 가른다.
+ */
+export interface RejectedRequestRowStep {
+  approverSub: string;
+  decidedAt: Date | null;
+  decidedBySub: string | null;
+  decidedByName: string | null;
+}
+
 /** 종에 실을 「내 반려된 신청」 한 줄. 사유 본문은 싣지 않는다 — 화면에서 본다. */
 export interface RejectedRequestRow {
   id: string;
   summary: string;
+  /**
+   * 🔴 **그릴 이름의 주(主)** — 결재를 거쳐 반려됐으면 **결재선에 적힌 분**, 안 거쳤으면 신청
+   *    표에 적힌 그 담당자다(`listRejectedRequestsFor` 의 머리말). `신청 표의 값을 그대로` 가
+   *    아니다 — 그러면 대리인이 반려했을 때 같은 이름이 두 번(「이대리 (이대리 대리)」) 그려진다.
+   */
   decidedByName: string | null;
   decidedAt: Date | null;
+  /**
+   * 🔴 **그 자리를 실제로 누른 사람이 누구인가를 가릴 원본 칸** — 본인 · 대리인 · 옛 줄 · 결재를
+   *    거치지 않은 반려(2026-10-22, 「세 번째 자리를 같은 이름으로」). 위 `decidedByName`(누구
+   *    자리였나)과 **짝이다** — 갈래를 가르고 한 덩이 글자로 합치는 일은 **부르는 쪽**이 한다
+   *    (`approvalStepActor` → `approvalDecidedByName`, 결재 결과 줄(③)과 같은 함수).
+   *
+   * 🔴 **결재를 거치지 않은 반려는 `null` 이다** — 그때는 가를 재료 자체가 없고, 부르는 쪽이
+   *    `approvalStepActor(null)` 로 「아직 안 누름」을 받아 꼬리 없이 이름 하나만 쓴다(지금까지와
+   *    한 글자도 다르지 않다).
+   */
+  rejectedStep: RejectedRequestRowStep | null;
+}
+
+/**
+ * **반려된 단계 줄** — 결재를 거쳐 반려된 신청만 짝이 있다(2026-10-22). 상태로 걸러 두어
+ * 신청마다 한 번씩 묻지 않고 **한 서브쿼리로 겹쳐 쓴다**.
+ *
+ * 🔴 **먼저 `REJECTED` 로 좁힌 뒤에 신청과 잇는다.** 한 신청에 결재건이 여러 번 설 수 있다
+ *    (거두기로 하나가 `CANCELLED` 되고 나중에 새로 올린 결재건이 반려되는 경우) — 좁히지 않고
+ *    신청에서 바로 결재건으로 `leftJoin` 하면 그 신청이 두 줄로 불어난다(하나는 짝이 없는
+ *    `CANCELLED` 건, 하나는 진짜 반려 건). 반려 상태로 먼저 좁히면 거둔 건은 애초에 들어오지
+ *    않아 신청 하나에 많아야 한 줄만 남는다.
+ */
+function rejectedStepSource() {
+  return db()
+    .select({
+      requestId: stockIssueApprovals.requestId,
+      decidedAt: stockIssueApprovalSteps.decidedAt,
+      approverSub: stockIssueApprovalSteps.approverSub,
+      // 🔴 **결재선에 적힌 분**(= 그 자리의 주인) — 아래에서 신청 표의 `decided_by_name`
+      //    (= 실제로 누른 사람)보다 **이 이름을 앞세운다**(결재 결과 줄 ③과 같은 규칙).
+      approverName: stockIssueApprovalSteps.approverName,
+      decidedBySub: stockIssueApprovalSteps.decidedBySub,
+      decidedByName: stockIssueApprovalSteps.decidedByName,
+    })
+    .from(stockIssueApprovalSteps)
+    .innerJoin(stockIssueApprovals, eq(stockIssueApprovals.id, stockIssueApprovalSteps.approvalId))
+    .where(eq(stockIssueApprovalSteps.status, "REJECTED"))
+    .as("rejected_step_source");
 }
 
 /**
@@ -1064,23 +1127,70 @@ export interface RejectedRequestRow {
  *   (@dss/ui README 7절). 창 함수는 WHERE 뒤·LIMIT 앞에 계산되므로 세는 질의를 따로
  *   보내지 않아도 된다 — 종은 모든 화면에 딸려 오므로 왕복 한 번이 곧 모든 화면의 비용이다.
  * - 색인 `stock_requests_requester_idx`(requested_by)를 탄다.
+ *
+ * ── 🔴 **결재건과 반려된 단계 줄을 `leftJoin` 한다** (2026-10-22) ───────────
+ * 이 알림 줄은 신청 표의 `decided_by_name`(= **실제로 누른 사람**)을 그대로 쓰고 있었다.
+ * 그런데 결재 중 반려된 신청의 결재 결과 줄(③, `listDecidedPartIssueApprovalsFor`)은
+ * **결재선에 적힌 분**을 앞에 세우고 실제로 누른 사람을 괄호로 매단다 — 대리인이 반려하면
+ * **같은 반려가 이 줄(②)과 저 줄(③)에서 다른 사람 이름**이 된다(둘 다 같은 사람에게 갈 수
+ * 있어, 한 종 안에 「이대리 반려」와 「김결재 (이대리 대리) 반려」가 나란히 선다).
+ *
+ * 🔴 **그래서 `decidedByName` 도 ③과 같은 규칙으로 고른다** — 결재를 거쳐 반려됐으면 **결재선에
+ *    적힌 분**(`rejectedStep.approverName`), 안 거쳤으면 지금까지처럼 **신청 표의 그 값**
+ *    (`stockRequests.decidedByName` — 담당자가 화면에서 직접 반려한 사람)이다. 여기서 신청 표의
+ *    값을 그대로 돌려주면(= 실제로 누른 사람을 기준으로 삼으면) 대리인이 반려했을 때
+ *    `approvalDecidedByName` 이 「이대리 (이대리 대리)」처럼 **같은 이름을 두 번** 그린다
+ *    (`listDecidedPartIssueApprovalsFor` 가 `rejectedStep.approverName` 을 쓰는 것과 같은 까닭).
+ *
+ * 🔴 **「같은 사건인가」를 결정 시각으로 가린다** — `stockRequests.decidedAt` 과 반려된 단계의
+ *    `decidedAt` 이 **같을 때만** 짝으로 본다(`part-issue-screen-data.ts` 의
+ *    `readPartIssueRejectionActorsByRequest` 와 같은 울타리). 결재 반려는 한 트랜잭션에서 한
+ *    순간(`now`)으로 단계 줄과 신청을 함께 적으므로(`decidePartIssueApproval`) 두 시각은 같은
+ *    사건이면 반드시 같다. 안 치면 **엉뚱한 사람 이름이 붙는 줄**이 생긴다 — 옛 결재건(거두어
+ *    `CANCELLED` 된 건)을 나중에 담당자가 화면에서 직접 반려하면, 시각이 다른데도 그 옛 결재건의
+ *    대리인 이름이 붙을 뻔한다.
+ * 🔴 **갈래가 안 잡히면(=짝이 없으면) `UNDECIDED` 다** — 담당자가 화면에서 직접 반려한 신청은
+ *    결재 단계를 거치지 않아 짝이 없고, 그때는 지금까지처럼 `decidedByName` 글자 하나만 쓴다
+ *    (꼬리가 안 붙는다).
  */
 export async function listRejectedRequestsFor(userId: string, since: Date, limit: number): Promise<{ rows: RejectedRequestRow[]; total: number }> {
+  const rejectedStep = rejectedStepSource();
   const rows = await db()
     .select({
       id: stockRequests.id,
       summary: stockRequests.summary,
       decidedByName: stockRequests.decidedByName,
       decidedAt: stockRequests.decidedAt,
+      // 🔴 **결재선에 적힌 분** — 짝이 있으면 이 이름이 신청 표의 `decidedByName` 을 대신한다(위 머리말).
+      rejectedApproverName: rejectedStep.approverName,
+      // 🔴 번호는 **갈래를 가르는 데만** 쓰이고 아래에서 버린다 — 화면·종으로 내려가는 모양에
+      //    번호 칸이 없다(`ApprovalStepActor`).
+      rejectedApproverSub: rejectedStep.approverSub,
+      rejectedDecidedBySub: rejectedStep.decidedBySub,
+      rejectedDecidedByName: rejectedStep.decidedByName,
       total: sql<number>`count(*) over ()`.mapWith(Number),
     })
     .from(stockRequests)
+    .leftJoin(rejectedStep, and(eq(rejectedStep.requestId, stockRequests.id), eq(rejectedStep.decidedAt, stockRequests.decidedAt)))
     .where(and(eq(stockRequests.status, "REJECTED"), eq(stockRequests.requestedBy, userId), gte(stockRequests.decidedAt, since)))
     .orderBy(desc(stockRequests.decidedAt), desc(stockRequests.id))
     .limit(limit);
   if (rows.length === 0) return { rows: [], total: 0 };
   return {
-    rows: rows.map((r) => ({ id: r.id, summary: r.summary, decidedByName: r.decidedByName, decidedAt: r.decidedAt })),
+    rows: rows.map((r) => ({
+      id: r.id,
+      summary: r.summary,
+      // 🔴 **짝이 있으면 결재선에 적힌 분, 없으면 신청 표의 그 값**(위 머리말) — ③과 같은 규칙이다.
+      decidedByName: r.rejectedApproverName ?? r.decidedByName,
+      decidedAt: r.decidedAt,
+      // 🔴 **갈래는 여기서 가르지 않는다** — 그 함수를 부르려면 `@/lib/approval/*` 를 가져와야
+      //    하는데, 이 파일(원장으로 가는 안쪽 함수가 있는 자리)은 그 모듈을 가져오지 않는다
+      //    (위 `RejectedRequestRowStep` 주석). **leftJoin 이 비어 오면 `null` 을 넘긴다** — 결재를
+      //    거치지 않은 반려가 그렇고, 그때 부르는 쪽은 「아직 안 누름」을 받아 꼬리 없이 이름
+      //    하나만 쓴다. `approver_sub` 는 표에서 NOT NULL 이므로 **그 칸이 비었다는 것은 곧 줄이
+      //    없다는 뜻**이고, 그래서 이 한 칸으로 가른다.
+      rejectedStep: r.rejectedApproverSub === null ? null : { approverSub: r.rejectedApproverSub, decidedAt: r.decidedAt, decidedBySub: r.rejectedDecidedBySub, decidedByName: r.rejectedDecidedByName },
+    })),
     total: rows[0].total,
   };
 }

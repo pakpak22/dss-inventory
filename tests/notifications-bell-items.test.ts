@@ -42,12 +42,22 @@ const BASE = "http://192.168.1.132:3800";
 const SOURCE = "dss-inventory";
 const NOW = new Date("2026-10-13T09:00:00+09:00");
 
+/**
+ * 반려된 신청 한 줄.
+ *
+ * 🔵 `decidedBy` 의 기본값이 「아직 안 누름」인 것은 **담당자가 화면에서 직접 반려한** 신청의
+ *    모양이다(2026-10-22) — 결재 단계를 거치지 않아 대리인이라는 개념 자체가 없다. 그때는
+ *    꼬리가 안 붙어 지금까지와 한 글자도 다르지 않다. 대리인이 반려한 경우는
+ *    `tests/approval-decided-by.test.ts` 가 따로 잰다(이 파일은 알림 종의 건수·배지·경로 같은
+ *    다른 규칙을 재는 자리다).
+ */
 function rejected(over: Partial<RejectedRequestSource> = {}): RejectedRequestSource {
   return {
     id: "11111111-1111-4111-8111-111111111111",
     summary: "사용 · 2026-10-11 · D260001 · No. 7 가짜부품 ×2",
     decidedByName: "담당자",
     decidedAt: new Date("2026-10-12T10:00:00+09:00"),
+    decidedBy: { kind: "UNDECIDED" },
     ...over,
   };
 }

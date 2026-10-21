@@ -63,6 +63,9 @@ const SOURCE: RequestStatusSource = {
   decidedByName: null,
   decidedAt: null,
   decisionNote: "",
+  // 🔵 결재를 거치지 않은 반려가 기본이다 — 그때 `decision.byName` 은 2026-10-22 이전과
+  //    한 글자도 다르지 않다(아래 「결재를 거친 반려」 묶음이 다른 경우를 잰다).
+  decidedVia: null,
   hold: null,
   // 🔵 결재가 걸려 있지 않은 신청이 기본이다 — 그때 글자는 2026-10-21 이전과 한 글자도 다르지 않다.
   issueLock: null,

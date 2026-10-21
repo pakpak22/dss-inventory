@@ -1,10 +1,15 @@
 import type { RequestStatus } from "@/db/schema/stock-requests";
+// 🔴 「누가 반려했나」를 **여기서 다시 가르지 않는다** (2026-10-22, 「세 번째 자리를 같은 이름으로」).
+//    재고 관리 화면의 반려 사유 상자(`lib/stock/codes.ts` 의 `requestDecisionNote`)·알림 종
+//    (`notifications/bell-items.ts`)과 **같은 함수**를 지난다 — 두 벌(넷째 벌)로 적으면 A/S 가
+//    보는 이름이 다시 갈린다.
+import { approvalDecidedByName } from "@/lib/approval/delegate-label";
 import type { PartIssueLock } from "@/lib/approval/part-issue-gate";
 // 🔴 **요청 비고를 읽는 규칙은 저 함수 하나다** (2026-10-22). 같은 규칙을 여기 다시 적지 않는다 —
 //    순수 → 순수 import 라 `npm test` 가 그대로 불러온다(`part-issue-rules.ts` 머리말).
 import { readRequestNote } from "@/lib/approval/part-issue-rules";
 import { OWNER_LABEL, type Owner } from "@/lib/parts/codes";
-import { CHARGE_LABEL, INTAKE_NUMBER_RE, isClosedRequest, requestStatusLabel, type ChargeType, type EntryType } from "@/lib/stock/codes";
+import { CHARGE_LABEL, INTAKE_NUMBER_RE, isClosedRequest, requestStatusLabel, type ChargeType, type EntryType, type RequestDecisionActor } from "@/lib/stock/codes";
 import { MAX_KEY } from "./stock-requests";
 
 /**
@@ -343,6 +348,16 @@ export interface ApiRequestStatus {
    *
    * 🔵 확인됨·마감·반려·취소에 들어 있다. 일부만 나간(`PARTIAL`) 신청은 아직 결정이 아니라 `null` 이다 —
    *    재고 쪽도 그때는 결정 칸을 적지 않는다(`lib/stock/requests.ts` 의 `confirmRequest`: 「결정됨 = 더 볼 일 없음」).
+   *
+   * ── 🔴 `byName` 은 다른 시스템이 읽는 칸이다 — 모양은 그대로, 내용만 바뀐다 (2026-10-22) ──
+   * 칸은 여전히 **글자 하나**다(칸을 더하거나 쪼개지 않는다). 그런데 **불출 결재를 거쳐 반려된
+   * 신청**은 대리인이 눌렀을 수 있다 — 그때 이 글자는 「김결재 (이대리 대리)」처럼 **결재선에
+   * 적힌 분이 앞, 실제로 누른 사람이 괄호**로 선다(재고 관리 화면의 반려 사유 상자·알림 종과
+   * **같은 함수**(`approvalDecidedByName`)가 짓는 **같은 글자**다). 본인이 눌렀거나, 결재를
+   * 거치지 않고 담당자가 화면에서 직접 반려했으면 꼬리가 안 붙어 **지금까지와 한 글자도
+   * 다르지 않다**.
+   * 🔵 **읽는 쪽이 이 글자에 제 꼬리를 덧붙이지 않는 것을 확인했다**(2026-10-22 실측) — 그래서
+   *    여기서 꼬리를 더해도 겹쳐 보이는 글자가 생기지 않는다.
    */
   decision: { byName: string; at: string; note: string } | null;
   /**
@@ -418,6 +433,19 @@ export interface RequestStatusSource {
   decidedByName: string | null;
   decidedAt: string | null;
   decisionNote: string;
+  /**
+   * **결재를 거쳐 반려됐다면, 그 반려가 누구 자리에서 일어났나** — 결재를 거치지 않았으면 `null`
+   * (2026-10-22, 「세 번째 자리를 같은 이름으로」).
+   *
+   * 🔴 **`null` 과 「모름」을 가르려고 칸으로 둔다**(위 `issueLock` 과 같은 까닭). 기본값을 두면
+   *    통로가 하나 늘 때 아무 말 없이 「결재 반려가 아님」으로 굳어 **대리인 이름이 조용히
+   *    사라진다.** 칸으로 두면 tsc 가 얹지 않은 자리를 전부 잡아 준다.
+   * 🔴 **판정을 여기서 다시 하지 않는다.** 값을 만드는 자리는 재고 관리 화면의 반려 사유
+   *    상자와 **같은 조회**(`readPartIssueRejectionActorsByRequest`)이고, 「같은 사건인가」를
+   *    결정 시각으로 가리는 울타리도 거기 하나뿐이다. 비슷한 것을 통로 쪽에 새로 적으면 두
+   *    화면이 같은 반려를 다른 이름으로 부르는 날이 온다.
+   */
+  decidedVia: RequestDecisionActor | null;
   hold: { reason: string; heldByName: string; heldAt: string } | null;
   /**
    * 그 신청을 붙들고 있는 **살아 있는 결재건의 잠금** — 없으면 `null` (2026-10-21, 조각 11f).
@@ -471,7 +499,17 @@ export function toApiRequestStatus(requestKey: string | null, r: RequestStatusSo
     })),
     // 🔵 결정 시각이 있으면 결정된 것이다 — 상태로 가르지 않는다. 결정 칸을 적는 자리가 넷(확인·마감·반려·취소)이라,
     //    상태 목록을 여기 또 적으면 다섯째가 생기는 날 조용히 빠진다.
-    decision: r.decidedAt ? { byName: r.decidedByName ?? "", at: r.decidedAt, note: r.decisionNote } : null,
+    decision: r.decidedAt
+      ? {
+          // 🔴 **갈래를 여기서 다시 가르지 않는다** — 재고 관리 화면의 반려 사유 상자
+          //    (`lib/stock/codes.ts` 의 `requestDecisionNote`)와 **같은 식**이다. 결재를 거치지
+          //    않았으면(`decidedVia === null`) 신청 표에 적힌 이름 하나, 거쳤으면 결재선에 적힌
+          //    분과 실제로 누른 사람을 `approvalDecidedByName` 으로 합친 한 덩이 글자다.
+          byName: r.decidedVia === null ? (r.decidedByName ?? "") : approvalDecidedByName(r.decidedVia.approverName, r.decidedVia.decidedBy),
+          at: r.decidedAt,
+          note: r.decisionNote,
+        }
+      : null,
     hold: r.hold ? { reason: r.hold.reason, byName: r.hold.heldByName, at: r.hold.heldAt } : null,
   };
 }

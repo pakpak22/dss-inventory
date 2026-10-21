@@ -362,6 +362,15 @@ export type RejectedRequestSource = {
   /** 반려한 담당자 이름. 없으면 빈 칸으로 그린다. */
   decidedByName: string | null;
   decidedAt: Date | null;
+  /**
+   * 🔴 **그 자리를 실제로 누른 사람이 누구인가** — 본인 · 대리인 · 옛 줄 · 결재를 거치지 않은
+   *    반려(2026-10-22, 「세 번째 자리를 같은 이름으로」). 위 `decidedByName`(신청 표에 적힌 이름)과
+   *    **짝이다** — 둘을 `approvalDecidedByName` 으로 합쳐 「김결재 (이대리 대리)」 한 덩이로
+   *    적는다. 결재 결과 줄(③, `DecidedIssueApprovalSource.decidedBy`)과 **같은 모양**이다.
+   * 🔴 **갈래를 가르는 일은 질의가 끝냈다**(`listRejectedRequestsFor` 의 `approvalStepActor`).
+   *    여기서 `kind` 를 다시 가르면 두 벌이 되고, 그때 옛 줄이 「본인」으로 둔갑한다.
+   */
+  decidedBy: ApprovalStepActor;
 };
 
 /** 「지금 내 차례인 결재」 요약. 부르는 쪽이 세어 온다. `PendingSummary` 와 같은 모양이다. */
@@ -728,8 +737,17 @@ export function buildInventoryNotificationItems(input: {
         rejectedNotificationId(row.id),
         NOTIFICATION_KINDS.rejected,
         "반출 신청이 반려되었습니다",
+        /**
+         * 🔴 **이름은 「신청 표에 적힌 분 (대리인 대리)」 한 덩이다** (2026-10-22). 결재를 거쳐
+         *    대리인이 반려하면 2026-10-22 전까지 여기엔 **실제로 누른 사람 이름만** 떴고, 같은
+         *    사건을 결재 결과 줄(③)은 **결재선에 적힌 분 (대리인 대리)** 로 말하고 있었다 — 둘 다
+         *    그럴듯해서 아무도 신고하지 않는 결함이다. 🔵 이름 하나가 들어가던 자리에 **같은
+         *    함수가 지은 같은 글자**를 넣는다(`approvalDecidedByName`) — ③도 그 함수를 지난다.
+         *    결재를 거치지 않은 반려(담당자가 화면에서 직접)는 `decidedBy` 가 `UNDECIDED` 라
+         *    꼬리가 안 붙고, 지금까지와 한 글자도 다르지 않다.
+         */
         // 🔴 반려 **사유 본문**은 싣지 않는다 — /requests 에서 본다. 어느 신청인지만 가린다.
-        joinDetail([row.summary, row.decidedByName ? `${row.decidedByName} 반려` : null, row.decidedAt ? seoulDate(row.decidedAt) : null]),
+        joinDetail([row.summary, row.decidedByName ? `${approvalDecidedByName(row.decidedByName, row.decidedBy)} 반려` : null, row.decidedAt ? seoulDate(row.decidedAt) : null]),
         requestsHref,
       );
     }

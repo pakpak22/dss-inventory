@@ -1,6 +1,10 @@
 import "server-only";
 import type { Role } from "@/db/schema/users";
 import { listDecidedPartIssueApprovalsFor, summarizePartIssueApprovalsToDecide } from "@/lib/approval/part-issue";
+// 🔴 「누가 반려했나」를 가르는 일은 여기서 한다 — `stock/requests.ts` 는 원장으로 가는 안쪽
+//    함수가 있는 자리라 `@/lib/approval/*` 를 가져오지 않으므로(그 파일의 `RejectedRequestRowStep`
+//    주석), 그 결과가 올라오는 이 자리가 **원본 칸을 받아 갈라** 준다(2026-10-22).
+import { approvalStepActor } from "@/lib/approval/delegation";
 import { env } from "@/lib/env";
 import { listLowStockParts } from "@/lib/parts/queries";
 import { listRejectedRequestsFor, summarizePendingRequests } from "@/lib/stock/requests";
@@ -109,7 +113,11 @@ export async function listInventoryNotifications(viewer: NotificationViewer, now
     return buildInventoryNotificationItems({
       role: viewer.role,
       pending,
-      rejected: rejected.rows,
+      // 🔴 **갈래를 가르는 자리는 `approvalStepActor` 하나다** — 화면마다(또는 질의마다) 다시
+      //    가르면 한 자리에서만 대리가 보이거나, 더 나쁘게는 옛 줄이 「본인」으로 둔갑한다
+      //    (그 함수의 머리말). `listRejectedRequestsFor` 가 원본 칸(`rejectedStep`)만 올려 보내고
+      //    여기서 받아 가른다 — 이 파일은 이미 결재 모듈을 가져오고 있어 고리가 생기지 않는다.
+      rejected: rejected.rows.map((r) => ({ id: r.id, summary: r.summary, decidedByName: r.decidedByName, decidedAt: r.decidedAt, decidedBy: approvalStepActor(r.rejectedStep) })),
       rejectedTotal: rejected.total,
       issueApprovalsToDecide: toDecide,
       decidedIssueApprovals: decided.rows,
