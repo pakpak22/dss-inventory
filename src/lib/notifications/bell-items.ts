@@ -1,5 +1,10 @@
 import type { NotificationBellItem } from "@dss/ui";
 import type { Role } from "@/db/schema/users";
+// 🔴 「누구 이름으로 말할 것인가」를 여기서 짓지 않는다 — 결재선 그림·부품 요청 관리의 반려 사유
+//    상자와 **같은 함수**를 지난다. 두 벌로 적으면 같은 반려가 자리마다 다른 사람 이름을 말하고,
+//    오류가 아니라 **둘 다 그럴듯해서** 아무도 신고하지 않는다(2026-10-22 전까지 실제로 그랬다).
+import { approvalDecidedByName } from "@/lib/approval/delegate-label";
+import type { ApprovalStepActor } from "@/lib/approval/delegation";
 import type { PartIssueStatus } from "@/lib/approval/part-issue-rules";
 import { roleAtLeast } from "@/lib/auth/role";
 // 🔴 「재고가 한계수량에 걸렸나」는 **부품 어휘**에 있다 — 상세 창의 「부족」 딱지도 같은 함수를
@@ -411,6 +416,8 @@ export type DecidedIssueApprovalSource = {
    * 막은 사람의 이름. 🔴 **승인 줄에서는 null 이다** — 승인에는 한마디를 받지 않는다.
    * 🔵 `REJECTED` 면 반려한 **결재자**, `EXECUTION_REJECTED` 면 막은 **담당자**다. 종에서는 둘 다
    *    「○○○ 반려」로 읽히면 되고, 무엇이 달랐는지는 **줄의 제목**이 말한다(아래 조립 ③).
+   * 🔴 `REJECTED` 에서 이것은 **결재선에 적힌 분**이다(2026-10-22) — 대리인이 눌렀으면 실제로
+   *    누른 사람과 갈리고, 그 사람은 아래 `decidedBy` 가 말한다. 조립이 둘을 한 덩이로 합친다.
    */
   decidedByName: string | null;
   /**
@@ -421,6 +428,17 @@ export type DecidedIssueApprovalSource = {
    *    쓰므로 어느 표에서 왔는지를 알 필요가 없다.
    */
   decidedAt: Date | null;
+  /**
+   * 🔴 **그 자리를 실제로 누른 사람이 누구인가** (2026-10-22) — 본인 · 대리인 · 옛 줄 · 아직 안
+   * 누름. 위 `decidedByName`(누구 자리였나)과 **짝이고**, 조립이 둘을 `approvalDecidedByName` 으로
+   * 합쳐 「김○○ (이○○ 대리)」 한 덩이로 적는다.
+   *
+   * 🔴 **갈래를 가르는 일은 질의가 끝냈다**(`approvalStepActor`). 조립은 글자만 고른다 — 여기서
+   *    `kind` 를 다시 가르면 결재선 그림과 두 벌이 되고, 그때 옛 줄이 「본인」으로 둔갑한다.
+   * 🔵 **승인 줄과 실행 대기 반려 줄은 `UNDECIDED` 로 온다**(까닭은 질의 쪽 주석) — 그때는 꼬리가
+   *    안 붙어 지금까지와 한 글자도 다르지 않다.
+   */
+  decidedBy: ApprovalStepActor;
 };
 
 /**
@@ -677,9 +695,16 @@ export function buildInventoryNotificationItems(input: {
             : "불출 결재가 실행 대기에서 반려되었습니다",
         // 🔴 반려 **사유 본문**도 승인 **수량**도 싣지 않는다 — /approvals 에서 본다.
         //    어느 건인지와, 얼마나 묵었는지만 가린다.
+        /**
+         * 🔴 **이름은 「원래 결재권자 (대리인 대리)」 한 덩이다** (2026-10-22). 대리인이 반려하면
+         *    2026-10-22 전까지 여기엔 **원래 결재권자 이름만** 떴고, 같은 사건을 부품 요청 관리의
+         *    반려 사유 상자는 **실제로 누른 사람** 이름으로 말하고 있었다 — 둘 다 그럴듯해서
+         *    아무도 신고하지 않는 결함이다. 🔵 이름 하나가 들어가던 자리에 **같은 함수가 지은 같은
+         *    글자**를 넣는다(`approvalDecidedByName`) — 저쪽 상자도 그 함수를 지난다.
+         */
         row.status === "APPROVED"
           ? joinDetail([row.summary, "아직 불출 전", `올린 날 ${seoulDate(row.requestedAt)}`])
-          : joinDetail([row.summary, row.decidedByName ? `${row.decidedByName} 반려` : null, row.decidedAt ? seoulDate(row.decidedAt) : null]),
+          : joinDetail([row.summary, row.decidedByName ? `${approvalDecidedByName(row.decidedByName, row.decidedBy)} 반려` : null, row.decidedAt ? seoulDate(row.decidedAt) : null]),
         approvalsHref,
       );
     }

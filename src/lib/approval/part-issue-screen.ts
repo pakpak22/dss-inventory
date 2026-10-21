@@ -1,3 +1,4 @@
+import { APPROVAL_DELEGATE_UNNAMED, approvalDelegateSuffix } from "./delegate-label";
 import { type ApprovalStepActor } from "./delegation";
 import { partIssueLockFor } from "./part-issue-gate";
 import { PART_ISSUE_STATUS_LABELS, type PartIssueStatus } from "./part-issue-rules";
@@ -299,31 +300,30 @@ export function partIssueTrailMark(input: {
 /* ------------------------------------------------------------------ */
 
 /**
- * 🔴 **이름이 안 적힌 대리 결재**에 쓰는 글자. 표가 번호·이름 두 칸을 다 널 허용이라 생길 수
- * 있는 모양이고, 그때 「(null 대리)」를 그리느니 **아는 것만** 말한다.
+ * 🔴 **이름이 안 적힌 대리 결재**에 쓰는 글자.
+ *
+ * 🔵 **글자 자체는 `./delegate-label.ts` 가 들고 있다**(2026-10-22). 같은 말을 하는 자리가 셋이
+ *    되면서(결재선 그림 · 부품 요청 관리의 반려 사유 상자 · 알림 종) 글자를 한 곳으로 모았고,
+ *    여기 이름은 **이 화면 묶음이 부르던 그대로** 남겨 두었다 — 그림과 그 시험이 쓰는 이름이다.
+ *    🔴 까닭(왜 다른 파일인가)은 그쪽 머리말에 있다: `codes.ts` 가 이 파일을 가져오면 **고리가
+ *    생긴다.**
  */
-export const PART_ISSUE_TRAIL_DELEGATE_UNNAMED = "(대리 결재)";
+export const PART_ISSUE_TRAIL_DELEGATE_UNNAMED = APPROVAL_DELEGATE_UNNAMED;
 
 /**
  * 결재선 그림의 상자에 **덧붙일 한 줄**. 덧붙일 것이 없으면 `null`.
  *
- * 🔴 **대리로 눌린 자리에만 글자가 있다.** 나머지 셋은 전부 `null` 이고, 그 까닭이 갈래마다 다르다:
- *  · `SELF` — 적힌 사람이 눌렀다. 덧붙일 말이 없다(지금까지와 한 글자도 다르지 않다).
- *  · `UNDECIDED` — 아직 아무도 안 눌렀다. 「누가 눌렀나」를 말할 수 없다.
- *  · `UNRECORDED` — 🔴 **옛 줄이다. 그래도 지금까지처럼 이름 하나만 그린다**(2026-10-22 결정).
- *    「모른다」를 화면에 적으면 **2026-10-21 이전의 결재가 전부 수상해 보인다.** 그런데 그때는
- *    위임 기능 자체가 없어서 **적힌 사람이 누른 것이 사실상 맞다.** 다만 「사실상 맞다」와
- *    「적혀 있다」는 다른 말이라, **가르는 일은 코드가 계속한다**(`approvalStepActor` 의
- *    `UNRECORDED` 갈래) — 화면에서만 `SELF` 와 같게 보일 뿐이다. 🔴 그래서 이 갈래를 위 `SELF`
- *    와 **한 값으로 합치지 마라.** 합치는 순간 옛 줄이 「본인이 눌렀다」가 되어 과거를 지어낸다.
+ * 🔵 **갈래 넷을 글자로 바꾸는 규칙은 `approvalDelegateSuffix` 한 곳에 있다**(2026-10-22) — 거기
+ *    주석에 네 갈래의 까닭(특히 **옛 줄(`UNRECORDED`)을 `SELF` 와 합치지 않는** 까닭)이 적혀
+ *    있다. 🔴 여기서 다시 가르지 마라: 반려 사유 상자·알림 종이 **같은 함수**를 지나므로, 여기
+ *    한 자리만 새로 적으면 같은 결재가 화면마다 다른 말을 한다.
  *
- * 🔵 **「김○○ 결재 (이○○ 대리)」의 뒷부분**이다 — 앞의 이름은 상자가 이미 그리고 있다. 괄호를
- *    씌우는 까닭은 바로 윗줄(결재자 이름)에 **매달린 말**로 읽히게 하려는 것이다: 괄호가 없으면
- *    「이○○ 대리」가 직급(대리)으로 읽힐 자리가 생긴다.
+ * 🔵 **「김○○ 결재 (이○○ 대리)」의 뒷부분**이다 — 앞의 이름은 상자가 이미 그리고 있다. 그림만
+ *    이렇게 **꼬리만** 받는 까닭은 상자가 좁아 두 줄로 세우기 때문이고(윗줄 이름, 아랫줄 작고
+ *    흐린 꼬리), 글줄로 말하는 두 자리는 이름까지 붙은 한 덩이(`approvalDecidedByName`)를 쓴다.
  */
 export function partIssueTrailDelegateLabel(actor: ApprovalStepActor): string | null {
-  if (actor.kind !== "DELEGATED") return null;
-  return actor.delegateName === null ? PART_ISSUE_TRAIL_DELEGATE_UNNAMED : `(${actor.delegateName} 대리)`;
+  return approvalDelegateSuffix(actor);
 }
 
 /** 대리 줄에 다는 설명. 🔴 괄호 넉 자가 무슨 뜻인지는 글자로도 말해 둔다(색·기호만으로 말하지 않는다). */

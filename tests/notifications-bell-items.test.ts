@@ -52,7 +52,12 @@ function rejected(over: Partial<RejectedRequestSource> = {}): RejectedRequestSou
   };
 }
 
-/** 승인된 내 결재건 한 줄. 🔴 결정 시각 칸이 비어 있는 것이 **승인 줄의 모양**이다. */
+/**
+ * 승인된 내 결재건 한 줄. 🔴 결정 시각 칸이 비어 있는 것이 **승인 줄의 모양**이다.
+ *
+ * 🔵 `decidedBy` 가 「아직 안 누름」인 것도 승인 줄의 모양이다 (2026-10-22) — 질의의 leftJoin 이
+ *    **반려된 단계**를 붙이는데 승인 줄에는 그런 단계가 없어 비어 온다(`approvalStepActor(null)`).
+ */
 function approvedIssue(over: Partial<DecidedIssueApprovalSource> = {}): DecidedIssueApprovalSource {
   return {
     id: "22222222-2222-4222-8222-222222222222",
@@ -61,11 +66,17 @@ function approvedIssue(over: Partial<DecidedIssueApprovalSource> = {}): DecidedI
     requestedAt: new Date("2026-10-09T10:00:00+09:00"),
     decidedByName: null,
     decidedAt: null,
+    decidedBy: { kind: "UNDECIDED" },
     ...over,
   };
 }
 
-/** 반려된 내 결재건 한 줄 — 결정 시각은 **단계 줄**에서 온다. */
+/**
+ * 반려된 내 결재건 한 줄 — 결정 시각은 **단계 줄**에서 온다.
+ *
+ * 🔴 `decidedByName` 은 **결재선에 적힌 분**이고(「누구 자리였나」), `decidedBy` 는 **그 자리에서
+ *    실제로 누가 눌렀나**다. 본인이 눌렀으면 아래처럼 `SELF` 라 꼬리가 안 붙는다.
+ */
 function rejectedIssue(over: Partial<DecidedIssueApprovalSource> = {}): DecidedIssueApprovalSource {
   return {
     ...approvedIssue(),
@@ -73,6 +84,7 @@ function rejectedIssue(over: Partial<DecidedIssueApprovalSource> = {}): DecidedI
     status: "REJECTED",
     decidedByName: "결재자",
     decidedAt: new Date("2026-10-12T10:00:00+09:00"),
+    decidedBy: { kind: "SELF" },
     ...over,
   };
 }
@@ -83,6 +95,10 @@ function rejectedIssue(over: Partial<DecidedIssueApprovalSource> = {}): DecidedI
  * 🔴 결정 시각이 **단계 줄이 아니라 결재건 쪽 칸**(`execution_rejected_at`)에서 온다. 질의가 둘을
  * 합쳐 같은 칸으로 실어 주므로(`listDecidedPartIssueApprovalsFor`) 조립이 받는 모양은 반려와 같다 —
  * **그 합치기를 빠뜨리면 여기 `decidedAt` 이 `null` 로 와서 줄이 조용히 사라진다.**
+ *
+ * 🔴 `decidedBy` 가 **「아직 안 누름」인 것이 이 줄의 참말이다** (2026-10-22). 그 건에는 반려된 단계
+ * 줄이 하나도 없고(단계는 전부 승인으로 닫혔다), 막은 사람은 결재자가 아니라 담당자라 **대리인이라는
+ * 개념 자체가 없다.** 그래서 이름에 꼬리가 붙지 않는다.
  */
 function executionRejectedIssue(over: Partial<DecidedIssueApprovalSource> = {}): DecidedIssueApprovalSource {
   return {
@@ -91,6 +107,7 @@ function executionRejectedIssue(over: Partial<DecidedIssueApprovalSource> = {}):
     status: "EXECUTION_REJECTED",
     decidedByName: "재고담당",
     decidedAt: new Date("2026-10-12T10:00:00+09:00"),
+    decidedBy: { kind: "UNDECIDED" },
     ...over,
   };
 }

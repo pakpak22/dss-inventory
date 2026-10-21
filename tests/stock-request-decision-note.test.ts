@@ -44,7 +44,14 @@ function functionSource(source: string, name: string): string {
   return source.slice(start, end + 3);
 }
 
-/** 신청 한 줄에서 **이 함수가 보는 칸만.** 나머지는 판정에 쓰이지 않는다. */
+/**
+ * 신청 한 줄에서 **이 함수가 보는 칸만.** 나머지는 판정에 쓰이지 않는다.
+ *
+ * 🔵 **아래 호출마다 둘째 인자로 `null` 을 적어 넘기는 까닭** (2026-10-22): 결재 단계에서 반려된
+ *    신청이면 「원래 결재권자 (대리인 대리)」를 적어야 해서 그 단계 줄을 함께 받는데, **기본값을
+ *    두지 않았다** — 두면 부르는 자리가 늘 때 아무 말 없이 「결재 반려가 아님」으로 굳어 그
+ *    화면에서만 대리인 이름이 사라진다. 그쪽 동작은 `tests/approval-decided-by.test.ts` 가 잰다.
+ */
 function request(over: Partial<Parameters<typeof requestDecisionNote>[0]> = {}) {
   return {
     status: "REJECTED" as RequestStatus,
@@ -58,15 +65,15 @@ function request(over: Partial<Parameters<typeof requestDecisionNote>[0]> = {}) 
 
 describe("결정 사유를 그릴지 말지 (2026-10-21)", () => {
   it("🔴 사유가 비면 그리지 않는다 — 빈 상자가 서면 「사유가 있는데 안 보인다」로 읽힌다", () => {
-    assert.equal(requestDecisionNote(request({ decisionNote: "" })), null);
+    assert.equal(requestDecisionNote(request({ decisionNote: "" }), null), null);
   });
 
   it("🔴 공백만 적힌 것도 빈 것이다", () => {
-    assert.equal(requestDecisionNote(request({ decisionNote: "   \n  " })), null);
+    assert.equal(requestDecisionNote(request({ decisionNote: "   \n  " }), null), null);
   });
 
   it("반려에 그린다", () => {
-    const view = requestDecisionNote(request({ status: "REJECTED", decisionNote: "재고가 없습니다" }));
+    const view = requestDecisionNote(request({ status: "REJECTED", decisionNote: "재고가 없습니다" }), null);
     assert.ok(view);
     assert.equal(view.note, "재고가 없습니다");
     assert.equal(view.label, DECISION_NOTE_LABEL_REJECTED);
@@ -74,25 +81,25 @@ describe("결정 사유를 그릴지 말지 (2026-10-21)", () => {
 
   it("🔴 마감에도 그린다 — 「왜 남은 걸 접었는지」가 반려만큼 중요하다", () => {
     // 마감은 상태값이 아니다(`isClosedRequest`). 상태는 CONFIRMED 이고 `closed` 가 참이다.
-    const view = requestDecisionNote(request({ status: "CONFIRMED", closed: true, decisionNote: "나머지는 다음 입고에" }));
+    const view = requestDecisionNote(request({ status: "CONFIRMED", closed: true, decisionNote: "나머지는 다음 입고에" }), null);
     assert.ok(view);
     assert.equal(view.note, "나머지는 다음 입고에");
     assert.equal(view.label, DECISION_NOTE_LABEL_CLOSED);
   });
 
   it("사유를 앞뒤 공백 없이 다듬어 준다 — 상자 안이 비어 보이지 않게", () => {
-    assert.equal(requestDecisionNote(request({ decisionNote: "  재고가 없습니다  " }))?.note, "재고가 없습니다");
+    assert.equal(requestDecisionNote(request({ decisionNote: "  재고가 없습니다  " }), null)?.note, "재고가 없습니다");
   });
 
   it("결정한 때가 없어도 상자는 선다 — 시각만 빠진다(사유가 함께 사라지면 안 된다)", () => {
-    const view = requestDecisionNote(request({ decidedAt: null }));
+    const view = requestDecisionNote(request({ decidedAt: null }), null);
     assert.ok(view);
     assert.equal(view.at, null);
     assert.equal(view.note, "재고가 없습니다");
   });
 
   it("결정한 사람 이름이 없으면 빈 글자다 — 화면이 「null」을 찍지 않게", () => {
-    assert.equal(requestDecisionNote(request({ decidedByName: null }))?.byName, "");
+    assert.equal(requestDecisionNote(request({ decidedByName: null }), null)?.byName, "");
   });
 
   /**
@@ -109,7 +116,7 @@ describe("결정 사유를 그릴지 말지 (2026-10-21)", () => {
       );
     }
     // 그래서 취소된 신청은 그릴 것이 없다.
-    assert.equal(requestDecisionNote(request({ status: "CANCELLED", decisionNote: "" })), null);
+    assert.equal(requestDecisionNote(request({ status: "CANCELLED", decisionNote: "" }), null), null);
   });
 
   it("🔴 사유를 적는 자리는 반려와 마감 둘뿐이다 — 쓰기 쪽은 이 조각에서 한 글자도 안 바뀌었다", () => {
@@ -126,7 +133,7 @@ describe("결정 사유를 그릴지 말지 (2026-10-21)", () => {
 describe("결정 사유 상자의 글자와 색 (2026-10-21)", () => {
   it("🔴 글자와 색이 **함께** 나온다 — 한쪽만 받아 갈 수 없다", () => {
     for (const r of [request({ status: "REJECTED" }), request({ status: "CONFIRMED", closed: true }), request({ status: "PENDING" })]) {
-      const view = requestDecisionNote(r);
+      const view = requestDecisionNote(r, null);
       assert.ok(view);
       assert.ok(view.label.trim().length > 0, "글자가 비었다");
       assert.equal(view.tone, DECISION_NOTE_TONE, "색이 그 표에서 오지 않았다");
@@ -135,9 +142,9 @@ describe("결정 사유 상자의 글자와 색 (2026-10-21)", () => {
 
   it("🔴 상태 배지와 같은 차례로 가른다 — ① 마감 ② 반려 ③ 그 밖", () => {
     // 마감이 반려를 이긴다. 같은 줄의 배지가 「마감」인데 상자가 「반려 사유」라고 하면 두 말을 한다.
-    assert.equal(requestDecisionNote(request({ status: "REJECTED", closed: true }))?.label, DECISION_NOTE_LABEL_CLOSED);
-    assert.equal(requestDecisionNote(request({ status: "REJECTED", closed: false }))?.label, DECISION_NOTE_LABEL_REJECTED);
-    assert.equal(requestDecisionNote(request({ status: "CONFIRMED", closed: false }))?.label, DECISION_NOTE_LABEL_OTHER);
+    assert.equal(requestDecisionNote(request({ status: "REJECTED", closed: true }), null)?.label, DECISION_NOTE_LABEL_CLOSED);
+    assert.equal(requestDecisionNote(request({ status: "REJECTED", closed: false }), null)?.label, DECISION_NOTE_LABEL_REJECTED);
+    assert.equal(requestDecisionNote(request({ status: "CONFIRMED", closed: false }), null)?.label, DECISION_NOTE_LABEL_OTHER);
   });
 
   it("세 글자가 서로 다르다 — 뭉개면 한 상태가 다른 상태인 척한다", () => {

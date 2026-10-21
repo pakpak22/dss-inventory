@@ -16,6 +16,9 @@ import { users } from "@/db/schema/users";
 // 🔴 「누를 수 있는 번호 목록」은 저장소에 한 자리에서만 만들어진다 — 아래 세 조회·집행이 전부
 //    이것을 부른다(까닭은 `./delegation.ts` 의 `actingApproverSubs`).
 import { actingApproverSubsFor } from "./delegation-queries";
+// 🔴 「그 자리를 실제로 누가 눌렀나」의 갈래 넷도 저장소에 한 자리에서만 갈린다 — 화면마다 다시
+//    적으면 옛 줄(`decided_by_sub` 가 `NULL`)이 「본인」으로 둔갑한다(그 함수의 머리말).
+import { approvalStepActor, type ApprovalStepActor } from "./delegation";
 import {
   checkCanCancelPartIssue,
   checkCanDecidePartIssue,
@@ -1022,10 +1025,26 @@ export interface DecidedPartIssueApprovalRow {
   /**
    * 🔴 막힌 줄에만 값이 있다. 승인 줄은 `null`.
    * 🔵 `REJECTED` 면 반려한 **결재자**(단계 줄), `EXECUTION_REJECTED` 면 막은 **담당자**(결재건 쪽 칸).
+   * 🔴 `REJECTED` 에서 이 이름은 **결재선에 적힌 분**(`approver_name`)이지 실제로 누른 사람이
+   *    아니다 — 대리인이 눌렀으면 둘이 갈리고, 그때 누른 사람은 아래 `decidedBy` 가 말한다.
    */
   decidedByName: string | null;
   /** 🔴 막힌 줄에만 값이 있다. 승인 줄은 `null`. 🔵 상태마다 적힌 표가 다르다(바로 위 칸과 같은 까닭). */
   decidedAt: Date | null;
+  /**
+   * 🔴 **그 자리를 실제로 누른 사람이 누구인가** — 본인 · 대리인 · 옛 줄 · 아직 안 누름
+   * (2026-10-22). 위 `decidedByName` 과 **짝이다**: 저것이 「누구 자리였나」, 이것이 「그 자리에서
+   * 실제로 무슨 일이 있었나」다. 둘을 한 덩이 글자로 합치는 일은 조립이
+   * `approvalDecidedByName` 으로 한다 — 종과 반려 사유 상자가 **같은 함수**를 지난다.
+   *
+   * 🔴 **실행 대기 반려(`EXECUTION_REJECTED`) 줄은 언제나 `UNDECIDED` 다.** 그 건에는 반려된
+   *    단계 줄이 **하나도 없고**(단계가 전부 승인으로 닫힌 뒤에 막힌 것이다), 막은 사람은
+   *    결재자가 아니라 담당자라 **대리인이라는 개념 자체가 없다**(`rejectExecutionPartIssueApproval`
+   *    은 `requireRole("ADMIN")` 이 쥔 자리다). 그래서 꼬리가 안 붙고, 지금까지와 한 글자도 다르지
+   *    않게 담당자 이름 하나만 보인다. 🔵 그 판정도 손으로 적지 않는다 — leftJoin 이 비어 와
+   *    `approvalStepActor(null)` 이 그렇게 답한다.
+   */
+  decidedBy: ApprovalStepActor;
 }
 
 /**
@@ -1069,6 +1088,15 @@ export async function listDecidedPartIssueApprovalsFor(requesterUserId: string, 
       requestedAt: stockIssueApprovals.requestedAt,
       decidedByName: rejectedStep.approverName,
       decidedAt: rejectedStep.decidedAt,
+      /**
+       * 🔴 **「누가 눌렀나」는 이미 이 줄에 함께 있다** (2026-10-22) — 칸을 더하지 않았고 질의도
+       *    한 번 그대로다. 위 `approverName`(누구 자리였나)만 싣고 이 셋을 버리고 있었던 탓에,
+       *    대리인이 반려해도 종에는 **원래 결재권자 이름만** 떴다. 🔵 번호는 **갈래를 가르는 데만**
+       *    쓰이고 아래에서 버린다 — 화면으로 내려가는 모양에 번호 칸이 없다(`ApprovalStepActor`).
+       */
+      rejectedApproverSub: rejectedStep.approverSub,
+      rejectedDecidedBySub: rejectedStep.decidedBySub,
+      rejectedDecidedByName: rejectedStep.decidedByName,
       // 🔴 실행 대기 반려는 **여기**에 적힌다(위 머리말). 아래에서 위 둘과 합쳐 한 칸으로 싣는다.
       executionRejectedByName: stockIssueApprovals.executionRejectedByName,
       executionRejectedAt: stockIssueApprovals.executionRejectedAt,
@@ -1118,6 +1146,18 @@ export async function listDecidedPartIssueApprovalsFor(requesterUserId: string, 
        */
       decidedByName: r.decidedByName ?? r.executionRejectedByName,
       decidedAt: r.decidedAt ?? r.executionRejectedAt,
+      /**
+       * 🔴 **갈래를 가르는 자리는 `approvalStepActor` 하나다**(화면마다 다시 적으면 한 화면에서만
+       *    대리가 보이거나, 더 나쁘게는 **옛 줄이 「본인」으로 둔갑**한다 — 그 함수의 머리말).
+       * 🔴 **leftJoin 이 비어 오면 `null` 을 넘긴다.** 실행 대기 반려 줄이 그렇고, 그때 답은
+       *    「아직 안 누름」이라 꼬리가 안 붙는다(위 타입 주석). `approver_sub` 는 표에서 NOT NULL
+       *    이므로 **그 칸이 비었다는 것은 곧 줄이 없다는 뜻**이고, 그래서 이 한 칸으로 가른다.
+       */
+      decidedBy: approvalStepActor(
+        r.rejectedApproverSub === null
+          ? null
+          : { approverSub: r.rejectedApproverSub, decidedAt: r.decidedAt, decidedBySub: r.rejectedDecidedBySub, decidedByName: r.rejectedDecidedByName },
+      ),
     })),
     total: rows[0].total,
   };

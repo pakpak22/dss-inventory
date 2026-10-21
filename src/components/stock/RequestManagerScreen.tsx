@@ -30,6 +30,7 @@ import {
   requestStatusFilterLabel,
   requestStatusLabel,
   type EntryType,
+  type RequestDecisionActor,
   type RequestStatusFilter,
 } from "@/lib/stock/codes";
 import { partDetailHref } from "@/lib/stock/request-item-detail";
@@ -255,9 +256,16 @@ function HoldReason({ hold }: { hold: ManagerRequestRow["hold"] }) {
  *    그런데 상자가 둘이 되면 머리글 없는 상자 둘이 나란히 서서 어느 쪽이 무엇인지 알 수 없다. 색만으로
  *    가르게 두지 않고 **글자로도 말한다.**
  * 🔵 시각이 없으면 **아랫줄에서 시각만 뺀다** — 상자를 통째로 숨기면 사유가 함께 사라진다.
+ *
+ * 🔴 **누구 이름을 적을지도 그 한 곳이 정한다** (2026-10-22). 신청에 적힌 `decidedByName` 은 **실제로
+ *    누른 사람**이라, 대리인이 반려하면 알림 종(결재선에 적힌 분)과 **다른 사람 이름**이 됐다. 그래서
+ *    서버가 그 반려 단계를 찾아 실어 보내고(`decisionActors`), 합치는 일은 `requestDecisionNote` 가
+ *    한다 — 🔴 **여기서 「대리인가」를 가르지 마라.** 갈래 넷 중 옛 줄(`UNRECORDED`)은 「본인」이
+ *    아닌데 화면에는 이름 하나만 보여야 하고, 그 약속은 순수 함수 쪽에만 적혀 있다.
+ * 🔵 결재와 상관없이 반려·마감된 신청에는 `null` 이 온다 — 그때는 지금까지와 한 글자도 다르지 않다.
  */
-function DecisionNote({ request }: { request: ManagerRequestRow }) {
-  const decision = requestDecisionNote(request);
+function DecisionNote({ request, decidedVia }: { request: ManagerRequestRow; decidedVia: RequestDecisionActor | null }) {
+  const decision = requestDecisionNote(request, decidedVia);
   if (!decision) return null;
   const meta = [decision.byName, decision.at === null ? "" : formatRequestedAt(decision.at)].filter(Boolean).join(" · ");
   return (
@@ -363,8 +371,12 @@ function RequestItems({ lines }: { lines: readonly ManagerRequestLine[] }) {
  * @param issueLocks 살아 있는 결재건이 붙들고 있는 신청 → 그 까닭. **잠긴 신청만 들어 있다.**
  * @param issueTrails 그 결재건의 **진행 그림**(2026-10-21, 조각 11f). 역시 **결재가 걸린 신청만** 들어 있다.
  *   🔵 `issueLocks` 와 **같은 묶음**에서 나온다(살아 있는 결재건) — 한쪽에만 있는 줄은 생기지 않는다.
+ * @param decisionActors **결재에서 반려된 신청만** — 그 반려가 누구 자리에서 일어났고 실제로 누가
+ *   눌렀나 (2026-10-22). 🔴 위 `issueTrails` 와 **다른 묶음이다**: 저것은 **살아 있는** 결재건이고
+ *   이것은 **닫힌** 결재건이라, 한 신청에 둘이 함께 있을 수 없다. 🔵 반려 사유 상자에 적을 이름만
+ *   가른다 — 상자를 그릴지 말지는 여전히 사유가 있느냐 하나다(`requestDecisionNote`).
  *
- * 🔴 **이 셋은 서버가 판정해 내려보낸 값이다**(`src/app/(app)/requests/page.tsx`). 화면이 다시 판정하지
+ * 🔴 **이 넷은 서버가 판정해 내려보낸 값이다**(`src/app/(app)/requests/page.tsx`). 화면이 다시 판정하지
  *    않는다 — 두 벌이 되면 「단추는 보이는데 누르면 거절」이나 그 반대가 되고, 후자는 화면에 아무 표시도
  *    남기지 않아 더 나쁘다(A/S 원본 `PartRequestManagerScreen` 의 까닭 그대로).
  */
@@ -376,6 +388,7 @@ export function RequestManagerScreen({
   approvalRequired,
   issueLocks,
   issueTrails,
+  decisionActors,
 }: {
   requests: ManagerRequestRow[];
   notices: RequestNotice[];
@@ -384,6 +397,7 @@ export function RequestManagerScreen({
   approvalRequired: boolean;
   issueLocks: Record<string, PartIssueLock>;
   issueTrails: Record<string, IssueApprovalTrailView>;
+  decisionActors: Record<string, RequestDecisionActor>;
 }) {
   /**
    * 🔵 거르기는 **화면에서** 한다(A/S 원본과 같고, 이 저장소의 `PartsList` 관례와도 같다) — 목록이 한 번에 다 와 있다.
@@ -536,7 +550,8 @@ export function RequestManagerScreen({
                           {/* 🔵 보류 상자 **바로 아래**에 둔다 — 둘 다 「이 줄이 왜 이 상태인가」를 말하는 상자라
                               같은 자리에 모여 있어야 한다. 둘이 한 줄에 함께 서는 일은 지금 생기지 않지만
                               (사유가 적히는 반려·마감은 보류로 돌아가지 않는다) 그 전제를 코드에 박지 않는다. */}
-                          <DecisionNote request={r} />
+                          {/* 🔵 결재에서 반려된 줄에만 값이 있다 — 아니면 `null` 이라 지금까지와 한 글자도 다르지 않다. */}
+                          <DecisionNote request={r} decidedVia={decisionActors[r.id] ?? null} />
                         </div>
                       </td>
                       {showActions ? (

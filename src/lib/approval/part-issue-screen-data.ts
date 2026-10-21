@@ -1,9 +1,11 @@
 import "server-only";
-import { asc, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db/client";
 import { approvalRouteSteps } from "@/db/schema/approval-routes";
-import { stockIssueApprovalSteps } from "@/db/schema/stock-issue-approvals";
+import { stockIssueApprovalSteps, stockIssueApprovals } from "@/db/schema/stock-issue-approvals";
+import { stockRequests } from "@/db/schema/stock-requests";
 import { users } from "@/db/schema/users";
+import type { RequestDecisionActor } from "@/lib/stock/codes";
 import { listAllRequests, type PendingRequestRow } from "@/lib/stock/requests";
 import { approvalStepActor, type ApprovalStepDecision } from "./delegation";
 import { listMyOpenPartIssueApprovals, listOpenPartIssueApprovalsByRequest, listPartIssueApprovalsToDecide, listPartIssueApprovalsToExecute } from "./part-issue";
@@ -339,4 +341,64 @@ export async function readPartIssueTrailsByRequest(requestIds: readonly string[]
       },
     ]),
   );
+}
+
+/* ------------------------------------------------------------------ */
+/* 부품 요청 관리의 **반려 사유 상자**가 쓰는 조회 (2026-10-22)            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * **신청 묶음 → 그 신청을 닫은 「결재 반려」가 누구 자리에서 일어났나** (2026-10-22).
+ * 결재에서 반려된 신청만 키가 있고, 나머지는 아예 없다.
+ *
+ * ── 🔴 왜 위의 진행 그림으로는 못 닿나 ──────────────────────────────────
+ * 바로 위 `readPartIssueTrailsByRequest` 는 **살아 있는 결재건만** 읽는다(`OPEN_PART_ISSUE_STATUSES`
+ * = 결재 중 · 실행 대기). 반려되는 순간 결재건은 `REJECTED` 로 닫혀 그 묶음에서 빠지므로, **반려
+ * 사유 상자가 서는 바로 그 줄에는 그림이 없다.** 그래서 이 조회가 따로 필요했다 — 「이미 와 있는
+ * 자료」로는 닿지 않는다.
+ *
+ * ── 🔴 **「같은 사건인가」를 시각으로 못 박는다** ────────────────────────
+ * 결재 반려는 **한 트랜잭션에서 한 순간(`now`)으로** 단계 줄과 신청을 함께 적는다
+ * (`decidePartIssueApproval`: 단계의 `decided_at` 과 신청의 `decided_at` 이 **같은 값**이다).
+ * 그래서 두 시각이 같을 때만 짝으로 본다. 🔴 이 조건이 없으면 **엉뚱한 사람 이름이 붙는 줄**이
+ * 생긴다: 이 조각 이전에 올라간 결재건은 반려해도 신청이 `IN_APPROVAL` 이 아니라 아직 `PENDING`
+ * 이라 신청 쪽 UPDATE 가 0행이고(그 함수의 `requestRejected`), 그 신청을 **나중에 담당자가 화면에서
+ * 직접 반려**하면 사유·이름은 담당자의 것인데 결재건에는 반려 단계가 남아 있다.
+ * 🔵 「시각 두 개를 한 번만 만든다」는 약속은 시험이 글자로 못 박고 있다
+ * (`tests/part-issue-delegation.test.ts` 의 ⑤ — `new Date()` 가 한 번뿐인지 센다).
+ *
+ * 🔴 **줄이 불어나지 않는다**: 한 결재건에 `REJECTED` 단계는 많아야 하나이고(반려되는 순간 결재건이
+ * 닫혀 다음 단계가 열리지 않는다), 한 신청이 그렇게 닫히는 것도 한 번뿐이다(반려된 신청은 되살지
+ * 않는다 — `requestStatusAfterPartIssue`).
+ * 🔵 **신청마다 묻지 않는다** — 위 두 함수와 같은 까닭이다(줄이 20개면 질의가 20번이 된다).
+ */
+export async function readPartIssueRejectionActorsByRequest(requestIds: readonly string[]): Promise<Map<string, RequestDecisionActor>> {
+  const out = new Map<string, RequestDecisionActor>();
+  const ids = [...new Set(requestIds)];
+  if (ids.length === 0) return out;
+
+  const rows = await db()
+    .select({
+      requestId: stockIssueApprovals.requestId,
+      approverSub: stockIssueApprovalSteps.approverSub,
+      approverName: stockIssueApprovalSteps.approverName,
+      decidedAt: stockIssueApprovalSteps.decidedAt,
+      decidedBySub: stockIssueApprovalSteps.decidedBySub,
+      decidedByName: stockIssueApprovalSteps.decidedByName,
+    })
+    .from(stockIssueApprovalSteps)
+    .innerJoin(stockIssueApprovals, eq(stockIssueApprovals.id, stockIssueApprovalSteps.approvalId))
+    // 🔴 **신청 표까지 잇는 까닭은 시각 하나 때문이다**(위 머리말) — 값은 한 칸도 가져오지 않는다.
+    .innerJoin(stockRequests, and(eq(stockRequests.id, stockIssueApprovals.requestId), eq(stockRequests.decidedAt, stockIssueApprovalSteps.decidedAt)))
+    .where(and(inArray(stockIssueApprovals.requestId, ids), eq(stockIssueApprovalSteps.status, "REJECTED")));
+
+  for (const r of rows) {
+    // 🔴 갈래를 가르는 자리는 `approvalStepActor` 하나다 — 화면도 여기도 다시 적지 않는다.
+    //    🔵 번호는 **여기서 끝난다**(머리말) — `RequestDecisionActor` 에 번호를 담는 칸이 없다.
+    out.set(r.requestId, {
+      approverName: r.approverName,
+      decidedBy: approvalStepActor({ approverSub: r.approverSub, decidedAt: r.decidedAt, decidedBySub: r.decidedBySub, decidedByName: r.decidedByName }),
+    });
+  }
+  return out;
 }

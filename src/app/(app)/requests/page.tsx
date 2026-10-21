@@ -2,10 +2,11 @@ import { RequestManagerScreen } from "@/components/stock/RequestManagerScreen";
 import { isPartIssueApprovalRouteInForce, partIssueLockFor, type PartIssueLock } from "@/lib/approval/part-issue-gate";
 import { listOpenPartIssueStatusesByRequest } from "@/lib/approval/part-issue";
 import type { IssueApprovalTrailView } from "@/lib/approval/part-issue-screen";
-import { readPartIssueTrailsByRequest } from "@/lib/approval/part-issue-screen-data";
+import { readPartIssueRejectionActorsByRequest, readPartIssueTrailsByRequest } from "@/lib/approval/part-issue-screen-data";
 import { getCurrentApprovalRoute } from "@/lib/approval/queries";
 import { roleAtLeast } from "@/lib/auth/role";
 import { requireRole } from "@/lib/auth/session";
+import type { RequestDecisionActor } from "@/lib/stock/codes";
 import { requestDecisionNotice, requestSavedNotice, type RequestNotice } from "@/lib/stock/request-notice";
 import { listAllRequests } from "@/lib/stock/requests";
 
@@ -67,10 +68,19 @@ export default async function RequestsPage({ searchParams }: { searchParams: Pro
    *    🔵 **여기(서버)서만 읽는다.** 화면 조각은 클라이언트 묶음이라 `server-only` 사슬을 물면 빌드가
    *       깨진다 — 아래 `issueTrails` 는 **값만** 내려간다.
    */
-  const [route, openApprovals, trailsByRequest] = await Promise.all([
+  /**
+   * ④ **반려 사유 상자에 누구 이름을 적을까** (2026-10-22). 결재에서 반려된 신청만 들어 있다.
+   *    🔴 **③(진행 그림)으로는 닿지 않는다** — 그쪽은 **살아 있는** 결재건만 읽는데, 반려되는 순간
+   *       결재건은 닫혀 그 묶음에서 빠진다. 그래서 조회가 하나 더 선다(그 함수 머리말에 까닭).
+   *    🔴 **신청에 적힌 `decided_by_name` 은 실제로 누른 사람이다** — 대리인이 반려하면 그 이름이
+   *       결재선에 적힌 분과 갈려, 같은 반려를 알림 종과 이 화면이 **다른 사람 이름으로** 말했다.
+   *       🔵 그 칸은 **건드리지 않는다**(감사 쪽이 그 값을 쓴다). 보여 줄 때 두 이름을 합칠 뿐이다.
+   */
+  const [route, openApprovals, trailsByRequest, decisionActorsByRequest] = await Promise.all([
     getCurrentApprovalRoute("PART_ISSUE"),
     listOpenPartIssueStatusesByRequest(requests.map((r) => r.id)),
     readPartIssueTrailsByRequest(requests.map((r) => r.id)),
+    readPartIssueRejectionActorsByRequest(requests.map((r) => r.id)),
   ]);
   const approvalRequired = isPartIssueApprovalRouteInForce(route);
   const issueLocks: Record<string, PartIssueLock> = {};
@@ -80,6 +90,9 @@ export default async function RequestsPage({ searchParams }: { searchParams: Pro
   }
   // 🔵 `Map` 이 아니라 평범한 객체로 내려보낸다 — 바로 위 `issueLocks` 와 같은 모양이어야 화면이 둘을 같게 다룬다.
   const issueTrails: Record<string, IssueApprovalTrailView> = Object.fromEntries(trailsByRequest);
+  // 🔵 위 셋과 **같은 모양**으로 내려보낸다(신청 id → 값). 🔴 번호는 들어 있지 않다 — 갈래 판정은
+  //    서버가 끝냈고(`approvalStepActor`), 내려가는 것은 이름과 갈래뿐이다.
+  const decisionActors: Record<string, RequestDecisionActor> = Object.fromEntries(decisionActorsByRequest);
 
   /**
    * 🔴 **지금 보는 사람의 id** — 화면이 「내가 낸 신청인가」를 가려 [신청 취소]를 그린다 (2026-10-15).
@@ -97,6 +110,7 @@ export default async function RequestsPage({ searchParams }: { searchParams: Pro
       approvalRequired={approvalRequired}
       issueLocks={issueLocks}
       issueTrails={issueTrails}
+      decisionActors={decisionActors}
     />
   );
 }

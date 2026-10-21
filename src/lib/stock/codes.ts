@@ -8,6 +8,15 @@ import type { RequestSource, RequestStatus } from "@/db/schema/stock-requests";
  * (`partIssueLockFor`) — 여기서는 받은 값을 **읽기만** 한다.
  */
 import type { PartIssueLock } from "@/lib/approval/part-issue-gate";
+/**
+ * 🔴 **여기만 값을 가져온다 — 그래서 파일이 따로 서 있다.** 「원래 결재권자 (대리인 대리)」 한
+ * 덩이를 짓는 함수인데, 그것이 있던 `part-issue-screen.ts` 는 위 주석의 그 고리를 타므로 값으로는
+ * 가져올 수 없었다. 이 파일(`delegate-label.ts`)은 `delegation.ts` 하나만 가져오고 그 파일은
+ * 아무것도 가져오지 않아 **고리가 생기지 않는다**(그쪽 머리말). 글자를 여기 한 벌 더 적지 않는
+ * 까닭은 결재선 그림과 알림 종이 **같은 말을 해야** 하기 때문이다.
+ */
+import { approvalDecidedByName } from "@/lib/approval/delegate-label";
+import type { ApprovalStepActor } from "@/lib/approval/delegation";
 
 /**
  * 수량 변경 기록의 코드값 → 화면 글자 (DESIGN 4-1절). 저장은 영문, 화면은 한글. 화면 전체가 이 표 하나를 쓴다.
@@ -442,23 +451,63 @@ export interface RequestDecisionNoteView {
   label: string;
   tone: ReasonBoxTone;
   note: string;
-  /** 결정한 사람. 🔴 옛 줄은 비어 있을 수 있어 `null` 을 빈 글자로 눕힌다 — 화면이 「null」을 찍지 않게. */
+  /**
+   * 결정한 사람. 🔴 옛 줄은 비어 있을 수 있어 `null` 을 빈 글자로 눕힌다 — 화면이 「null」을 찍지 않게.
+   * 🔴 **결재에서 반려된 신청이면 「원래 결재권자 (대리인 대리)」 한 덩이다**(2026-10-22, 아래 참조).
+   */
   byName: string;
   /** 결정한 때. 없으면 `null` 이고, 그때 화면은 **아랫줄에서 시각만 뺀다**(상자는 그대로 선다). */
   at: string | null;
 }
 
-export function requestDecisionNote(request: {
-  status: RequestStatus;
-  closed: boolean;
-  decisionNote: string;
-  decidedByName: string | null;
-  decidedAt: string | null;
-}): RequestDecisionNoteView | null {
+/**
+ * 🔴 **결재 단계에서 반려된 신청에만 있다** (2026-10-22). 서버가 그 반려 단계 줄을 찾아 실어
+ * 보내고(`approval/part-issue-screen-data.ts` 의 `readPartIssueRejectionActorsByRequest`), 아니면
+ * `null` 이다 — 담당자가 화면에서 직접 반려·마감한 신청, 실행 대기에서 막힌 신청이 그렇다.
+ *
+ * 🔵 **번호가 없다.** 「본인이 눌렀나 · 대리인이 눌렀나 · 옛 줄인가」를 번호 둘로 가리는 일은
+ *    서버가 `approvalStepActor` 로 끝낸다 — 신원을 가리키는 포털 번호가 브라우저로 실려 나가지
+ *    않게 하려는 것이고, 결재선 그림이 `skipped`·`decidedBy` 만 받는 것과 **같은 자리·같은 까닭**이다.
+ */
+export interface RequestDecisionActor {
+  /** 🔴 **결재선에 적힌 분** = 원래 결재권자. 대리인이 눌러도 이 이름은 바뀌지 않는다. */
+  approverName: string;
+  /** 🔴 **그 자리에서 실제로 누가 눌렀나** — 갈래 넷. */
+  decidedBy: ApprovalStepActor;
+}
+
+/**
+ * @param decidedVia 🔴 **기본값을 두지 않는다**(이 파일의 `RequestFilterRow` 와 같은 까닭). 두면
+ *   부르는 자리가 늘 때 아무 말 없이 「결재 반려가 아님」으로 굳어, **그 화면에서만 대리인 이름이
+ *   사라진다** — 오류가 아니라 **빠짐**이라 아무도 신고하지 않는다. 결재와 상관없는 자리에서는
+ *   `null` 을 **적어서** 넘긴다.
+ *
+ * ── 🔴 **이름 둘이 갈리는 길은 위임 하나뿐이다** (2026-10-22) ───────────
+ * 신청에 적힌 `decided_by_name` 은 **실제로 누른 사람**이다(집행이 그렇게 적고, 감사 쪽이 그
+ * 값을 쓴다 — 그 칸은 그대로 둔다). 그런데 대리인이 반려하면 그 이름이 **결재선에 적힌 분과
+ * 달라져**, 같은 반려를 알림 종은 「김○○ 반려」로 반려 사유 상자는 「이○○ 반려」로 말했다.
+ *
+ * 🔵 **기준은 결재선 그림이 세워 두었다 — 원래 결재권자가 주(主), 대리인이 종(從).** 그래서 여기도
+ *    결재선에 적힌 분을 앞에 세우고 누른 사람을 괄호로 매단다. 글자를 짓는 함수가 **그림·종과
+ *    같은 하나**(`approvalDecidedByName`)라 세 자리가 갈라질 수 없다.
+ * 🔴 **갈래를 여기서 다시 가르지 마라** — `UNRECORDED`(옛 줄)는 「본인」이 **아닌데** 화면에서는
+ *    이름 하나만 보여야 하고, 그 미묘한 약속은 그 함수 한 곳에만 적혀 있다.
+ */
+export function requestDecisionNote(
+  request: {
+    status: RequestStatus;
+    closed: boolean;
+    decisionNote: string;
+    decidedByName: string | null;
+    decidedAt: string | null;
+  },
+  decidedVia: RequestDecisionActor | null,
+): RequestDecisionNoteView | null {
   const note = request.decisionNote.trim();
   if (note === "") return null;
   const label = request.closed ? DECISION_NOTE_LABEL_CLOSED : request.status === "REJECTED" ? DECISION_NOTE_LABEL_REJECTED : DECISION_NOTE_LABEL_OTHER;
-  return { label, tone: DECISION_NOTE_TONE, note, byName: request.decidedByName ?? "", at: request.decidedAt };
+  const byName = decidedVia === null ? (request.decidedByName ?? "") : approvalDecidedByName(decidedVia.approverName, decidedVia.decidedBy);
+  return { label, tone: DECISION_NOTE_TONE, note, byName, at: request.decidedAt };
 }
 
 /* ------------------------------------------------------------------ */
