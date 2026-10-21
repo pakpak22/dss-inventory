@@ -225,6 +225,34 @@ export const stockIssueApprovalSteps = pgTable(
     status: stockIssueApprovalStepStatusEnum("status").notNull().default("REQUESTED"),
     requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
     decidedAt: timestamp("decided_at", { withTimezone: true }),
+    /**
+     * 🔴 **실제로 누른 사람**의 포털 번호와 그때의 이름 (2026-10-21, 결재권 위임).
+     *
+     * 이 표에는 원래 「누가 눌렀는가」 칸이 없었다. 적힌 사람(`approver_sub`)만 누를 수 있게
+     * 막아 두어 **「적힌 사람 = 누른 사람」이 언제나 참**이었기 때문이다. **위임이 그 전제를
+     * 깬다** — 대리인이 누르면 둘이 달라진다(`src/db/schema/approval-delegations.ts`).
+     *
+     * 🔴 **값은 세 가지 뜻을 가진다:**
+     *  · `NULL` — **이 칸이 생기기 전**에 결재된 옛 줄이다. 🔴 **「본인이 눌렀다」는 뜻이
+     *    아니다.** 옛 줄에는 누가 눌렀는지가 어디에도 안 적혀 있다(그때는 적힐 자리가 없었다).
+     *    그 둘을 같은 것으로 읽으면 과거를 지어내게 된다.
+     *  · `decided_by_sub = approver_sub` — **본인**이 눌렀다.
+     *  · `decided_by_sub <> approver_sub` — **대리인**이 눌렀다.
+     *
+     * 🔵 **앞으로는 본인이 눌러도 언제나 적는다**(쓰는 것은 다음 조각의 일이다). 본인일 때
+     * 비워 두면 「본인」과 「옛날 것」이 **같은 모양**이 되어 영영 가를 수 없다 — 그 순간 위의
+     * 세 갈래가 둘로 뭉개지고, 「대리인이 누른 건을 전부 보여 달라」에 답할 수 없게 된다.
+     *
+     * 🔴 **nullable 이다.** 옛 줄이 살아남아야 한다 — NOT NULL 로 올리면 이미 결재된 줄들
+     * 때문에 마이그레이션이 그 자리에서 멈춘다(`approval_route_steps.approver_sub` 를 nullable
+     * 로 둔 것과 같은 까닭).
+     *
+     * 🔴 **아래 `…_decision_metadata` CHECK 에 이 칸을 끌어들이지 마라.** 그 제약은
+     * `status`·`decided_at`·`note` 만 본다. 거기에 「결정됐으면 누른 사람도 있어야 한다」를
+     * 더하면 **옛 줄이 전부 걸려 마이그레이션이 실패한다.**
+     */
+    decidedBySub: text("decided_by_sub"),
+    decidedByName: text("decided_by_name"),
     /** 결재자가 남기는 한마디. 반려면 **사유**이고 비어 있을 수 없다(아래 CHECK). */
     note: text("note").notNull().default(""),
   },

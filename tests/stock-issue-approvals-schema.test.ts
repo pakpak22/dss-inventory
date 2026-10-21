@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { getTableConfig } from "drizzle-orm/pg-core";
+import { getTableConfig, PgDialect } from "drizzle-orm/pg-core";
 import { stockIssueApprovalSteps, stockIssueApprovals } from "../src/db/schema/stock-issue-approvals";
 import { stockRequests } from "../src/db/schema/stock-requests";
 import { approvalRoutes } from "../src/db/schema/approval-routes";
@@ -184,5 +184,48 @@ describe("stock_issue_approval_steps — 칸", () => {
 
   it("단계 차례 1 이상과 결정 칸의 짝을 DB 가 막는다", () => {
     assert.deepEqual(steps.checks.map((c) => c.name).sort(), ["stock_issue_approval_steps_decision_metadata", "stock_issue_approval_steps_step_order_positive"]);
+  });
+});
+
+/**
+ * 🔴 **누가 눌렀는가** (2026-10-21, 결재권 위임 조각 1).
+ *
+ * 이 표에는 원래 그 칸이 없었다 — 적힌 사람만 누를 수 있게 막아 두어 「적힌 사람 = 누른
+ * 사람」이 언제나 참이었기 때문이다. **위임이 그 전제를 깬다.**
+ */
+describe("stock_issue_approval_steps — 누가 눌렀는가 칸 둘", () => {
+  it("🔴 둘 다 **널 허용**이다 — 옛 줄이 살아남아야 한다", () => {
+    for (const name of ["decided_by_sub", "decided_by_name"]) {
+      const col = columnOf(steps, name);
+      assert.ok(col, `${name} 이 없으면 대리인이 누른 건을 가려낼 길이 없다`);
+      assert.equal(col.getSQLType(), "text", "포털 번호는 users.auth_sub 와 같은 모양이라야 비교가 어긋나지 않는다");
+      assert.equal(
+        col.notNull,
+        false,
+        "NOT NULL 로 올리면 이미 결재된 옛 줄들 때문에 마이그레이션이 그 자리에서 멈춘다",
+      );
+    }
+  });
+
+  it("🔵 `…_sub` 다 — A/S 번호가 아니라 **포털 번호**를 적는다", () => {
+    // 이름이 열쇠를 지킨다. `decided_by_user_id` 였다면 다음 사람이 거기에 `users.id` 를
+    // 넣고, 그 순간 「본인인가 대리인인가」 판정이 언제나 「대리인」이 된다.
+    assert.equal(columnOf(steps, "decided_by_user_id"), undefined);
+    assert.equal(columnOf(steps, "approver_sub")?.getSQLType(), columnOf(steps, "decided_by_sub")?.getSQLType());
+  });
+
+  it("🔴 기존 decision_metadata CHECK 가 **안 바뀌었다** — 새 칸을 끌어들이면 옛 줄이 전부 걸린다", () => {
+    const found = steps.checks.find((c) => c.name === "stock_issue_approval_steps_decision_metadata");
+    assert.ok(found);
+    const rendered = new PgDialect().sqlToQuery(found.value).sql;
+    assert.doesNotMatch(
+      rendered,
+      /decided_by/,
+      "그 제약은 status·decided_at·note 만 본다. 「결정됐으면 누른 사람도 있어야 한다」를 더하면 마이그레이션이 실패한다",
+    );
+    // 보던 것 셋은 그대로 본다 — 약하게 만들지 않는다.
+    for (const fragment of ["status = 'REQUESTED' AND decided_at IS NULL", "status = 'APPROVED' AND decided_at IS NOT NULL", "status = 'REJECTED' AND decided_at IS NOT NULL AND note <> ''"]) {
+      assert.ok(rendered.includes(fragment), `사라진 갈래: ${fragment}`);
+    }
   });
 });

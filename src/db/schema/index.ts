@@ -14,4 +14,5 @@ export * from "./workbook-states";
 export * from "./workbook-apply-logs";
 export * from "./oh-templates";
 export * from "./approval-routes";
+export * from "./approval-delegations";
 export * from "./stock-issue-approvals";
