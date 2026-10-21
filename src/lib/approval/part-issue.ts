@@ -13,6 +13,9 @@ import type { IssueQuantity } from "@/lib/stock/issue";
 import type { Actor } from "@/lib/stock/ledger";
 import { confirmRequest, issuedTotalForRequest } from "@/lib/stock/requests";
 import { users } from "@/db/schema/users";
+// 🔴 「누를 수 있는 번호 목록」은 저장소에 한 자리에서만 만들어진다 — 아래 세 조회·집행이 전부
+//    이것을 부른다(까닭은 `./delegation.ts` 의 `actingApproverSubs`).
+import { actingApproverSubsFor } from "./delegation-queries";
 import {
   checkCanCancelPartIssue,
   checkCanDecidePartIssue,
@@ -289,8 +292,14 @@ export type DecidePartIssueResult =
 /**
  * 내 차례의 단계를 승인하거나 반려한다.
  *
- * 🔴 **내 차례일 때만** 받는다 — 단계 줄을 `(결재건, status = 'REQUESTED', 결재자 = 나)` 로
- * 집는다. 「관리자면 대신 누를 수 있다」는 길을 두지 않는다(규칙 파일의 `mayDecidePartIssueStep`).
+ * 🔴 **내 차례일 때만** 받는다 — 단계 줄을 `(결재건, status = 'REQUESTED', 결재자 ∈ 내가 지금
+ * 쓸 수 있는 번호들)` 로 집는다. 「관리자면 대신 누를 수 있다」는 길을 두지 않는다(규칙 파일의
+ * `mayDecidePartIssueStep`).
+ *
+ * 🔴 **번호가 하나가 아니라 목록인 것이 결재권 위임이다**(2026-10-21, 조각 2). 목록을 만드는
+ * 함수는 저장소에 하나뿐이고(`./delegation.ts` 의 `actingApproverSubs`), 목록·알림 종·순수
+ * 판정도 **같은 함수**에서 받는다. 위임이 하나도 없으면 목록은 본인 번호 하나뿐이라 예전과
+ * 한 글자도 다르지 않게 돈다.
  *
  * 🔵 `note` 는 **반려 사유**다. 승인에는 한마디를 받지 않으므로(2026-10-15 결정, 화면에 칸이
  * 없고 서버 액션도 승인일 때는 읽지 않는다) 승인으로 올 때는 언제나 빈 글자다 — 표의
@@ -312,6 +321,13 @@ export async function decidePartIssueApproval(
   }
 
   return db().transaction(async (tx): Promise<DecidePartIssueResult> => {
+    /**
+     * 🔴 **한 순간으로 판정하고 그 순간을 적는다** (2026-10-21, 결재권 위임). 아래에서 위임이
+     *    살아 있나를 재는 시각과 단계 줄에 적히는 `decided_at` 이 **같은 값**이어야 한다. 갈리면
+     *    기간이 끝나는 즈음에 눌린 결재가 「그때 유효했는가」에 두 답을 갖는다.
+     */
+    const now = new Date();
+
     // 1. 🔴 결재건 행을 먼저 잠근다. 두 단계가 동시에 결재되거나, 결재와 거두기가 엇갈려
     //    사슬이 갈라지는 것을 막는다. 트랜잭션이 끝나면 저절로 풀린다.
     const [head] = await tx
@@ -357,13 +373,33 @@ export async function decidePartIssueApproval(
     const [requester] = await tx.select({ sub: users.authSub }).from(users).where(eq(users.id, head.requestedBy));
     const requesterSub = requester?.sub ?? null;
 
-    // 3. 내 차례의 단계 줄을 집는다. 🔴 **포털 번호로** 집는다 — A/S 번호로 집으면 아무도 자기
-    //    차례를 못 집는다. 상태를 WHERE 에 걸었으므로 두 번 누르면 두 번째는 0행이다.
-    const now = new Date();
+    /**
+     *    (다) 🔴 **지금 내 자격으로 누를 수 있는 결재자 번호 전부** — 본인 + 지금 대신할 수 있는
+     *         결재권자들(2026-10-21, 결재권 위임).
+     *
+     * 🔴 **읽기와 쓰기가 같은 트랜잭션 안에 있어야 한다.** 그래서 `tx` 를 넘긴다 — 밖에서 읽으면
+     *    읽은 뒤 아래에서 집기 전 사이에 위임이 끝나거나 되돌려질 수 있고, 그때 **권한이 없는데
+     *    통과한** 결재가 한 건 남는다. 🔵 함수의 기본값이 `db()` 라 안 넘겨도 오류는 나지 않는다.
+     * 🔵 결재건 행을 이미 `FOR UPDATE` 로 잡아 둔 뒤라, 이 읽기가 길어져도 사슬이 갈라지지 않는다.
+     */
+    const actingSubs = await actingApproverSubsFor(actor.sub, tx, now);
+
+    /**
+     * 3. 내 차례의 단계 줄을 집는다. 🔴 **포털 번호로** 집는다 — A/S 번호로 집으면 아무도 자기
+     *    차례를 못 집는다. 상태를 WHERE 에 걸었으므로 두 번 누르면 두 번째는 0행이다.
+     *
+     * 🔴 **`inArray` 인 것이 위임이다**(위 (다)). 위임이 하나도 없으면 목록은 본인 번호 하나뿐이라
+     *    `eq` 와 **한 글자도 다르지 않게** 돈다. 색인(`…_approver_sub_idx`)도 그대로 탄다.
+     * 🔴 **`approver_sub` 는 건드리지 않는다** — 그 줄이 **누구 자리였는지**는 그대로 남아야 한다.
+     *    대리인이 눌렀다고 그 칸을 덮으면 「원래 누가 결재하게 돼 있었나」가 사라진다.
+     * 🔴 **`decided_by_*` 는 본인이 눌러도 언제나 적는다.** 비워 두면 「본인이 눌렀다」와 「이 칸이
+     *    생기기 전」이 **같은 모양**이 되어 영영 가를 수 없다(표 쪽 주석의 세 갈래). 그래서 승인·반려
+     *    **둘 다** 적는다 — 여기 한 자리가 둘을 함께 쓴다.
+     */
     const [step] = await tx
       .update(stockIssueApprovalSteps)
-      .set({ status: decision, decidedAt: now, note })
-      .where(and(eq(stockIssueApprovalSteps.approvalId, approvalId), eq(stockIssueApprovalSteps.status, "REQUESTED"), eq(stockIssueApprovalSteps.approverSub, actor.sub)))
+      .set({ status: decision, decidedAt: now, note, decidedBySub: actor.sub, decidedByName: actor.name })
+      .where(and(eq(stockIssueApprovalSteps.approvalId, approvalId), eq(stockIssueApprovalSteps.status, "REQUESTED"), inArray(stockIssueApprovalSteps.approverSub, [...actingSubs])))
       .returning({ stepOrder: stockIssueApprovalSteps.stepOrder });
     if (!step) return { ok: false, message: "지금 결재할 차례가 아닙니다. 화면을 새로 고치고 다시 보십시오." };
 
@@ -657,10 +693,16 @@ function toView(r: ListRow): PartIssueView {
  * 그대로 남아 있기 때문이다(`cancelPartIssueApproval` 주석). 색인
  * `stock_issue_approval_steps_approver_sub_idx`(포털 번호, 상태)를 탄다.
  * 🔵 차례는 **오래 기다린 것이 위** — 일감 줄이다.
+ *
+ * 🔴 **대신할 수 있는 사람의 차례도 함께 온다**(2026-10-21, 결재권 위임). 여기를 빼먹으면
+ * 대리인 화면에 그 건이 **아예 안 보인다** — 종은 울리는데 가 보면 없는 꼴이 된다. 번호 목록을
+ * 만드는 함수는 저장소에 하나뿐이고(`./delegation.ts` 의 `actingApproverSubs`), 집행·알림 종·
+ * 순수 판정도 **같은 함수**에서 받는다.
  */
 export async function listPartIssueApprovalsToDecide(approverSub: string): Promise<PartIssueView[]> {
+  const actingSubs = await actingApproverSubsFor(approverSub);
   const rows = await listSelect()
-    .where(and(eq(stockIssueApprovals.status, "PENDING_APPROVAL"), eq(stockIssueApprovalSteps.approverSub, approverSub)))
+    .where(and(eq(stockIssueApprovals.status, "PENDING_APPROVAL"), inArray(stockIssueApprovalSteps.approverSub, [...actingSubs])))
     .orderBy(asc(stockIssueApprovals.requestedAt));
   return rows.map(toView);
 }
@@ -819,23 +861,30 @@ export async function listOpenPartIssueApprovalsByRequest(requestIds: readonly s
  * 것은 숫자 둘뿐이다.
  *
  * 🔴 **①과 똑같은 묶음을 세야 한다**: (가) 결재건이 `PENDING_APPROVAL` (나) 단계가
- * `REQUESTED` (다) 그 단계의 `approver_sub` 가 나. 셋이 갈리면 「종에는 N건인데 눌러 보면
- * 다른 수」가 된다. ①은 (나)를 `leftJoin` 의 ON 에 걸고 여기는 WHERE 에 거는데, 여기는
- * `innerJoin` 이라 **같은 줄만 남는다**(열린 단계가 없는 건은 애초에 빠진다).
+ * `REQUESTED` (다) 그 단계의 `approver_sub` 가 **내가 지금 쓸 수 있는 번호들 안에** 있다.
+ * 셋이 갈리면 「종에는 N건인데 눌러 보면 다른 수」가 된다. ①은 (나)를 `leftJoin` 의 ON 에 걸고
+ * 여기는 WHERE 에 거는데, 여기는 `innerJoin` 이라 **같은 줄만 남는다**(열린 단계가 없는 건은
+ * 애초에 빠진다).
+ *
+ * 🔴 (다)의 번호 목록은 ①·집행·순수 판정과 **같은 함수**에서 받는다(`./delegation.ts` 의
+ * `actingApproverSubs`). 여기만 빼먹으면 **대리인에게 종이 안 울린다** — 화면에는 있는데
+ * 알림이 없는, 아무도 신고하지 않는 결함이 된다.
  *
  * 🔵 **색인**: `stock_issue_approval_steps_approver_sub_idx` 가 `(approver_sub, status)` 라
- * (나)·(다) 둘 다 **등호**로 그 색인에 그대로 얹힌다. 거기서 남는 줄은 보통 한 자릿수이고,
+ * (나)는 등호로, (다)는 `IN`(번호마다 한 번씩)으로 그 색인에 그대로 얹힌다 — 목록이 보통 한
+ * 칸(위임 없음)이고 많아야 몇 칸이라 등호 때와 다르지 않다. 거기서 남는 줄은 보통 한 자릿수이고,
  * 결재건은 기본 키(`stock_issue_approvals.id`)로 하나씩 되짚는다. ①이 타는 길과 같다.
  *
  * @param approverSub 🔴 **포털 번호**(`users.auth_sub` · 세션의 `sub`). `users.id` 를 넘기면
  *   **영원히 0건**이다(①의 주석 — 실제로 있었던 결함이다).
  */
 export async function summarizePartIssueApprovalsToDecide(approverSub: string): Promise<{ count: number; oldestAt: Date | null }> {
+  const actingSubs = await actingApproverSubsFor(approverSub);
   const [r] = await db()
     .select({ n: count(), oldest: min(stockIssueApprovals.requestedAt) })
     .from(stockIssueApprovalSteps)
     .innerJoin(stockIssueApprovals, eq(stockIssueApprovals.id, stockIssueApprovalSteps.approvalId))
-    .where(and(eq(stockIssueApprovalSteps.approverSub, approverSub), eq(stockIssueApprovalSteps.status, "REQUESTED"), eq(stockIssueApprovals.status, "PENDING_APPROVAL")));
+    .where(and(inArray(stockIssueApprovalSteps.approverSub, [...actingSubs]), eq(stockIssueApprovalSteps.status, "REQUESTED"), eq(stockIssueApprovals.status, "PENDING_APPROVAL")));
   // 드라이버가 timestamptz 를 Date 로 주지만 집계는 글자로 올 수도 있다 — 둘 다 받는다
   // (`stock/requests.ts` 의 `summarizePendingRequests` 와 같은 모양).
   const oldest = (r?.oldest ?? null) as Date | string | null;

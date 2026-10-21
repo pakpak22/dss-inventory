@@ -21,8 +21,9 @@
  * 안 맞는 결함이라 눈으로도 시험으로도 잘 안 잡힌다(까닭은 `./directory.ts` 머리말).
  * 그래서 이 파일의 매개변수 이름은 전부 `…Sub` 다. **장식이 아니다.**
  *
- * 🔵 실제 결재 판정·목록·알림 종이 이 함수들을 부르는 것은 **다음 조각의 일**이다. 지금 이
- * 파일을 부르는 곳은 시험뿐이다.
+ * 🔵 실제 결재 판정·목록·알림 종이 이 함수들을 부른다(2026-10-21, 조각 2). 표를 읽어 오는 일은
+ * `./delegation-queries.ts` 가 하고, 「누를 수 있나」를 네 곳이 한 벌로 보는 자리가 아래
+ * `actingApproverSubs` 다.
  * ============================================================================
  */
 
@@ -109,4 +110,51 @@ export function delegatorSubsFor(
     out.push(delegation.delegatorSub);
   }
   return out;
+}
+
+/**
+ * 「지금 이 사람의 자격으로 누를 수 있는 결재자 번호」 전부.
+ *
+ * 🔴 **빈 적이 없다** — 맨 앞은 언제나 본인이다. 그래서 타입이 **빈 목록을 허락하지 않는
+ * 꼴**(`[string, ...string[]]`)이다. 빈 목록이 나올 수 있으면 아래 DB 쪽에서 `inArray(…, [])`
+ * 가 되고, drizzle 은 그것을 `false` 로 굽는다 — **아무도 아무것도 못 누르는데 오류는 나지
+ * 않는** 자리가 된다(`plan.steps` 를 같은 꼴로 둔 까닭과 같다).
+ */
+export type ActingApproverSubs = readonly [string, ...string[]];
+
+/**
+ * 🔴 **「누를 수 있나」가 두 벌로 적히는 것을 막는 자리다.**
+ *
+ * 이 판정이 필요한 곳은 넷이다 — 집행(`decidePartIssueApproval` 의 조건절) · 목록
+ * (`listPartIssueApprovalsToDecide`) · 알림 종(`summarizePartIssueApprovalsToDecide`) · 순수
+ * 판정(`mayDecidePartIssueStep`). 앞 셋은 SQL 이고 넷째는 TS 라 **같은 코드를 쓸 수 없다.**
+ * 그래서 둘이 보는 **번호 목록을 이 함수 하나가 만든다**: DB 쪽은 이 목록을 `inArray` 에 그대로
+ * 넣고, 순수 쪽은 「이 목록에 들어 있나」를 본다.
+ *
+ * 규칙을 두 벌 적으면 「종에는 뜨는데 눌리지 않는」(또는 그 반대의) 짝이 생기고, 그 어긋남은
+ * 오류가 아니라 **사람이 포기할 때까지 조용하다.** 2026-10-21 전까지 실제로 두 벌이었다 —
+ * 운영은 조건절 쪽을 쓰고 `mayDecidePartIssueStep` 은 시험만 불렀다.
+ *
+ * ── 🔴 위임은 **넘기는 것이 아니라 늘리는 것**이다 ──────────────────────
+ * 본인 번호가 언제나 맨 앞에 남는다. 자리를 비우며 맡겨 둔 사람이 중간에 들어와 직접 눌러도
+ * 막히지 않는다 — 막으면 「맡겼더니 내가 못 누른다」가 되고, 그것은 아무도 바란 적 없는 일이다.
+ *
+ * ── 🔴 늘어나는 것은 **대리인 자격뿐**이다 ──────────────────────────────
+ * 이 목록에 들어오는 번호는 **지금 살아 있는 위임의 결재권자**뿐이다(`delegatorSubsFor`).
+ * 관리자라고 남의 번호가 여기 들어오지 않고, 그래서 「관리자라고 남의 단계를 대신 누를 수
+ * 없다」는 울타리가 그대로 선다. 두 겹(A→B·B→C)이 안 이어지는 것도 그 함수가 지킨다.
+ *
+ * 🔵 차례에는 뜻이 없다 — 본인이 맨 앞인 것만 정해 두고(값이 달라지지 않게), 나머지는
+ *    `delegatorSubsFor` 가 준 차례 그대로다.
+ *
+ * @param actorSub 「지금 누르려는 사람」의 **포털 번호**. 🔴 `users.id` 나 A/S 번호를 넘기면
+ *   위임은 하나도 안 붙고 **그 틀린 값 하나짜리 목록**이 돌아간다 — 오류 없이 영원히 0건이 된다
+ *   (`delegatorSubsFor` 의 같은 주의).
+ */
+export function actingApproverSubs(
+  delegations: readonly ApprovalDelegationPeriod[],
+  actorSub: string,
+  now: Date,
+): ActingApproverSubs {
+  return [actorSub, ...delegatorSubsFor(delegations, actorSub, now)];
 }

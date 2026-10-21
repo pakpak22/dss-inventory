@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  actingApproverSubs,
   delegatorSubsFor,
   isActiveDelegation,
   type ApprovalDelegationPeriod,
@@ -179,5 +180,62 @@ describe("④ 🔴 이어 붙지 않는다 — 위임은 한 겹이다", () => {
     const loop = [delegation("a", "b"), delegation("b", "a")];
     assert.deepEqual(delegatorSubsFor(loop, sub("a"), at), [sub("b")]);
     assert.deepEqual(delegatorSubsFor(loop, sub("b"), at), [sub("a")]);
+  });
+});
+
+/**
+ * ============================================================================
+ * ⑤ 🔴 네 자리가 함께 보는 **번호 목록** (2026-10-21, 조각 2)
+ * ============================================================================
+ * 같은 「누를 수 있나」가 네 곳에 필요하고 셋은 SQL 이다(집행·목록·알림 종의 조건절). SQL 과
+ * TS 가 같은 코드를 쓸 수 없으니 **둘이 보는 번호 목록을 이 함수 하나가 만든다.** 여기서 못
+ * 박는 것이 그 목록의 모양이고, 그것이 곧 네 자리의 약속이다.
+ */
+describe("⑤ 지금 내 자격으로 누를 수 있는 번호들 (actingApproverSubs)", () => {
+  const at = new Date("2026-10-04T12:00:00.000Z");
+
+  it("🔴 위임이 하나도 없으면 **본인 번호 하나뿐**이다 — 네 자리가 예전과 한 글자도 다르지 않게 돈다", () => {
+    // 🔴 이것이 「위임을 넣어도 지금 동작이 안 바뀐다」의 근거다. 목록이 한 칸이면 DB 쪽
+    //    `inArray(…, [그 한 칸])` 은 `eq(…, 그 칸)` 과 같은 줄을 고른다.
+    assert.deepEqual(actingApproverSubs([], sub("kim"), at), [sub("kim")]);
+    assert.deepEqual(actingApproverSubs([delegation("park", "lee")], sub("kim"), at), [sub("kim")], "남의 위임은 내 목록을 늘리지 않는다");
+  });
+
+  it("🔴 **본인이 맨 앞에 언제나 남는다** — 위임은 넘기는 것이 아니라 늘리는 것이다", () => {
+    // 🔴 원래 결재권자(kim)가 자리를 비우며 맡겨 두고도 중간에 들어와 직접 누를 수 있어야 한다.
+    //    맡긴 사람 쪽은 목록이 늘지 않지만, **자기 번호는 그대로 남는다.**
+    assert.deepEqual(actingApproverSubs([delegation("kim", "lee")], sub("kim"), at), [sub("kim")]);
+    assert.deepEqual(actingApproverSubs([delegation("kim", "lee")], sub("lee"), at), [sub("lee"), sub("kim")]);
+  });
+
+  it("둘에게서 위임받으면 셋이 된다 — 본인 + 맡긴 두 사람", () => {
+    const rows = [delegation("kim", "lee"), delegation("park", "lee")];
+    assert.deepEqual(actingApproverSubs(rows, sub("lee"), at), [sub("lee"), sub("kim"), sub("park")]);
+  });
+
+  it("🔴 끝난 위임·되돌린 위임은 목록을 늘리지 않는다 — 본인 하나로 돌아온다", () => {
+    const ended = delegation("kim", "lee", { startsAt: new Date("2026-09-01T00:00:00.000Z"), endsAt: new Date("2026-09-10T00:00:00.000Z") });
+    const revoked = delegation("park", "lee", { revokedAt: new Date("2026-10-02T00:00:00.000Z") });
+    assert.deepEqual(actingApproverSubs([ended, revoked], sub("lee"), at), [sub("lee")]);
+  });
+
+  it("🔴 두 겹은 이어지지 않는다 — A→B·B→C 에서 C 는 A 의 번호를 못 얻는다", () => {
+    const rows = [delegation("a", "b"), delegation("b", "c")];
+    assert.deepEqual(actingApproverSubs(rows, sub("c"), at), [sub("c"), sub("b")], "A 가 맡긴 사람은 B 뿐이다");
+    assert.deepEqual(actingApproverSubs(rows, sub("b"), at), [sub("b"), sub("a")]);
+  });
+
+  it("🔴 **빈 목록이 나오는 길이 없다** — `inArray(…, [])` 는 오류 없이 모두를 막는다", () => {
+    // 🔴 drizzle 이 빈 배열을 `false` 로 굽는다. 그러면 아무도 아무것도 못 누르는데 오류는 나지
+    //    않아, 「왜 안 되지」의 답을 아무도 못 찾는다. 그래서 본인 번호가 언제나 들어간다.
+    for (const rows of [[], [delegation("kim", "lee")], [delegation("a", "b"), delegation("b", "a")]]) {
+      assert.ok(actingApproverSubs(rows, sub("cho"), at).length >= 1);
+    }
+  });
+
+  it("🔴 A/S 번호를 넘기면 **그 틀린 번호 하나짜리** 목록이다 — 위임이 하나도 안 붙는다", () => {
+    // 🔵 빈 목록이 아니라 「아무 줄도 안 맞는 번호 하나」가 된다. 어느 쪽이든 결과는 0건이고,
+    //    이 시험은 열쇠가 다시 뒤바뀌었을 때 **여기서** 깨지라고 있다.
+    assert.deepEqual(actingApproverSubs([delegation("kim", "lee")], asId("lee"), at), [asId("lee")]);
   });
 });

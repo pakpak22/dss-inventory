@@ -1,6 +1,9 @@
 import type { RequestStatus } from "@/db/schema/stock-requests";
 import { reopenedRequestStatus, type EntryType } from "@/lib/stock/codes";
 import type { IssueQuantity } from "@/lib/stock/issue";
+// 🔵 순수 → 순수 import 다. `./delegation.ts` 도 `server-only` 를 물지 않으므로 이 파일을
+//    끌어오는 화면 묶음의 빌드가 깨지지 않는다(머리말의 「화면이 쓰는 모양도 여기 둔다」).
+import type { ActingApproverSubs } from "./delegation";
 import { findNextRouteStepToApprove, type RouteStepAssignment } from "./route";
 
 /**
@@ -266,21 +269,34 @@ export type PartIssueStepAssignment = {
 /**
  * 이 사람이 **지금** 이 단계를 결재할 수 있는가.
  *
- * 🔴 조건은 둘뿐이다: 그 줄이 아직 `REQUESTED` 이고, 그 줄에 적힌 **포털 번호**가 이 사람의
- * 것이다. 「관리자면 아무 단계나 대신 누를 수 있다」 같은 예외를 **두지 않는다** — 순차
- * 승인에서 누가 승인했는지가 곧 그 건의 근거이고, 대신 누르는 길이 있으면 그 근거가 무너진다.
+ * 🔴 조건은 둘뿐이다: 그 줄이 아직 `REQUESTED` 이고, 그 줄에 적힌 **포털 번호**가 이 사람이
+ * 지금 쓸 수 있는 번호들 안에 있다. 「관리자면 아무 단계나 대신 누를 수 있다」 같은 예외를
+ * **두지 않는다** — 순차 승인에서 누가 승인했는지가 곧 그 건의 근거이고, 대신 누르는 길이
+ * 있으면 그 근거가 무너진다.
  *
- * 🔴 **매개변수 이름이 `actorSub` 인 것은 장식이 아니다.** 여기에 `users.id` 나 A/S 번호를
- * 넘기면 이 함수는 **아무에게도 참을 돌려주지 않고**, 「내가 결재할 건」은 영원히 빈 목록이
- * 된다. 코드는 맞고 값이 안 맞는 결함이라 눈으로도 시험으로도 잘 안 잡힌다 — 그래서
+ * ── 🔴 번호 **하나**가 아니라 **목록**을 받는 까닭 (2026-10-21, 결재권 위임) ─
+ * 같은 판정이 네 곳에 필요하고 셋은 SQL 이다(집행·목록·알림 종의 조건절). SQL 과 TS 가 같은
+ * 코드를 쓸 수 없으니 **둘이 보는 번호 목록을 한 함수가 만든다** — `../approval/delegation.ts`
+ * 의 `actingApproverSubs`(표를 읽어 오는 쪽은 `./delegation-queries.ts`). 여기는 그 목록에
+ * 들어 있나를 보고, 저쪽 셋은 같은 목록을 `inArray` 에 넣는다.
+ * 🔴 **그 전에는 두 벌이었다**: 운영은 조건절 쪽만 쓰고 이 함수는 시험만 불렀다. 두 벌이면
+ * 「시험은 통과하는데 운영은 막는」(또는 그 반대의) 짝이 생기고, 그 어긋남은 오류가 아니라
+ * 사람이 포기할 때까지 조용하다.
+ * 🔵 위임이 하나도 없으면 목록은 **본인 번호 하나뿐**이라 예전과 한 글자도 다르지 않게 돈다.
+ *
+ * 🔴 **매개변수에 포털 번호가 아닌 것을 넣으면 안 된다.** `users.id` 나 A/S 번호로 만든
+ * 목록을 넘기면 이 함수는 **아무에게도 참을 돌려주지 않고**, 「내가 결재할 건」은 영원히 빈
+ * 목록이 된다. 코드는 맞고 값이 안 맞는 결함이라 눈으로도 시험으로도 잘 안 잡힌다 — 그래서
  * `tests/part-issue-approval.test.ts` 에 **A/S 번호를 넘기면 거짓이 되는 시험**을 울타리로
  * 세워 두었다.
+ * 🔵 글자 하나(`string`)를 그대로 넘기는 길은 타입이 막는다. 막지 않으면 `"sub-kim".includes(…)`
+ *    가 **글자 조각 검사**로 돌아 조용히 참이 되는 자리가 생긴다.
  *
  * 🔵 결재건 자체가 아직 `PENDING_APPROVAL` 인지는 **여기서 보지 않는다**(단계 줄만 본다).
  * 그 판정은 `checkCanDecidePartIssue` 가 쥐고 있고, 서버는 둘 다 통과해야 받아 준다.
  */
-export function mayDecidePartIssueStep(step: PartIssueStepAssignment, actorSub: string): boolean {
-  return step.status === "REQUESTED" && step.approverSub === actorSub;
+export function mayDecidePartIssueStep(step: PartIssueStepAssignment, actingSubs: ActingApproverSubs): boolean {
+  return step.status === "REQUESTED" && actingSubs.includes(step.approverSub);
 }
 
 /* ------------------------------------------------------------------ */

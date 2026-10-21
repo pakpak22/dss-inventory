@@ -239,7 +239,8 @@ export const stockIssueApprovalSteps = pgTable(
      *  · `decided_by_sub = approver_sub` — **본인**이 눌렀다.
      *  · `decided_by_sub <> approver_sub` — **대리인**이 눌렀다.
      *
-     * 🔵 **앞으로는 본인이 눌러도 언제나 적는다**(쓰는 것은 다음 조각의 일이다). 본인일 때
+     * 🔵 **본인이 눌러도 언제나 적는다**(2026-10-21 조각 2부터 — `decidePartIssueApproval` 의
+     *    단계 UPDATE 한 자리가 승인·반려 둘 다에 적는다). 본인일 때
      * 비워 두면 「본인」과 「옛날 것」이 **같은 모양**이 되어 영영 가를 수 없다 — 그 순간 위의
      * 세 갈래가 둘로 뭉개지고, 「대리인이 누른 건을 전부 보여 달라」에 답할 수 없게 된다.
      *

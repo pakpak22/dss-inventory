@@ -791,7 +791,14 @@ function bodyOf(source: string, name: string): string {
 describe("🔴 남의 건은 내 종에 안 뜬다 — 가르는 열쇠는 질의의 WHERE 다", () => {
   it("「결재 차례」는 **포털 번호**(approver_sub)로 좁힌다 — 열린 단계가 내 것일 때만 센다", () => {
     const fn = bodyOf(src("src/lib/approval/part-issue.ts"), "summarizePartIssueApprovalsToDecide");
-    assert.ok(fn.includes("eq(stockIssueApprovalSteps.approverSub, approverSub)"), "결재 차례 집계가 포털 번호로 좁히지 않는다 — 남의 결재가 내 종에 뜨거나, A/S 번호라 영원히 0건이다");
+    /**
+     * 🔴 2026-10-21(결재권 위임)에 **번호 하나가 번호 목록**이 되었다. 느슨해진 것이 아니다 —
+     *    목록을 만드는 함수가 저장소에 하나뿐이고(`actingApproverSubs`), 거기 들어오는 것은 본인과
+     *    **지금 살아 있는 위임의 결재권자**뿐이다. 그래서 아래 둘을 **함께** 잰다: 목록을 그 함수에서
+     *    받는가, 그리고 그 목록으로 좁히는가. 하나만 재면 손으로 만든 목록을 넣어도 통과한다.
+     */
+    assert.ok(fn.includes("actingApproverSubsFor(approverSub)"), "결재 차례 집계가 위임 목록을 **그 함수**에서 받지 않는다 — 대리인에게 종이 안 울리거나, 아무나 세게 된다");
+    assert.ok(fn.includes("inArray(stockIssueApprovalSteps.approverSub, [...actingSubs])"), "결재 차례 집계가 포털 번호로 좁히지 않는다 — 남의 결재가 내 종에 뜨거나, A/S 번호라 영원히 0건이다");
     assert.ok(!fn.includes("approverUserId"), "A/S 번호로 좁히고 있다 — 오류 없이 영원히 0건이 된다");
     assert.ok(fn.includes('eq(stockIssueApprovalSteps.status, "REQUESTED")'), "이미 결재한 단계까지 세고 있다");
     assert.ok(fn.includes('eq(stockIssueApprovals.status, "PENDING_APPROVAL")'), "거둔 건·끝난 건까지 세고 있다");

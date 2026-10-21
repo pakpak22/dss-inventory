@@ -19,6 +19,7 @@ import {
   readIssueQuantities,
   type PartIssueStatus,
 } from "../src/lib/approval/part-issue-rules";
+import { actingApproverSubs } from "../src/lib/approval/delegation";
 import { stockIssueApprovalStatusEnum, stockIssueApprovalStepStatusEnum } from "../src/db/schema/stock-issue-approvals";
 
 /**
@@ -164,23 +165,33 @@ describe("① 결재선 단계 → 이 건이 밟을 단계 목록", () => {
 });
 
 describe("② 지금 차례가 누구인가", () => {
+  /**
+   * 🔴 **번호를 손으로 적지 않고 실제 목록 함수를 지난다**(2026-10-21, 결재권 위임). 이 판정은
+   *    DB 조건절 셋과 **같은 함수**에서 번호 목록을 받아야 하고, 여기서 `[sub("kim")]` 처럼
+   *    손으로 적어 넘기면 그 약속이 시험에서 빠진다 — 위임이 붙은 뒤의 동작은
+   *    `tests/part-issue-delegation.test.ts` 가 이어서 잰다.
+   * 🔵 위임 줄이 **하나도 없을 때**의 목록이다. 그래서 아래 다섯 줄은 이 칸이 생기기 전과
+   *    글자 하나 다르지 않은 것을 재고 있다.
+   */
+  const alone = (name: string) => actingApproverSubs([], name, new Date("2026-10-21T00:00:00.000Z"));
+
   it("🔴 내 차례가 아닌 사람은 결재할 수 없다", () => {
     const step = { approverSub: sub("kim"), status: "REQUESTED" as const };
-    assert.equal(mayDecidePartIssueStep(step, sub("kim")), true);
-    assert.equal(mayDecidePartIssueStep(step, sub("lee")), false, "다음 단계 결재자라도 앞 단계를 대신 누를 수 없다");
-    assert.equal(mayDecidePartIssueStep(step, sub("admin")), false, "🔴 관리자라고 대신 누를 수 있는 길을 두지 않는다");
+    assert.equal(mayDecidePartIssueStep(step, alone(sub("kim"))), true);
+    assert.equal(mayDecidePartIssueStep(step, alone(sub("lee"))), false, "다음 단계 결재자라도 앞 단계를 대신 누를 수 없다");
+    assert.equal(mayDecidePartIssueStep(step, alone(sub("admin"))), false, "🔴 관리자라고 대신 누를 수 있는 길을 두지 않는다");
   });
 
   it("🔴 A/S 번호를 넘기면 거짓이다 — 열쇠는 포털 번호 하나뿐이다", () => {
     // 🔴 **이 시험이 2026-10-15 결함의 울타리다.** 같은 사람인데 번호가 달라서, 열쇠를 되돌리면
     //    「내가 결재할 건」이 영원히 빈 목록이 된다(코드는 맞고 값이 안 맞아 눈으로도 안 보인다).
     const step = { approverSub: sub("kim"), status: "REQUESTED" as const };
-    assert.equal(mayDecidePartIssueStep(step, asId("kim")), false, "A/S 번호로 견주면 본인도 자기 차례를 못 집는다");
+    assert.equal(mayDecidePartIssueStep(step, alone(asId("kim"))), false, "A/S 번호로 견주면 본인도 자기 차례를 못 집는다");
   });
 
   it("이미 결정된 줄은 같은 사람이라도 다시 누를 수 없다", () => {
-    assert.equal(mayDecidePartIssueStep({ approverSub: sub("kim"), status: "APPROVED" }, sub("kim")), false);
-    assert.equal(mayDecidePartIssueStep({ approverSub: sub("kim"), status: "REJECTED" }, sub("kim")), false);
+    assert.equal(mayDecidePartIssueStep({ approverSub: sub("kim"), status: "APPROVED" }, alone(sub("kim"))), false);
+    assert.equal(mayDecidePartIssueStep({ approverSub: sub("kim"), status: "REJECTED" }, alone(sub("kim"))), false);
   });
 });
 
