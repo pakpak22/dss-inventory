@@ -16,8 +16,10 @@ import {
   EXECUTABLE_REQUEST_STATUSES,
   EXTERNALLY_CANCELLABLE_REQUEST_SOURCES,
   REJECTABLE_REQUEST_STATUSES,
+  isChargeType,
   isClosedRequest,
   reopenedRequestStatus,
+  type ChargeType,
   type EntryType,
 } from "./codes";
 import type { EntryInput } from "./form";
@@ -103,6 +105,18 @@ export interface RequestLineView {
   name2: string;
   kyosanPartNo: string;
   drawingNo: string;
+  /**
+   * 그 줄의 **유상/무상** (2026-10-21, 쓰는 분 요청: 「승인 요청건과 부품 요청에 유상/무상도 보이게」).
+   *
+   * 🔴 **부품의 속성이 아니라 줄의 값이다.** 같은 부품이라도 신청마다, 한 신청 안에서도 줄마다 다를 수
+   *    있다(`src/db/schema/stock.ts` 의 그 칸 주석). 그래서 위 네 칸처럼 `parts` 에서 오지 않고
+   *    **신청 payload 에서** 온다(`linesOf`).
+   * 🔴 **`null` 이 정상인 자리가 있다** — 이 값은 **사용(반출)에서만** 있다. 대여·폐기 신청의 줄
+   *    (`SimpleLine`)에는 처음부터 없는 칸이라, 못 찾은 것이 아니라 **없는 것**이다. 지어내지 않는다.
+   * 🔵 **바깥 통로로는 나가지 않는다** — `toApiRequestStatus` 가 칸을 하나씩 손으로 옮겨 적으므로
+   *    (`lib/api/stock-request-status.ts`) 여기 칸이 늘어도 A/S 가 받는 모양은 그대로다.
+   */
+  chargeType: ChargeType | null;
 }
 
 export interface PendingRequestRow {
@@ -149,11 +163,24 @@ export interface PendingRequestRow {
 
 type LinesLike = { type: EntryType; lines: Array<{ partId: string; quantity: number }> };
 
-function linesOf(input: EntryInput): Array<{ partId: string; quantity: number }> {
+/**
+ * 신청 payload 를 **줄 묶음으로 펴는** 순수 읽기 — 신청을 만들 때도, 되읽을 때도 **같은 이 함수**가 편다.
+ *
+ * 🔴 **유상/무상은 사용(반출)에서만 있다** (2026-10-21). `UseLine` 에만 있는 칸이고 대여·폐기가 쓰는
+ *    `SimpleLine` 에는 없다(`./form.ts`) — 그래서 나머지 종류는 `null` 이다. **없는 것이지 못 찾은 것이
+ *    아니다.**
+ * 🔴 **`isChargeType` 으로 한 번 거른다.** payload 는 DB 에 글자(JSON)로 누워 있다가 `as unknown as
+ *    EntryInput` 로 되살아나므로, 타입이 「있다」고 말해도 **옛 줄에는 없을 수 있다.** 화면에 `undefined`
+ *    가 새어 나가지 않게 여기서 눕힌다.
+ * 🔵 **쓰는 쪽은 이 칸을 쳐다보지 않는다** — 신청 만들기·확인·마감은 `partId`·`quantity` 만 쓴다.
+ *    칸이 는 것이 그 길의 동작을 한 글자도 바꾸지 않는다.
+ */
+function linesOf(input: EntryInput): Array<{ partId: string; quantity: number; chargeType: ChargeType | null }> {
   if (input.type === "RETURN") return [];
-  if (input.type === "ADJUST") return [{ partId: input.partId, quantity: input.actualQuantity }];
-  if (input.type === "TRANSFER") return [{ partId: input.fromPartId, quantity: input.quantity }];
-  return (input as LinesLike).lines.map((l) => ({ partId: l.partId, quantity: l.quantity }));
+  if (input.type === "ADJUST") return [{ partId: input.partId, quantity: input.actualQuantity, chargeType: null }];
+  if (input.type === "TRANSFER") return [{ partId: input.fromPartId, quantity: input.quantity, chargeType: null }];
+  if (input.type === "USE") return input.lines.map((l) => ({ partId: l.partId, quantity: l.quantity, chargeType: isChargeType(l.chargeType) ? l.chargeType : null }));
+  return (input as LinesLike).lines.map((l) => ({ partId: l.partId, quantity: l.quantity, chargeType: null }));
 }
 
 /** 목록에 보일 한 줄 요약. 부품 이름은 신청 때 붙여 둔다(나중에 부품이 바뀌어도 신청 글자는 그대로). */
@@ -838,6 +865,9 @@ function toRow(r: typeof stockRequests.$inferSelect, names: ReadonlyMap<string, 
       name2: p?.name2 ?? "",
       kyosanPartNo: p?.kyosanPartNo ?? "",
       drawingNo: p?.drawingNo ?? "",
+      // 🔴 **부품 표가 아니라 신청 줄에서 온다** — 유상/무상은 그 줄의 값이라, 부품을 못 찾아도 그대로 남는다
+      //    (`RequestLineView.chargeType` 주석). 그래서 `p` 가 아니라 `l` 을 본다.
+      chargeType: l.chargeType,
     };
   });
   return {

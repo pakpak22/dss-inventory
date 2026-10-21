@@ -18,7 +18,9 @@ import {
   type PartIssueLock,
 } from "@/lib/approval/part-issue-gate";
 import type { ClaimableRequestStatus } from "@/lib/stock/codes";
+import type { RequestItemView } from "@/lib/stock/request-item-detail";
 import { RETURN_TO_FIELD } from "@/lib/stock/return-to";
+import { RequestItemDetails } from "./RequestItemDetails";
 
 const BTN = "rounded-md border border-zinc-300 px-2.5 py-1 text-xs text-zinc-700 hover:bg-zinc-100 disabled:opacity-50";
 const BTN_P = "rounded-md bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-zinc-800 disabled:opacity-50";
@@ -31,10 +33,17 @@ const EMPTY: RequestActionState = { error: null };
 /**
  * 요청 한 줄. 🔵 `RequestLineView`(server-only 인 `src/lib/stock/requests.ts`)와 **같은 모양**을 여기 따로 적는다 —
  * 클라이언트 묶음이 server-only 파일을 끌어오지 않게. 칸이 늘면 양쪽을 같이 고친다.
+ *
+ * 🔴 **신청 항목 한 줄의 모양을 물려받는다**(2026-10-21, 쓰는 분 접수 5번: 「불출 신청 팝업에서도 어느 부품인지
+ *    알아보게」 · 같은 날 접수: 「소유구분과 유상/무상도」). `RequestItemView` 가 `partNo` 와 고객사 품명·품명2·
+ *    교산 품번·도번·**소유구분**(부품의 것)에 **유상/무상**(그 줄의 것)까지 들고 오므로 여기서 다시 적지 않는다 —
+ *    손으로 베끼면 칸이 늘 때 한쪽만 고쳐진다. 🔴 **그 둘이 성격이 다르다는 것도 저쪽 타입이 갈라 들고 있다**
+ *    (`lib/stock/request-item-detail.ts` 머리말).
+ * 🔵 **조회는 한 글자도 안 고쳤다**: `listAllRequests` 가 넷(2026-10-16)과 소유구분(2026-10-15)을 이미 싣고
+ *    있었고, 부품 요청 관리 화면만 쓰고 있었다. 팝업은 **받아 그리기만** 한다.
  */
-export interface RequestActionLine {
+export interface RequestActionLine extends RequestItemView {
   partId: string;
-  partNo: number | null;
   partName: string;
   /** 신청한 수량 */
   quantity: number;
@@ -309,15 +318,24 @@ export function RequestActions({
             칸을 <b>비워 두면 그 줄의 남은 수량 전부</b>를 {approvalRequired ? "올립니다" : "내줍니다"}. 이번에 안 줄 줄에는 <b>0</b> 을 적으십시오. 남은 수량이 있으면 이 신청은{" "}
             <b>확인 대기에 그대로 남습니다.</b>
           </p>
+          {/* 🔵 **위로 맞춘다**(`items-start`, 2026-10-21) — 아래 자세한 내용이 붙으면서 왼쪽이 두세 줄이 됐다.
+              가운데로 맞추면 수량 칸이 줄 한가운데로 내려가 **어느 부품의 칸인지**가 한눈에 안 들어온다.
+              🔵 `min-w-0 flex-1` 은 긴 품번·도번이 수량 칸을 상자 밖으로 밀어내지 않게 하는 자리다. */}
           <ul className="flex flex-col gap-1.5">
             {lines.map((l) => (
-              <li key={l.partId} className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-100 pb-1.5 last:border-0">
-                <span className="text-sm text-zinc-800">
+              <li key={l.partId} className="flex flex-wrap items-start justify-between gap-2 border-b border-zinc-100 pb-1.5 last:border-0">
+                <span className="min-w-0 flex-1 text-sm text-zinc-800">
                   {labelOf(l)}{" "}
                   <span className="text-xs text-zinc-500">
                     요청 {l.quantity}
                     {l.issued > 0 ? ` 중 ${Math.min(l.quantity, l.issued)} 나감 · ${remainingOf(l)} 남음` : ""}
                   </span>
+                  {/* 🔴 **어느 부품인지 가리는 값들**(고객사 품명·품명2·교산 품번·도번)과 **딱지 둘**(소유구분·유상/무상).
+                      같은 품명이 여럿인 묶음이 실제로 16개 있어, 상자를 뜯으러 가기 **전에** 여기서 갈려야 한다
+                      (2026-10-21 쓰는 분 접수 5번). 🔴 **유상/무상은 이 상자에서 특히 중요하다** — 여기서 누르는 것이
+                      곧 내주는(또는 결재에 올리는) 행위이고, 틀리면 **청구가 잘못 간다.**
+                      🔵 값이 없는 칸은 아예 안 그린다 — 그 규칙도 모양도 `RequestItemDetails` 한 곳에 있다. */}
+                  <RequestItemDetails item={l} />
                 </span>
                 <span className="flex items-center gap-1">
                   <input

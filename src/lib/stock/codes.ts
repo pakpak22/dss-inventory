@@ -462,7 +462,7 @@ export function requestDecisionNote(request: {
 }
 
 /* ------------------------------------------------------------------ */
-/* 상태 거르개 — 상태 여덟에 「실행 대기」가 하나 더 선다 (2026-10-21)     */
+/* 상태 거르개 — 상태 여덟에 「실행 대기」·「마감」이 더 선다 (2026-10-21)  */
 /* ------------------------------------------------------------------ */
 
 /**
@@ -474,47 +474,100 @@ export function requestDecisionNote(request: {
  */
 export const AWAITING_EXECUTION_FILTER = "AWAITING_EXECUTION";
 
-/** 거르개가 고를 수 있는 값 — 「전체 상태」 · 상태 여덟 · 「실행 대기」. */
-export type RequestStatusFilter = "ALL" | RequestStatus | typeof AWAITING_EXECUTION_FILTER;
+/**
+ * 거르개의 「마감」 칸이 쓰는 값 (2026-10-21, 쓰는 분 접수 16번).
+ *
+ * 🔵 **왜 생겼나**: 「확인됨」을 고르면 **다 나간 것과 덜 주고 닫은 것이 섞여** 나왔다. 둘은 상태가
+ *    같고(`CONFIRMED`) **센 값만** 다르므로, 상태만 보고 거르면 한쪽만 보는 길이 아예 없다 —
+ *    바로 위 「결재 중 ↔ 실행 대기」와 **똑같은 모양**의 문제이고, 그래서 같은 길로 푼다.
+ * 🔴 **「마감」은 상태값이 아니다** — 상태는 `CONFIRMED` 이고 가르는 자리는 `isClosedRequest`
+ *    하나뿐이다(그 주석). 여기서 다시 세지 않고 **센 값을 받아** 쓴다(아래 `RequestFilterRow.closed`).
+ * 🔴 상태 이름(`RequestStatus`)과 **겹치지 않는 글자여야 한다** — 겹치면 거르개 값 하나가 두 뜻이 된다.
+ *    지금 여덟 상태에 `CLOSED` 는 없고, 그 「없음」을 시험이 전수로 지킨다.
+ */
+export const CLOSED_FILTER = "CLOSED";
+
+/** 거르개가 고를 수 있는 값 — 「전체 상태」 · 상태 여덟 · 「실행 대기」 · 「마감」. */
+export type RequestStatusFilter = "ALL" | RequestStatus | typeof AWAITING_EXECUTION_FILTER | typeof CLOSED_FILTER;
 
 /**
  * 거르개가 도는 차례 — 🔴 **상태 차례(`REQUEST_STATUS_ORDER`)에서 뽑아 쓴다.** 따로 적으면 상태를 하나
  * 더했을 때 한쪽만 고쳐진다.
  *
- * 🔵 「실행 대기」를 **「결재 중」 바로 뒤**에 끼운다 — 일이 흘러가는 차례가 그렇고(결재가 끝나면 실행이다),
- *    서로 갈라야 하는 둘이 나란히 서야 사람이 「이 둘이 다르구나」를 고르개에서 바로 본다.
+ * 🔵 더 서는 둘은 **자기가 빠져나온 칸 바로 뒤**에 끼운다 — 「실행 대기」는 「결재 중」 뒤,
+ *    **「마감」은 「확인됨」 뒤**다. 갈라야 하는 둘이 나란히 서야 사람이 「이 둘이 다르구나」를
+ *    고르개에서 바로 보고, 일이 흘러가는 차례와도 같다(결재가 끝나면 실행이고, 확인된 신청 중
+ *    일부만 나간 것이 마감이다).
  */
 export const REQUEST_STATUS_FILTER_ORDER: readonly Exclude<RequestStatusFilter, "ALL">[] = REQUEST_STATUS_ORDER.flatMap((s) =>
-  s === "IN_APPROVAL" ? [s, AWAITING_EXECUTION_FILTER] : [s],
+  s === "IN_APPROVAL" ? [s, AWAITING_EXECUTION_FILTER] : s === "CONFIRMED" ? [s, CLOSED_FILTER] : [s],
 );
 
 /**
  * 고르개에 보일 글자 — 🔴 **[상태] 칸의 글자와 같은 한 벌에서 온다.** 다르면 사람은 고른 것과 보이는 것이
  * 같은 것인 줄 모른다.
+ *
+ * 🔴 **가르는 차례가 `requestStatusDisplay` 와 같다 — ① 마감 ② 실행 대기 ③ 상태 표.** 아래
+ *    `requestFilterBucket` 도 같은 차례라, 목록에 「마감」이라 적힌 줄은 고르개에서도 「마감」이다.
  */
 export function requestStatusFilterLabel(filter: Exclude<RequestStatusFilter, "ALL">): string {
-  return filter === AWAITING_EXECUTION_FILTER ? AWAITING_EXECUTION_REQUEST_LABEL : REQUEST_STATUS_LABEL[filter];
+  if (filter === CLOSED_FILTER) return CLOSED_REQUEST_LABEL;
+  if (filter === AWAITING_EXECUTION_FILTER) return AWAITING_EXECUTION_REQUEST_LABEL;
+  return REQUEST_STATUS_LABEL[filter];
+}
+
+/**
+ * 거르개가 한 줄에서 보는 것 — 🔴 **셋 다 있어야 한다.**
+ *
+ * 「마감」도 「실행 대기」도 상태값이 아니라서, `status` 하나로는 그 줄이 **어느 칸에서 나와야 하는지**
+ * 알 수 없다. 🔴 **기본값을 두지 않는다**(`requestStatusLabel` 의 `lock` 과 같은 까닭): 두면 부르는
+ * 자리가 늘 때 아무 말 없이 「마감 아님」으로 굳어 **한 화면에서만 마감된 줄이 「확인됨」에 섞인다** —
+ * 오류가 아니라 **빠짐**이라 아무도 신고하지 않는다.
+ *
+ * 🔵 칸 이름이 화면 줄(`ManagerRequestRow`)의 것과 같아, 화면은 세지 않고 **그대로 넘긴다.**
+ */
+export interface RequestFilterRow {
+  status: RequestStatus;
+  /** `isClosedRequest` 가 **세어서** 낸 값. 서버가 신청마다 실어 보낸다(`PendingRequestRow.closed`). */
+  closed: boolean;
+  /** 살아 있는 결재건이 붙들고 있으면 그 잠금, 아니면 `null`. */
+  issueLock: PartIssueLock | null;
+}
+
+/**
+ * 그 줄이 **어느 칸에서 나오나** — 줄마다 칸은 **하나뿐**이다.
+ *
+ * 🔴 **가르는 차례가 `requestStatusDisplay` 와 같다 — ① 마감 ② 실행 대기 ③ 상태 표.** 목록의 [상태]
+ *    칸에 「마감」이라 적힌 줄은 고르개에서도 「마감」이어야 하는데, 그 둘이 갈리지 않는 길은 차례를
+ *    두 곳에 적는 것이 아니라 **같은 차례로 맞춰 두고 시험이 전수로 맞대어 보는 것**이다
+ *    (`tests/stock-requests.test.ts`).
+ * 🔵 **「칸이 겹치지 않는다」가 여기서 공짜로 나온다**: 답이 하나뿐인 함수라 「확인됨」으로 걸렀을 때
+ *    마감된 줄이 섞일 수가 없고, 「결재 중」에 실행 대기 줄이 섞일 수도 없다. 조건을 칸마다 따로
+ *    적으면 그 「겹치지 않음」을 사람이 지켜야 한다.
+ */
+function requestFilterBucket(row: RequestFilterRow): Exclude<RequestStatusFilter, "ALL"> {
+  if (row.closed) return CLOSED_FILTER;
+  if (awaitsExecution(row.issueLock)) return AWAITING_EXECUTION_FILTER;
+  return row.status;
 }
 
 /**
  * 그 줄이 지금 거르개에 걸리나 — **순수 함수**다.
  *
- * 🔴 **「결재 중」으로 걸렀을 때 실행 대기 줄이 섞이면 안 된다.** 둘은 상태가 같고(`IN_APPROVAL`) 잠금만
- *    다른 경우가 보통이라, 상태만 보고 거르면 한 쪽을 고를 길이 아예 없다. 그래서 **실행을 기다리는 줄은
- *    상태 쪽 칸에서 빼고**(아래 `!awaiting`), 「실행 대기」 칸에서만 나오게 한다 — 목록의 글자가
- *    「실행 대기」인 줄은 고르개에서도 「실행 대기」다.
+ * 🔴 **「결재 중」으로 걸렀을 때 실행 대기 줄이, 「확인됨」으로 걸렀을 때 마감된 줄이 섞이면 안 된다.**
+ *    두 짝 다 **상태가 같고**(앞은 `IN_APPROVAL`, 뒤는 `CONFIRMED`) 잠금이나 센 값만 다른 경우라,
+ *    상태만 보고 거르면 한쪽을 고를 길이 아예 없다. 그래서 그런 줄은 상태 쪽 칸에서 **빼고** 제 칸에서만
+ *    나오게 한다(위 `requestFilterBucket`) — 목록의 글자가 「마감」인 줄은 고르개에서도 「마감」이다.
  * 🔵 **화면에 손으로 적지 않고 여기 두는 까닭**: 이 저장소에는 화면 렌더 시험이 없다. 화면 안에 적은
  *    조건은 아무도 돌려 보지 못한 채 운영으로 나간다(`src/lib/approval/part-issue-screen.ts` 머리말과
  *    같은 까닭이고, 같은 처방이다).
- * 🔵 **`codes.ts` 에 둔 까닭**: 가르는 데 필요한 글자(상태 표·「실행 대기」)가 전부 이 파일에 있다.
- *    잠금 쪽(`part-issue-gate.ts`)에 두면 **거기서 상태 표를 되가져가야** 하고, 그러면 글자와 거르기가
- *    두 파일에 나뉜다.
+ * 🔵 **`codes.ts` 에 둔 까닭**: 가르는 데 필요한 글자(상태 표·「실행 대기」·「마감」)가 전부 이 파일에
+ *    있다. 잠금 쪽(`part-issue-gate.ts`)에 두면 **거기서 상태 표를 되가져가야** 하고, 그러면 글자와
+ *    거르기가 두 파일에 나뉜다.
  */
-export function requestMatchesStatusFilter(filter: RequestStatusFilter, row: { status: RequestStatus; issueLock: PartIssueLock | null }): boolean {
+export function requestMatchesStatusFilter(filter: RequestStatusFilter, row: RequestFilterRow): boolean {
   if (filter === "ALL") return true;
-  const awaiting = awaitsExecution(row.issueLock);
-  if (filter === AWAITING_EXECUTION_FILTER) return awaiting;
-  return !awaiting && row.status === filter;
+  return requestFilterBucket(row) === filter;
 }
 
 export const PURPOSE_LABEL: Record<Purpose, string> = {

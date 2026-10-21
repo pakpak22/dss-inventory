@@ -3,6 +3,7 @@
 import { startTransition, useActionState, useState, type ReactNode } from "react";
 import { cancelPartIssueAction, decidePartIssueAction, executePartIssueAction, rejectExecutionPartIssueAction, type PartIssueActionState } from "@/app/actions/part-issue";
 import { IssueApprovalTrail } from "./IssueApprovalTrail";
+import { RequestItemDetails } from "./RequestItemDetails";
 import {
   formatPartIssueMoment,
   partIssueProgressEmptyText,
@@ -84,7 +85,16 @@ const EMPTY_STATE: PartIssueActionState = { error: null };
  */
 type Draft = { kind: "REJECT"; id: string } | { kind: "REJECT_EXECUTION"; id: string } | { kind: "EXECUTE"; id: string };
 
-/** 줄별 「이번에 줄 수량」과 지금 재고. 🔴 재고가 모자라면 실행이 막힌다 — **누르기 전에** 보여 준다. */
+/**
+ * 줄별 「이번에 줄 수량」과 지금 재고. 🔴 재고가 모자라면 실행이 막힌다 — **누르기 전에** 보여 준다.
+ *
+ * 🔵 **자세한 내용을 2026-10-21 에 더했다**(쓰는 분 접수 5번). **열을 늘리지 않고** 품목 칸 안에서
+ *    품명 아래 작은 글씨로 묶는다 — 결재건 카드는 좁은 상자라 네 열을 세우면 수량과 재고가 밀려난다.
+ *    부품 요청 관리의 신청 항목 표가 같은 까닭으로 같은 모양을 쓴다(`RequestItemDetails`).
+ * 🔵 **소유구분과 유상/무상도 같은 날 같은 자리에 더했다**(쓰는 분 요청). 🔴 **결재자가 승인하기 전에
+ *    봐야 하는 값들**이다 — 어느 재고에서 빠지는지(소유)와 **청구가 따라붙는지**(유상/무상). 열을 늘리지
+ *    않는 까닭은 위와 같고, 딱지 모양과 「없으면 안 그린다」도 전부 그 조각 한 곳에 있다.
+ */
 function IssueLines({ lines }: { lines: readonly IssueApprovalLine[] }) {
   return (
     <table className="w-full text-xs">
@@ -106,7 +116,11 @@ function IssueLines({ lines }: { lines: readonly IssueApprovalLine[] }) {
           const short = l.quantity > l.available;
           return (
             <tr key={l.partId} className="border-t border-zinc-100 align-top">
-              <td className="py-1 pr-2 text-zinc-800">{l.partNo !== null ? `No. ${l.partNo} ${l.partName}` : l.partName}</td>
+              <td className="py-1 pr-2 text-zinc-800">
+                {l.partNo !== null ? `No. ${l.partNo} ${l.partName}` : l.partName}
+                {/* 🔵 값이 있는 칸만 선다 — 지워진 부품은 넷도 소유구분도 비어 있어 저절로 아무것도 안 그린다. */}
+                <RequestItemDetails item={l} />
+              </td>
               <td className="tabular py-1 text-right font-medium text-zinc-800">{formatQuantity(l.quantity)}</td>
               <td
                 className={`tabular py-1 text-right ${short ? "font-medium text-red-700" : "text-zinc-500"}`}

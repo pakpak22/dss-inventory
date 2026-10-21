@@ -98,7 +98,22 @@ async function subsByUserId(userIds: readonly string[]) {
   return new Map(rows.map((r) => [r.id, r.sub]));
 }
 
-/** 결재건에 적힌 줄별 수량에 **품명과 지금 재고**를 붙인다. 신청에서 못 찾은 부품은 지어내지 않는다. */
+/**
+ * 결재건에 적힌 줄별 수량에 **품명 · 부품 칸 넷 · 소유구분 · 유상/무상 · 지금 재고**를 붙인다.
+ * 신청에서 못 찾은 부품은 지어내지 않는다.
+ *
+ * 🔵 **전부 이미 와 있던 값이다**(2026-10-21, 쓰는 분 접수 5번과 같은 날의 접수). 위에서 부르는
+ *    `listAllRequests` 가 고객사 품명·품명2·교산 품번·도번(2026-10-16)과 **소유구분**(2026-10-15)을
+ *    싣고 있었고(`RequestLineView`), 여기까지 와서 **버려지고 있었다** — 조회는 한 글자도 안 고치고
+ *    **옮겨 적기만** 한다. 🔴 **소유구분이 같은 자리에서 또 빠져 있었다**: 넷을 옮겨 적으면서
+ *    바로 윗줄의 `owner` 를 건너뛴 것이라, 「승인 요청건」에서만 소유를 볼 수 없었다.
+ * 🔴 **줄을 못 찾으면 넷은 빈 글자, 소유는 `null`** 이다. 품명이 「(지워진 부품)」이 되는 것과 같은
+ *    규칙이고, 그러면 화면은 그 줄에 자세한 내용도 딱지도 **아예 안 그린다**
+ *    (`request-item-detail.ts` — 막는 자리를 두 벌 두지 않는다).
+ * 🔴 **유상/무상만 성격이 다르다 — 그 줄의 값이다.** 부품 표가 아니라 **반출 신청 줄**에서 오고,
+ *    사용(반출)이 아닌 신청에는 처음부터 없어 `null` 이 참말이다. 여기서 기본값을 지어내면
+ *    **청구가 잘못 간다**(`RequestLineView.chargeType` 주석).
+ */
 function linesOf(view: PartIssueView, request: PendingRequestRow | undefined): IssueApprovalLine[] {
   return view.quantities.map((q) => {
     const line = request?.lines.find((l) => l.partId === q.partId);
@@ -108,6 +123,12 @@ function linesOf(view: PartIssueView, request: PendingRequestRow | undefined): I
       partName: line?.partName ?? "(지워진 부품)",
       quantity: q.quantity,
       available: line?.available ?? 0,
+      customerName: line?.customerName ?? "",
+      name2: line?.name2 ?? "",
+      kyosanPartNo: line?.kyosanPartNo ?? "",
+      drawingNo: line?.drawingNo ?? "",
+      owner: line?.owner ?? null,
+      chargeType: line?.chargeType ?? null,
     };
   });
 }

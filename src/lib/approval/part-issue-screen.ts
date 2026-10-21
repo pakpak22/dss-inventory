@@ -1,6 +1,7 @@
 import { partIssueLockFor } from "./part-issue-gate";
 import { PART_ISSUE_STATUS_LABELS, type PartIssueStatus } from "./part-issue-rules";
 import type { EntryType } from "@/lib/stock/codes";
+import type { RequestItemView } from "@/lib/stock/request-item-detail";
 
 /**
  * ============================================================================
@@ -33,16 +34,27 @@ import type { EntryType } from "@/lib/stock/codes";
 
 /**
  * 한 줄 — **이번에 줄 부품과 수량.** 결재건에 적힌 줄별 수량(`quantities`)에 반출 신청에서
- * 읽은 품명·지금 재고를 붙인 것이다.
+ * 읽은 품명·부품 칸 넷·지금 재고를 붙인 것이다.
  *
  * 🔴 `available` 은 **신청 당시가 아니라 지금 재고**다. 결재가 도는 동안 재고는 움직이고,
  * 모자라면 실행 순간 원장이 거절한다 — 누르기 전에 보여 주려고 싣는다(`RequestLineView` 의
  * 같은 칸과 같은 뜻).
+ *
+ * 🔴 **신청 항목 한 줄의 모양(`RequestItemView`)을 물려받는다**(2026-10-21, 쓰는 분 접수 5번: 「승인
+ *    요청건에서도 어느 부품인지 알아보게」 · 같은 날 접수: 「소유구분과 유상/무상도」). 들고 오는 것은
+ *    **부품 쪽 값**(`partNo`·고객사 품명·품명2·교산 품번·도번·**소유구분**)과 **줄 쪽 값**(**유상/무상**)이고,
+ *    🔴 그 둘이 **성격이 다르다**는 것은 저쪽 타입이 갈라 들고 있다(`lib/stock/request-item-detail.ts`
+ *    머리말). 손으로 베껴 적지 않는 까닭은 칸이 늘 때 한쪽만 고쳐지지 않게 하려는 것이다.
+ * 🔵 **조회는 한 글자도 안 고쳤다**: 넷과 소유구분은 `listAllRequests` 가 이미 싣고 있었고
+ *    (`RequestLineView`), 여기서는 그 줄에서 **옮겨 적기만** 한다(`./part-issue-screen-data.ts` 의 `linesOf`).
+ *    🔴 2026-10-21 전까지 그 옮겨 적기가 **소유구분을 빠뜨리고 있었다** — 조회에는 와 있는데 결재건 줄로
+ *    넘어오지 않아 「승인 요청건」에서만 안 보였다(넷이 같은 자리에서 빠져 있던 것과 **똑같은 모양**이다).
+ * 🔵 **결재건 자체에는 그 칸들이 없다** — 결재건이 적어 두는 것은 `{ partId, quantity }` 뿐이고,
+ *    이름·품번·소유는 **지금 부품 표의 값**이 맞는 말이다(결재가 도는 동안 담당자가 고칠 수 있다).
+ *    🔴 **유상/무상만 자리가 다르다** — 그것은 부품 표가 아니라 **반출 신청 줄**에 적혀 있다.
  */
-export type IssueApprovalLine = {
+export type IssueApprovalLine = RequestItemView & {
   partId: string;
-  /** 지워진 부품이면 `null` — 지어내지 않는다. */
-  partNo: number | null;
   partName: string;
   /** 이번에 줄 수량. 이 결재로 나갈 수량이고, 실행 때 이 값 그대로 원장에 간다. */
   quantity: number;

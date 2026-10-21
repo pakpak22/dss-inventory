@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { REQUEST_STATUSES } from "../src/db/schema/stock-requests";
 import { PART_ISSUE_LOCK_LABELS, type PartIssueLock } from "../src/lib/approval/part-issue-gate";
@@ -9,6 +10,7 @@ import {
   AWAITING_EXECUTION_REQUEST_BADGE,
   AWAITING_EXECUTION_REQUEST_LABEL,
   CLAIMABLE_REQUEST_STATUSES,
+  CLOSED_FILTER,
   CLOSED_REQUEST_BADGE,
   CLOSED_REQUEST_LABEL,
   CONFIRMATION_TYPES,
@@ -294,30 +296,50 @@ describe("「실행 대기」 글자와 색 (2026-10-21, 조각 11f)", () => {
 });
 
 /**
- * 상태 거르개 — 🔴 **「결재 중」과 「실행 대기」가 갈려야 한다** (2026-10-21, 조각 11f).
+ * 상태 거르개 — 🔴 **상태값이 아닌 두 가지가 제 칸에서 나와야 한다** (2026-10-21).
  *
- * 둘은 상태가 같고(`IN_APPROVAL`) 잠금만 다른 것이 보통이라, 상태만 보고 거르면 한쪽을 고를 길이 없다.
+ *  - 「실행 대기」(조각 11f): 「결재 중」과 상태가 같고(`IN_APPROVAL`) **잠금만** 다르다.
+ *  - **「마감」**(쓰는 분 접수 16번): 「확인됨」과 상태가 같고(`CONFIRMED`) **센 값만** 다르다.
+ *    🔵 접수된 증상 그대로 적는다 — 「확인됨」을 고르면 **다 나간 것과 덜 주고 닫은 것이 섞여** 나왔다.
+ *
+ * 둘 다 상태만 보고 거르면 한쪽을 고를 길이 아예 없다. 같은 모양의 문제라 같은 길로 푼다.
  */
-describe("상태 거르개의 「실행 대기」 (2026-10-21, 조각 11f)", () => {
-  const row = (status: (typeof REQUEST_STATUSES)[number], issueLock: PartIssueLock | null) => ({ status, issueLock });
+describe("상태 거르개의 「실행 대기」·「마감」 (2026-10-21, 조각 11f · 접수 16번)", () => {
+  const row = (status: (typeof REQUEST_STATUSES)[number], issueLock: PartIssueLock | null, closed = false) => ({ status, closed, issueLock });
   const inApproval = row("IN_APPROVAL", "AWAITING_APPROVAL");
   const awaiting = row("IN_APPROVAL", "AWAITING_EXECUTION");
   const plain = row("PENDING", null);
+  /** 🔴 **다 나간 신청**과 **덜 주고 닫은 신청** — 상태가 둘 다 `CONFIRMED` 이고 센 값만 다르다. */
+  const confirmed = row("CONFIRMED", null);
+  const closed = row("CONFIRMED", null, true);
 
-  it("거르개 차례가 상태 여덟에 「실행 대기」 하나를 더한 것이다 — 빠지거나 겹치지 않는다", () => {
-    assert.deepEqual([...REQUEST_STATUS_FILTER_ORDER].sort(), [...REQUEST_STATUSES, AWAITING_EXECUTION_FILTER].sort());
+  it("거르개 차례가 상태 여덟에 「실행 대기」·「마감」을 더한 것이다 — 빠지거나 겹치지 않는다", () => {
+    assert.deepEqual([...REQUEST_STATUS_FILTER_ORDER].sort(), [...REQUEST_STATUSES, AWAITING_EXECUTION_FILTER, CLOSED_FILTER].sort());
     assert.equal(new Set(REQUEST_STATUS_FILTER_ORDER).size, REQUEST_STATUS_FILTER_ORDER.length);
   });
 
-  it("🔵 「실행 대기」는 「결재 중」 바로 뒤에 선다 — 갈라야 하는 둘이 나란히 보여야 한다", () => {
+  it("🔵 더 선 둘은 **자기가 빠져나온 칸 바로 뒤**에 선다 — 갈라야 하는 둘이 나란히 보여야 한다", () => {
     const i = REQUEST_STATUS_FILTER_ORDER.indexOf("IN_APPROVAL");
     assert.ok(i >= 0, "「결재 중」이 거르개에서 사라졌다");
     assert.equal(REQUEST_STATUS_FILTER_ORDER[i + 1], AWAITING_EXECUTION_FILTER);
+
+    const j = REQUEST_STATUS_FILTER_ORDER.indexOf("CONFIRMED");
+    assert.ok(j >= 0, "「확인됨」이 거르개에서 사라졌다");
+    assert.equal(REQUEST_STATUS_FILTER_ORDER[j + 1], CLOSED_FILTER);
+  });
+
+  it("🔴 거르개 값 둘이 상태 이름과 **겹치지 않는다** — 겹치면 한 값이 두 뜻이 된다", () => {
+    for (const s of REQUEST_STATUSES) {
+      assert.notEqual(s, CLOSED_FILTER, `상태에 ${CLOSED_FILTER} 가 생겼다 — 거르개 값을 다른 글자로 바꿔야 한다`);
+      assert.notEqual(s, AWAITING_EXECUTION_FILTER, `상태에 ${AWAITING_EXECUTION_FILTER} 가 생겼다`);
+    }
   });
 
   it("🔴 고르개 글자가 [상태] 칸의 글자와 같다 — 다르면 사람이 같은 것인 줄 모른다", () => {
     for (const s of REQUEST_STATUSES) assert.equal(requestStatusFilterLabel(s), requestStatusLabel(s, false, null), s);
     assert.equal(requestStatusFilterLabel(AWAITING_EXECUTION_FILTER), requestStatusLabel("IN_APPROVAL", false, "AWAITING_EXECUTION"));
+    assert.equal(requestStatusFilterLabel(CLOSED_FILTER), requestStatusLabel("CONFIRMED", true, null));
+    assert.equal(requestStatusFilterLabel(CLOSED_FILTER), CLOSED_REQUEST_LABEL);
   });
 
   it("🔴 「결재 중」으로 거르면 **실행 대기 줄이 안 섞인다**", () => {
@@ -331,6 +353,24 @@ describe("상태 거르개의 「실행 대기」 (2026-10-21, 조각 11f)", () 
     assert.equal(requestMatchesStatusFilter(AWAITING_EXECUTION_FILTER, plain), false);
   });
 
+  it("🔴 **「확인됨」으로 거르면 마감된 줄이 안 섞인다** — 접수 16번이 고친 그 자리", () => {
+    assert.equal(requestMatchesStatusFilter("CONFIRMED", confirmed), true);
+    assert.equal(requestMatchesStatusFilter("CONFIRMED", closed), false, "마감된 줄이 「확인됨」에 섞였다 — 접수 16번의 증상 그대로다");
+  });
+
+  it("🔴 **「마감」으로 거르면 다 나간 줄이 안 섞인다** — 그 반대", () => {
+    assert.equal(requestMatchesStatusFilter(CLOSED_FILTER, closed), true);
+    assert.equal(requestMatchesStatusFilter(CLOSED_FILTER, confirmed), false, "다 나간 줄이 「마감」에 섞였다");
+    assert.equal(requestMatchesStatusFilter(CLOSED_FILTER, plain), false);
+  });
+
+  it("🔴 마감이 「실행 대기」를 이긴다 — 가르는 차례가 [상태] 칸과 같다", () => {
+    const both = row("CONFIRMED", "AWAITING_EXECUTION", true);
+    assert.equal(requestMatchesStatusFilter(CLOSED_FILTER, both), true);
+    assert.equal(requestMatchesStatusFilter(AWAITING_EXECUTION_FILTER, both), false);
+    assert.equal(requestMatchesStatusFilter("CONFIRMED", both), false);
+  });
+
   it("🔴 이 조각 전에 올라간 건(상태는 PENDING)도 「대기」가 아니라 「실행 대기」로 걸린다 — 목록의 글자와 같다", () => {
     const legacy = row("PENDING", "AWAITING_EXECUTION");
     assert.equal(requestMatchesStatusFilter("PENDING", legacy), false);
@@ -338,15 +378,68 @@ describe("상태 거르개의 「실행 대기」 (2026-10-21, 조각 11f)", () 
   });
 
   it("「전체 상태」는 무엇이든 받는다", () => {
-    for (const r of [inApproval, awaiting, plain]) assert.equal(requestMatchesStatusFilter("ALL", r), true);
+    for (const r of [inApproval, awaiting, plain, confirmed, closed]) assert.equal(requestMatchesStatusFilter("ALL", r), true);
   });
 
-  it("🔵 결재가 없는 줄은 지금까지와 똑같이 **제 상태 칸에서만** 나온다", () => {
+  it("🔵 결재도 마감도 없는 줄은 지금까지와 똑같이 **제 상태 칸에서만** 나온다", () => {
     for (const s of REQUEST_STATUSES) {
       const r = row(s, null);
       assert.equal(requestMatchesStatusFilter(s, r), true, s);
       assert.equal(requestMatchesStatusFilter(AWAITING_EXECUTION_FILTER, r), false, s);
+      assert.equal(requestMatchesStatusFilter(CLOSED_FILTER, r), false, s);
       for (const other of REQUEST_STATUSES) if (other !== s) assert.equal(requestMatchesStatusFilter(other, r), false, `${s} → ${other}`);
+    }
+  });
+
+  /**
+   * 🔴 **이 묶음이 거르개의 핵심 불변식을 통째로 지킨다** — 상태 여덟 × 잠금 셋 × 마감 둘 = 48줄 전수.
+   *
+   *  ① **걸리는 칸이 꼭 하나**다. 둘이면 같은 신청이 두 칸에서 나오고, 0이면 「전체 상태」 말고는
+   *     **어디에서도 안 보이는 신청**이 생긴다 — 후자는 아무 오류도 안 내서 더 나쁘다.
+   *  ② 그 칸의 글자가 **[상태] 칸에 찍히는 글자와 같다.** 「거르개 글자 = 상태 글자」를 눈이 아니라
+   *     여기서 잰다(이 저장소에는 화면 렌더 시험이 없다).
+   *
+   * 🔵 **있을 수 없는 짝도 함께 돈다**(예: 대기인데 마감). 실제로 생기지 않지만, 생기는 날에도
+   *    두 자리가 **같은 답**을 내야 한다는 것이 `requestStatusDisplay` 주석에 적힌 약속이다.
+   */
+  it("🔴 어떤 줄이든 **걸리는 칸이 꼭 하나**이고, 그 칸의 글자가 [상태] 칸의 글자와 같다 (전수 48)", () => {
+    const locks: (PartIssueLock | null)[] = [null, "AWAITING_APPROVAL", "AWAITING_EXECUTION"];
+    let counted = 0;
+    for (const status of REQUEST_STATUSES) {
+      for (const issueLock of locks) {
+        for (const closedFlag of [false, true]) {
+          const r = { status, closed: closedFlag, issueLock };
+          const where = `${status}/${issueLock ?? "잠금없음"}/${closedFlag ? "마감" : "안마감"}`;
+          const hit = REQUEST_STATUS_FILTER_ORDER.filter((f) => requestMatchesStatusFilter(f, r));
+          assert.equal(hit.length, 1, `${where} 가 ${hit.length}칸에 걸린다 — 꼭 한 칸이어야 한다`);
+          assert.equal(requestStatusFilterLabel(hit[0]), requestStatusLabel(status, closedFlag, issueLock), `${where}: 고르개 글자와 [상태] 칸 글자가 갈렸다`);
+          counted += 1;
+        }
+      }
+    }
+    assert.equal(counted, REQUEST_STATUSES.length * 3 * 2);
+  });
+});
+
+/**
+ * 🔴 **거르개는 읽는 쪽에서만 돈다** (2026-10-21, 접수 16번).
+ *
+ * 「마감」은 **화면이 고르는 칸**이지 DB 에 적히는 값이 아니다. 쓰는 쪽이 이 값을 보기 시작하면
+ * 「마감」이 조용히 상태값처럼 굳고, 그때는 enum 마이그레이션 없이 되돌릴 수 없다.
+ */
+describe("🔴 거르개가 쓰기로 새지 않았다 (2026-10-21)", () => {
+  it("「마감」·「실행 대기」는 DB 상태값이 아니다 — enum 에 그 글자가 없다", () => {
+    const statuses: readonly string[] = REQUEST_STATUSES;
+    assert.ok(!statuses.includes(CLOSED_FILTER), "상태 enum 에 CLOSED 가 생겼다 — 거르개 값과 뜻이 겹친다");
+    assert.ok(!statuses.includes(AWAITING_EXECUTION_FILTER), "상태 enum 에 AWAITING_EXECUTION 이 생겼다");
+  });
+
+  it("쓰는 쪽이 거르개를 쳐다보지 않는다 — 서버 액션과 신청 쓰기에 그 이름이 하나도 없다", () => {
+    for (const file of ["src/app/actions/stock.ts", "src/lib/stock/requests.ts"]) {
+      const text = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+      for (const name of ["CLOSED_FILTER", "AWAITING_EXECUTION_FILTER", "REQUEST_STATUS_FILTER_ORDER", "requestMatchesStatusFilter", "requestStatusFilterLabel"]) {
+        assert.ok(!text.includes(name), `${file} 가 화면 거르개(${name})를 쓴다 — 보는 값이 쓰기로 샜다`);
+      }
     }
   });
 });

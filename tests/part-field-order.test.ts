@@ -55,7 +55,8 @@ describe("다른 목록들이 그 표를 따른다 (2026-10-16)", () => {
   });
 
   it("🔴 값이 있는 칸만, 그래도 차례는 표 그대로", () => {
-    const d = requestItemDetails({ partNo: 165, customerName: "증폭기 조립품", name2: "", kyosanPartNo: "C090722733", drawingNo: "WR10136AA148B" });
+    // 🔵 소유구분은 이 표가 쥐는 넷에 **들어 있지 않다** — 글자로 늘어놓는 값이 아니라 딱지다(`requestItemOwnerTag`).
+    const d = requestItemDetails({ partNo: 165, owner: "DSS", customerName: "증폭기 조립품", name2: "", kyosanPartNo: "C090722733", drawingNo: "WR10136AA148B" });
     assert.deepEqual(
       d.map((x) => x.label),
       ["고객사 품명", "교산 품번", "도번"],
@@ -94,7 +95,16 @@ describe("🔴 화면이 차례를 **다시 적지 않는다** (2026-10-16)", ()
     });
   }
 
-  it("부품 요청 관리는 순수 함수를 부른다 — 라벨도 차례도 화면에 없다", () => {
-    assert.match(src("src/components/stock/RequestManagerScreen.tsx"), /requestItemDetails\(l\)/);
+  /**
+   * 🔵 **2026-10-21 에 부르는 자리가 조각 하나로 모였다** — 같은 작은 글씨가 불출 신청 팝업과
+   *    승인 요청건에도 서게 되면서다(접수 5번). 그래서 「화면이 순수 함수를 부른다」를
+   *    「**조각**이 부르고 화면 셋은 그 조각을 쓴다」로 고쳐 잰다 — 단언이 약해진 것이 아니라,
+   *    차례를 손으로 적은 화면이 생기면 여전히 여기서 깨진다(`tests/request-item-detail.test.ts`
+   *    가 세 화면이 조각을 부르는지까지 본다).
+   */
+  it("부품 칸 목록은 순수 함수를 부른다 — 라벨도 차례도 화면 조각에 없다", () => {
+    const piece = src("src/components/stock/RequestItemDetails.tsx");
+    assert.match(piece, /requestItemDetailGroups\(item\)/);
+    assert.equal(hardCoded(piece), 0, "라벨을 조각에 손으로 적어 두었다 — 차례가 두 곳이 된다");
   });
 });

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { IssueApprovalTrail } from "./IssueApprovalTrail";
 import { RequestActions, type RequestActionLine, type RequestActionStatus } from "./RequestActions";
+import { RequestItemDetails } from "./RequestItemDetails";
 import type { RequestSource, RequestStatus } from "@/db/schema/stock-requests";
 import {
   PART_ISSUE_APPROVALS_LINK_LABEL,
@@ -14,7 +15,8 @@ import {
   type PartIssueLock,
 } from "@/lib/approval/part-issue-gate";
 import type { IssueApprovalTrailView } from "@/lib/approval/part-issue-screen";
-import { OWNER_LABEL, formatQuantity, type Owner } from "@/lib/parts/codes";
+// 🔵 소유구분 글자(`OWNER_LABEL`)는 2026-10-21 에 `RequestItemDetails` 쪽으로 갔다 — 세 화면이 같은 딱지를 그린다.
+import { formatQuantity } from "@/lib/parts/codes";
 import {
   ENTRY_TYPE_LABEL,
   HOLD_REASON_TONE,
@@ -30,7 +32,7 @@ import {
   type EntryType,
   type RequestStatusFilter,
 } from "@/lib/stock/codes";
-import { partDetailHref, requestItemDetails, type RequestItemPart } from "@/lib/stock/request-item-detail";
+import { partDetailHref } from "@/lib/stock/request-item-detail";
 import type { RequestNotice } from "@/lib/stock/request-notice";
 
 /**
@@ -56,11 +58,16 @@ import type { RequestNotice } from "@/lib/stock/request-notice";
  * 🔴 **server-only 를 끌어오지 않는다.** 줄·신청의 모양을 여기 따로 적는 까닭이 그것이다(아래 두 타입).
  *    서버가 내려보내는 `PendingRequestRow`(`src/lib/stock/requests.ts`)는 칸이 더 많고, 더 많은 것은 그냥 버려진다.
  */
-export interface ManagerRequestLine extends RequestActionLine, RequestItemPart {
+/**
+ * 🔵 **부품 칸들과 유상/무상은 `RequestActionLine` 이 들고 온다**(2026-10-21) — 그것이 `RequestItemView` 를
+ *    물려받기 때문이다. 그 전에는 여기서 둘을 함께 물려받았는데, 불출 신청 팝업도 같은 칸을 그리게
+ *    되면서 **단추 묶음 쪽이 그 모양을 요구하는 것이 맞는 자리**가 됐다.
+ * 🔵 **소유구분(`owner`)도 2026-10-21 에 그쪽으로 올라갔다** — 세 화면이 같은 딱지를 그리게 되면서
+ *    이 화면만의 칸이 아니게 됐다. 여기 남겨 두면 같은 칸이 두 곳에 적힌다.
+ */
+export interface ManagerRequestLine extends RequestActionLine {
   /** 그 부품의 **지금 재고**. 가용이 남은 수량보다 적으면 지금 다 내줄 수 없다 */
   available: number;
-  /** 부품을 못 찾으면 `null` (지워진 부품) */
-  owner: Owner | null;
 }
 
 export interface ManagerRequestRow {
@@ -275,7 +282,6 @@ function RequestItems({ lines }: { lines: readonly ManagerRequestLine[] }) {
           const short = remaining > 0 && l.available < remaining;
           const href = partDetailHref(l.partNo);
           const label = l.partNo !== null ? `No. ${l.partNo} ${l.partName}` : l.partName;
-          const details = requestItemDetails(l);
           return (
             <tr key={l.partId} className="border-t border-zinc-100 align-top">
               <td className="py-1 pr-2">
@@ -287,19 +293,13 @@ function RequestItems({ lines }: { lines: readonly ManagerRequestLine[] }) {
                 ) : (
                   <span className="text-zinc-800">{label}</span>
                 )}
-                <span className="block text-zinc-500">{l.owner ? OWNER_LABEL[l.owner] : "-"}</span>
-                {/* 🔵 자세한 내용 — 라벨은 더 옅게, 값은 읽히게. 값이 있는 칸만 서고 폭이 모자라면 줄이 접힌다. */}
-                {details.length > 0 ? (
-                  <span className="mt-0.5 block text-[11px] leading-snug text-zinc-600">
-                    {details.map((d, i) => (
-                      <span key={d.label}>
-                        {i > 0 ? <span className="text-zinc-300"> · </span> : null}
-                        <span className="text-zinc-400">{d.label} </span>
-                        {d.value}
-                      </span>
-                    ))}
-                  </span>
-                ) : null}
+                {/* 🔵 자세한 내용과 딱지 둘(소유구분·유상/무상) — 값이 있는 칸만 서고 폭이 모자라면 줄이 접힌다.
+                    🔴 모양도 「빈 칸은 안 그린다」도 **한 곳**에 있다(`RequestItemDetails`) — 2026-10-21 에
+                       불출 신청 팝업·승인 요청건이 같은 것을 그리게 되면서 여기 있던 markup 을 떼어 냈다.
+                    🔴 **소유구분도 같은 날 그 조각으로 들어갔다.** 여기 있던 줄은 소유가 없으면 하이픈을
+                       적고 있었는데, 그것이 **이 조각의 「값이 없으면 빈 자리를 만들지 않는다」와 어긋나
+                       있었다.** 이제 세 화면이 같은 규칙을 쓴다 — 지워진 부품에는 소유 딱지가 안 선다. */}
+                <RequestItemDetails item={l} />
               </td>
               <td className="tabular py-1 text-right text-zinc-700">{formatQuantity(l.quantity)}</td>
               <td className={`tabular py-1 text-right ${issued > 0 ? "text-zinc-700" : "text-zinc-300"}`}>{formatQuantity(issued)}</td>
@@ -353,12 +353,14 @@ export function RequestManagerScreen({
 }) {
   /**
    * 🔵 거르기는 **화면에서** 한다(A/S 원본과 같고, 이 저장소의 `PartsList` 관례와도 같다) — 목록이 한 번에 다 와 있다.
-   * 🔴 **거르개 값이 더 이상 상태 하나가 아니다** (2026-10-21) — 「실행 대기」가 한 칸 더 선다. 가르는 규칙은
-   *    화면에 적지 않고 순수 함수 한 곳에 둔다(`requestMatchesStatusFilter`): 이 저장소에는 화면 렌더 시험이
-   *    없어서, 여기 적은 조건은 아무도 돌려 보지 못한 채 운영으로 나간다.
+   * 🔴 **거르개 값이 더 이상 상태 하나가 아니다** (2026-10-21) — 「실행 대기」와 **「마감」**이 두 칸 더 선다.
+   *    가르는 규칙은 화면에 적지 않고 순수 함수 한 곳에 둔다(`requestMatchesStatusFilter`): 이 저장소에는
+   *    화면 렌더 시험이 없어서, 여기 적은 조건은 아무도 돌려 보지 못한 채 운영으로 나간다.
+   * 🔴 **셋을 그대로 넘기기만 한다**(상태·마감·잠금). 화면이 「마감인가」를 다시 세면 [상태] 칸에 적히는 글자와
+   *    갈리는 날이 온다 — 마감 여부는 서버가 `isClosedRequest` 로 세어 실어 보낸 `r.closed` 하나다.
    */
   const [statusFilter, setStatusFilter] = useState<RequestStatusFilter>("ALL");
-  const filtered = requests.filter((r) => requestMatchesStatusFilter(statusFilter, { status: r.status, issueLock: issueLocks[r.id] ?? null }));
+  const filtered = requests.filter((r) => requestMatchesStatusFilter(statusFilter, { status: r.status, closed: r.closed, issueLock: issueLocks[r.id] ?? null }));
   /**
    * 내가 거둘 수 있는 줄인가 — **본인이 낸, 아직 대기(PENDING)인 것**.
    * 🔴 기록 내역에 있던 조건 그대로다(`r.status === "PENDING" && r.requestedBy === 내 id`). 부품이 한 개라도
