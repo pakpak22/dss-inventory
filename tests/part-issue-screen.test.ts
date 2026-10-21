@@ -10,6 +10,7 @@ import {
   partIssueProgressText,
   partIssueStatusBadge,
   partIssueTrailMark,
+  pickPartIssueTrailSource,
   PART_ISSUE_EXECUTION_STANDING_NOTICE,
   PART_ISSUE_NOTHING_AWAITING_APPROVAL,
   PART_ISSUE_NOTHING_IN_PROGRESS,
@@ -18,6 +19,7 @@ import {
   PART_ISSUE_STATUS_BADGE,
   PART_ISSUE_TRAIL_MARKS,
 } from "../src/lib/approval/part-issue-screen";
+import { partIssueLockFor } from "../src/lib/approval/part-issue-gate";
 import { PART_ISSUE_STATUS_LABELS, PART_ISSUE_STATUSES, type PartIssueStatus } from "../src/lib/approval/part-issue-rules";
 
 /**
@@ -266,5 +268,59 @@ describe("🔴 [반려] 사유는 **여전히 필수**다 — 승인 쪽을 푼 
     //    반려만 사유를 요구하고, 승인은 결정 시각만 본다(그래서 빈 한마디가 들어간다).
     assert.ok(schema.includes("(status = 'REJECTED' AND decided_at IS NOT NULL AND note <> '')"), "표의 CHECK 가 빈 반려 사유를 허락하게 바뀌었다");
     assert.ok(schema.includes("(status = 'APPROVED' AND decided_at IS NOT NULL)"), "승인이 한마디를 요구하게 바뀌었다 — 그러면 단추 하나로 끝낼 수 없다");
+  });
+});
+
+/**
+ * 부품 요청 관리 줄에 세우는 **진행 그림의 출처 고르기** (2026-10-21, 조각 11f).
+ *
+ * 🔴 한 줄 안에서 [상태] 칸의 글자와 그림이 **같은 결재건**을 말해야 한다. 글자를 고르는 것은 잠금
+ *    (`partIssueLockFor`)이므로, 그림의 출처도 그 잠금에게 물어 고른다 — 차례를 손으로 베껴 적으면
+ *    언젠가 한쪽만 고쳐지고, 그 어긋남은 오류가 아니라 **눈으로만 보이는 거짓말**이 된다.
+ */
+describe("진행 그림의 출처 고르기 (2026-10-21, 조각 11f)", () => {
+  const view = (id: string, status: PartIssueStatus) => ({ id, status });
+
+  it("결재건이 하나도 없으면 그릴 것이 없다", () => {
+    assert.equal(pickPartIssueTrailSource([]), null);
+  });
+
+  it("결재 중인 건 하나 — 그 건을 그린다", () => {
+    assert.deepEqual(pickPartIssueTrailSource([view("a", "PENDING_APPROVAL")]), view("a", "PENDING_APPROVAL"));
+  });
+
+  it("승인돼 실행을 기다리는 건 하나 — 그 건을 그린다", () => {
+    assert.deepEqual(pickPartIssueTrailSource([view("b", "APPROVED")]), view("b", "APPROVED"));
+  });
+
+  it("🔴 **잠금과 같은 건을 고른다** — 섞여 있으면 결재 중이 이긴다(잠금의 차례 그대로)", () => {
+    const mixed = [view("b", "APPROVED"), view("a", "PENDING_APPROVAL")];
+    assert.equal(partIssueLockFor(mixed.map((v) => v.status)), "AWAITING_APPROVAL");
+    assert.deepEqual(pickPartIssueTrailSource(mixed), view("a", "PENDING_APPROVAL"));
+  });
+
+  it("🔴 **잠금이 없으면 그림도 없다** — 끝난 건(불출 완료·반려·거둠)만 남은 신청에는 그릴 것이 없다", () => {
+    for (const status of PART_ISSUE_STATUSES) {
+      const only = [view("x", status)];
+      const lock = partIssueLockFor([status]);
+      assert.equal(pickPartIssueTrailSource(only) === null, lock === null, status);
+    }
+  });
+
+  it("🔴 **잠금과 짝이 어긋나지 않는다** — 어떤 묶음이든 고른 건의 상태가 잠금이 말한 그 상태다", () => {
+    const wanted: Record<"AWAITING_APPROVAL" | "AWAITING_EXECUTION", PartIssueStatus> = {
+      AWAITING_APPROVAL: "PENDING_APPROVAL",
+      AWAITING_EXECUTION: "APPROVED",
+    };
+    // 🔵 상태 다섯으로 만들 수 있는 두 건짜리 묶음을 **전수로** 돌려 본다(5 × 5).
+    for (const a of PART_ISSUE_STATUSES) {
+      for (const b of PART_ISSUE_STATUSES) {
+        const views = [view("1", a), view("2", b)];
+        const lock = partIssueLockFor([a, b]);
+        const picked = pickPartIssueTrailSource(views);
+        if (lock === null) assert.equal(picked, null, `${a}+${b}`);
+        else assert.equal(picked?.status, wanted[lock], `${a}+${b}`);
+      }
+    }
   });
 });

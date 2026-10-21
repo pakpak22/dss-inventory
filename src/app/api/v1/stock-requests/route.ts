@@ -2,6 +2,8 @@ import { inArray } from "drizzle-orm";
 import { NextResponse, type NextRequest } from "next/server";
 import { db } from "@/db/client";
 import { parts } from "@/db/schema/parts";
+import { listOpenPartIssueStatusesByRequest } from "@/lib/approval/part-issue";
+import { partIssueLockFor, type PartIssueLock } from "@/lib/approval/part-issue-gate";
 import { NO_STORE, checkApiToken, checkApiWriteToken } from "@/lib/api/auth";
 import { buildIntakeStatusResponse, buildStatusResponse, parseStatusQuery } from "@/lib/api/stock-request-status";
 import { buildApiUseRequest, parseApiStockRequest, resolveApiRequestLines, toApiStockRequest } from "@/lib/api/stock-requests";
@@ -102,9 +104,10 @@ export async function GET(request: NextRequest) {
   if (parsed.query.mode === "intake") {
     // 🔵 열쇠가 없는 신청(재고 관리에서 직접 올린 것)도 함께 온다 — 차례와 `notFound` 는 순수 함수가 정한다.
     const rows = await listRequestsByIntakeNumbers(parsed.query.intakeNumbers);
+    const locks = await issueLocksOf(rows.map((r) => r.request.id));
     return NextResponse.json(
       buildIntakeStatusResponse(
-        rows.map((r) => ({ requestKey: r.externalKey, request: r.request })),
+        rows.map((r) => ({ requestKey: r.externalKey, request: { ...r.request, issueLock: locks.get(r.request.id) ?? null } })),
         generatedAt,
       ),
       { headers: NO_STORE },
@@ -112,9 +115,32 @@ export async function GET(request: NextRequest) {
   }
 
   const found = await listRequestsByExternalKeys(parsed.query.keys);
+  const locks = await issueLocksOf(found.map((f) => f.request.id));
   // 🔵 찾은 것을 열쇠로 묶어 순수 함수에 넘긴다 — 「물어본 차례 그대로」와 「못 찾은 열쇠」를 거기서 가린다.
-  const byKey = new Map(found.map((f) => [f.externalKey, f.request]));
+  const byKey = new Map(found.map((f) => [f.externalKey, { ...f.request, issueLock: locks.get(f.request.id) ?? null }]));
   return NextResponse.json(buildStatusResponse(parsed.query.keys, byKey, generatedAt), { headers: NO_STORE });
+}
+
+/**
+ * 신청 묶음에 달린 **살아 있는 결재건의 잠금** (2026-10-21, 조각 11f). 잠긴 신청만 들어 있다.
+ *
+ * 🔴 **재고 관리 화면이 쓰는 것과 같은 조회·같은 판정이다** — 묶음 조회는
+ * `listOpenPartIssueStatusesByRequest`, 「승인 대기인가 · 실행 대기인가」는 `partIssueLockFor`
+ * (`src/app/(app)/requests/page.tsx` 의 같은 자리). 비슷한 것을 여기 새로 적으면 **같은 신청을
+ * 화면은 「실행 대기」, A/S 는 「결재 중」으로 부르는 날**이 온다.
+ * 🔴 **줄마다 묻지 않는다.** 이 통로는 신청을 여러 건 한 번에 내주므로(열쇠 50개·인수번호 10개),
+ * 줄마다 물으면 호출 한 번이 질의 수십 번이 된다. 빈 입력이면 조회가 DB 를 부르지도 않는다.
+ * 🔵 **상태 글자만 달라진다.** A/S 가 단추를 가리는 데 쓰는 `code` 는 손대지 않는다
+ * (`lib/api/stock-request-status.ts` 의 `status` 주석).
+ */
+async function issueLocksOf(requestIds: readonly string[]): Promise<Map<string, PartIssueLock>> {
+  const open = await listOpenPartIssueStatusesByRequest(requestIds);
+  const locks = new Map<string, PartIssueLock>();
+  for (const [requestId, statuses] of open) {
+    const lock = partIssueLockFor(statuses);
+    if (lock !== null) locks.set(requestId, lock);
+  }
+  return locks;
 }
 
 function bad(message: string) {

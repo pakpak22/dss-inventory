@@ -4,9 +4,16 @@ import { db } from "@/db/client";
 import { approvalRouteSteps } from "@/db/schema/approval-routes";
 import { users } from "@/db/schema/users";
 import { listAllRequests, type PendingRequestRow } from "@/lib/stock/requests";
-import { listMyOpenPartIssueApprovals, listPartIssueApprovalsToDecide, listPartIssueApprovalsToExecute } from "./part-issue";
+import { listMyOpenPartIssueApprovals, listOpenPartIssueApprovalsByRequest, listPartIssueApprovalsToDecide, listPartIssueApprovalsToExecute } from "./part-issue";
 import { checkCanCancelPartIssue, type PartIssueView } from "./part-issue-rules";
-import { excludeApprovalsInExecuteList, type IssueApprovalCard, type IssueApprovalLine, type IssueApprovalTrailStep } from "./part-issue-screen";
+import {
+  excludeApprovalsInExecuteList,
+  pickPartIssueTrailSource,
+  type IssueApprovalCard,
+  type IssueApprovalLine,
+  type IssueApprovalTrailStep,
+  type IssueApprovalTrailView,
+} from "./part-issue-screen";
 import { isRouteStepSkippedForRequester } from "./route";
 
 /**
@@ -105,23 +112,36 @@ function linesOf(view: PartIssueView, request: PendingRequestRow | undefined): I
   });
 }
 
+type RouteStepRows = ReadonlyMap<string, Array<{ stepOrder: number; approverSub: string | null; approverName: string }>>;
+
+/**
+ * 이 건이 타고 있는 판의 단계들 → 그림의 상자들.
+ *
+ * 🔵 **두 자리가 같은 이 함수를 쓴다** — 「승인 요청건」의 결재건 카드(`toCard`)와 부품 요청 관리의
+ *    진행 그림(`readPartIssueTrailsByRequest`). 손으로 두 벌 적으면 「건너뛴 자리」가 한 화면에서만
+ *    점선으로 보이는 날이 온다.
+ * 🔴 판정을 새로 적지 않는다 — 서버가 사슬을 이을 때 보는 그 함수다. 포털 번호는 여기서 끝난다(머리말).
+ */
+function trailOf(view: PartIssueView, routeSteps: RouteStepRows, requesterSubs: ReadonlyMap<string, string>): IssueApprovalTrailStep[] {
+  const requesterSub = requesterSubs.get(view.requestedBy) ?? null;
+  return (routeSteps.get(view.routeId) ?? []).map((step) => ({
+    stepOrder: step.stepOrder,
+    approverName: step.approverName,
+    skipped: isRouteStepSkippedForRequester(step.approverSub, requesterSub),
+  }));
+}
+
 function toCard(
   view: PartIssueView,
   ctx: {
     viewerUserId: string;
     requests: ReadonlyMap<string, PendingRequestRow>;
-    routeSteps: ReadonlyMap<string, Array<{ stepOrder: number; approverSub: string | null; approverName: string }>>;
+    routeSteps: RouteStepRows;
     requesterSubs: ReadonlyMap<string, string>;
   },
 ): IssueApprovalCard {
   const request = ctx.requests.get(view.requestId);
-  const requesterSub = ctx.requesterSubs.get(view.requestedBy) ?? null;
-  const trail: IssueApprovalTrailStep[] = (ctx.routeSteps.get(view.routeId) ?? []).map((step) => ({
-    stepOrder: step.stepOrder,
-    approverName: step.approverName,
-    // 🔴 판정을 새로 적지 않는다 — 서버가 사슬을 이을 때 보는 그 함수다. 번호는 여기서 끝난다.
-    skipped: isRouteStepSkippedForRequester(step.approverSub, requesterSub),
-  }));
+  const trail = trailOf(view, ctx.routeSteps, ctx.requesterSubs);
 
   return {
     id: view.id,
@@ -179,4 +199,50 @@ export async function readPartIssueApprovalScreen(viewer: { userId: string; appr
     mine: viewer.isAdmin ? excludeApprovalsInExecuteList(mineAll, toExecute) : mineAll,
     progressExcludesExecutable: viewer.isAdmin,
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* 부품 요청 관리 줄에 세우는 진행 그림 (2026-10-21, 조각 11f)            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * **신청 묶음 → 그 줄에 그릴 결재선 진행 그림.** 결재가 걸려 있지 않은 신청은 아예 키가 없다.
+ *
+ * 🔴 **그림이 그려야 하는 단계는 「그 결재건이 타고 있는 판」이지 지금 설정된 판이 아니다**
+ * (`IssueApprovalTrail` 머리말, `routeStepsByRouteId` 주석). 현재 판(`getCurrentApprovalRoute`)을
+ * 집어다 그리면 **절차를 바꾼 뒤 옛 건을 볼 때 없는 결재자가 그려진다.** 그래서 「승인 요청건」이
+ * 쓰는 길을 그대로 재사용한다 — 판은 결재건의 `route_id` 로 읽고, 「건너뛴 자리」는 포털 번호 둘을
+ * 서버에서 견주어 끝낸다(머리말).
+ *
+ * 🔴 **질의 수가 신청 건수와 무관하다**(결재건 1 · 판 단계 1 · 포털 번호 1 = 셋). 신청마다 물으면
+ * 목록 한 번 그리는 데 왕복이 줄 수만큼 는다 — 위 `readPartIssueApprovalScreen` 과 같은 까닭이다.
+ * 🔵 **결재건이 하나도 없으면 뒤 둘을 아예 부르지 않는다**(빈 Map 으로 끝). 결재선을 안 쓰는 날의
+ *    `/requests` 는 조회가 **한 번도 늘지 않는다.**
+ */
+export async function readPartIssueTrailsByRequest(requestIds: readonly string[]): Promise<Map<string, IssueApprovalTrailView>> {
+  const byRequest = await listOpenPartIssueApprovalsByRequest(requestIds);
+  // 🔵 신청마다 한 건만 그린다 — 고르는 차례는 잠금에게 묻는다(`pickPartIssueTrailSource`).
+  const picked: Array<[string, PartIssueView]> = [];
+  for (const [requestId, views] of byRequest) {
+    const view = pickPartIssueTrailSource(views);
+    if (view !== null) picked.push([requestId, view]);
+  }
+  if (picked.length === 0) return new Map();
+
+  const [routeSteps, requesterSubs] = await Promise.all([
+    routeStepsByRouteId(picked.map(([, v]) => v.routeId)),
+    subsByUserId(picked.map(([, v]) => v.requestedBy)),
+  ]);
+
+  return new Map(
+    picked.map(([requestId, view]) => [
+      requestId,
+      {
+        status: view.status,
+        // 🔵 A/S 번호(`approverUserId`)는 싣지 않는다 — 그림에 필요한 것은 이름뿐이다(`toCard` 와 같다).
+        currentStep: view.currentStep ? { stepOrder: view.currentStep.stepOrder, approverName: view.currentStep.approverName } : null,
+        steps: trailOf(view, routeSteps, requesterSubs),
+      },
+    ]),
+  );
 }

@@ -1,4 +1,5 @@
 import type { RequestStatus } from "@/db/schema/stock-requests";
+import type { PartIssueLock } from "@/lib/approval/part-issue-gate";
 import { INTAKE_NUMBER_RE, isClosedRequest, requestStatusLabel, type EntryType } from "@/lib/stock/codes";
 import { MAX_KEY } from "./stock-requests";
 
@@ -248,6 +249,11 @@ export interface ApiRequestStatus {
    *    적지 않는다. 적으면 화면과 API 가 같은 상태를 다른 말로 불러, 전화로 맞춰 볼 때 서로 다른 말을 한다.
    * 🔴 **마감이면 `code` 는 `CONFIRMED` 인데 `label` 은 「마감」이다.** 마감은 상태값이 아니라 세어서 가리는
    *    것이라 그렇다(아래 `closed`). 가르려면 `label` 이 아니라 `closed` 를 보라.
+   * 🔴 **결재가 끝나 실행만 남았으면 `code` 는 그대로인데 `label` 이 「실행 대기」다** (2026-10-21, 조각 11f).
+   *    마감과 **같은 길**이다 — 「실행 대기」도 상태값이 아니라 결재건 잠금으로 가린다(`codes.ts` 의
+   *    `AWAITING_EXECUTION_REQUEST_LABEL`). 🔴 **`code` 는 한 글자도 바뀌지 않는다**: A/S 가 `code` 로
+   *    [요청 취소] 단추를 가리므로(`"PENDING"` 일 때만) 여기를 건드리면 저쪽 단추가 조용히 어긋난다.
+   *    **바뀌는 것은 사람이 읽는 `label` 뿐이다.**
    */
   status: { code: RequestStatus; label: string };
   /**
@@ -279,9 +285,12 @@ export interface ApiRequestStatus {
 /**
  * 재고 쪽 신청 한 줄에서 **이 통로가 쓰는 칸만** 추린 모양.
  *
- * 🔵 `lib/stock/requests.ts` 의 `PendingRequestRow` 가 이 모양을 그대로 만족한다(칸이 더 많을 뿐이다).
+ * 🔵 `lib/stock/requests.ts` 의 `PendingRequestRow` 가 이 모양을 **거의** 만족한다(칸이 더 많을 뿐이다).
  *    🔴 그 타입을 직접 끌어오지 않는 까닭: 저 파일은 `server-only` 라 `npm test` 가 **불러올 수조차 없다**.
  *    여기(순수 함수)에 모양만 적어 두면 시험이 DB 없이 덮고, 두 모양이 어긋나면 통로 파일에서 tsc 가 멈춘다.
+ * 🔴 **신청 줄에 없는 칸이 둘이다** — 포털 번호(`requesterSub`)와 결재 잠금(`issueLock`). 둘 다
+ *    **바깥으로 나가는 길에서 얹는다**(통로 파일). 앞은 브라우저로 새면 안 되는 값이라(아래 주석),
+ *    뒤는 결재건을 읽어야 알 수 있는 값이라 그렇다.
  */
 export interface RequestStatusSource {
   id: string;
@@ -305,6 +314,17 @@ export interface RequestStatusSource {
   decidedAt: string | null;
   decisionNote: string;
   hold: { reason: string; heldByName: string; heldAt: string } | null;
+  /**
+   * 그 신청을 붙들고 있는 **살아 있는 결재건의 잠금** — 없으면 `null` (2026-10-21, 조각 11f).
+   *
+   * 🔴 **`null` 과 「모름」을 가르려고 칸으로 둔다.** 기본값이 있는 매개변수로 두면 통로가 하나 늘 때
+   *    아무 말 없이 「잠금 없음」으로 굳어 **A/S 화면만 옛 글자를 보여 준다** — 오류가 아니라 빠짐이라
+   *    아무도 신고하지 않는다. 칸으로 두면 **tsc 가 얹지 않은 자리를 전부 잡아 준다.**
+   * 🔴 **판정을 여기서 다시 하지 않는다.** 값을 만드는 자리는 `partIssueLockFor` 하나이고, 재고 관리
+   *    화면(`/requests`)이 보는 그 값과 **같은 조회·같은 판정**에서 나와야 한다. 비슷한 것을 통로 쪽에
+   *    새로 적으면 두 화면이 같은 신청을 다른 이름으로 부르는 날이 온다.
+   */
+  issueLock: PartIssueLock | null;
 }
 
 export function toApiRequestStatus(requestKey: string | null, r: RequestStatusSource): ApiRequestStatus {
@@ -318,7 +338,8 @@ export function toApiRequestStatus(requestKey: string | null, r: RequestStatusSo
     //    두 가지 묻는 법 모두 **같은 이 줄**을 지나므로 모양이 갈릴 자리가 없다.
     requester: { sub: r.requesterSub, name: r.requestedByName },
     type: r.type,
-    status: { code: r.status, label: requestStatusLabel(r.status, closed) },
+    // 🔴 **`code` 는 신청의 상태 그대로다** — 마감도 실행 대기도 `label` 에서만 갈린다(위 `status` 주석).
+    status: { code: r.status, label: requestStatusLabel(r.status, closed, r.issueLock) },
     closed,
     requestedAt: r.requestedAt,
     lines: r.lines.map((l) => ({ no: l.partNo, name: l.partName, quantity: l.quantity, issued: l.issued })),

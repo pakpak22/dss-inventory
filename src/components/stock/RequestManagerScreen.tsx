@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { IssueApprovalTrail } from "./IssueApprovalTrail";
 import { RequestActions, type RequestActionLine, type RequestActionStatus } from "./RequestActions";
 import type { RequestSource, RequestStatus } from "@/db/schema/stock-requests";
 import {
@@ -12,8 +13,21 @@ import {
   partIssueConfirmLabel,
   type PartIssueLock,
 } from "@/lib/approval/part-issue-gate";
+import type { IssueApprovalTrailView } from "@/lib/approval/part-issue-screen";
 import { OWNER_LABEL, formatQuantity, type Owner } from "@/lib/parts/codes";
-import { ENTRY_TYPE_LABEL, REQUEST_SOURCE_LABEL, REQUEST_STATUS_LABEL, REQUEST_STATUS_ORDER, canCancelRequest, isClaimableRequest, requestStatusBadge, requestStatusLabel, type EntryType } from "@/lib/stock/codes";
+import {
+  ENTRY_TYPE_LABEL,
+  REQUEST_SOURCE_LABEL,
+  REQUEST_STATUS_FILTER_ORDER,
+  canCancelRequest,
+  isClaimableRequest,
+  requestMatchesStatusFilter,
+  requestStatusBadge,
+  requestStatusFilterLabel,
+  requestStatusLabel,
+  type EntryType,
+  type RequestStatusFilter,
+} from "@/lib/stock/codes";
 import { partDetailHref, requestItemDetails, type RequestItemPart } from "@/lib/stock/request-item-detail";
 import type { RequestNotice } from "@/lib/stock/request-notice";
 
@@ -270,8 +284,10 @@ function RequestItems({ lines }: { lines: readonly ManagerRequestLine[] }) {
  *
  * @param approvalRequired 「부품 불출」 승인 절차가 **지금 쓰이고 있는가** (2026-10-15, 조각 11c).
  * @param issueLocks 살아 있는 결재건이 붙들고 있는 신청 → 그 까닭. **잠긴 신청만 들어 있다.**
+ * @param issueTrails 그 결재건의 **진행 그림**(2026-10-21, 조각 11f). 역시 **결재가 걸린 신청만** 들어 있다.
+ *   🔵 `issueLocks` 와 **같은 묶음**에서 나온다(살아 있는 결재건) — 한쪽에만 있는 줄은 생기지 않는다.
  *
- * 🔴 **이 둘은 서버가 판정해 내려보낸 값이다**(`src/app/(app)/requests/page.tsx`). 화면이 다시 판정하지
+ * 🔴 **이 셋은 서버가 판정해 내려보낸 값이다**(`src/app/(app)/requests/page.tsx`). 화면이 다시 판정하지
  *    않는다 — 두 벌이 되면 「단추는 보이는데 누르면 거절」이나 그 반대가 되고, 후자는 화면에 아무 표시도
  *    남기지 않아 더 나쁘다(A/S 원본 `PartRequestManagerScreen` 의 까닭 그대로).
  */
@@ -282,6 +298,7 @@ export function RequestManagerScreen({
   currentUserId,
   approvalRequired,
   issueLocks,
+  issueTrails,
 }: {
   requests: ManagerRequestRow[];
   notices: RequestNotice[];
@@ -289,10 +306,16 @@ export function RequestManagerScreen({
   currentUserId: string;
   approvalRequired: boolean;
   issueLocks: Record<string, PartIssueLock>;
+  issueTrails: Record<string, IssueApprovalTrailView>;
 }) {
-  // 🔵 거르기는 **화면에서** 한다(A/S 원본과 같고, 이 저장소의 `PartsList` 관례와도 같다) — 목록이 한 번에 다 와 있다.
-  const [statusFilter, setStatusFilter] = useState<RequestStatus | "ALL">("ALL");
-  const filtered = requests.filter((r) => statusFilter === "ALL" || r.status === statusFilter);
+  /**
+   * 🔵 거르기는 **화면에서** 한다(A/S 원본과 같고, 이 저장소의 `PartsList` 관례와도 같다) — 목록이 한 번에 다 와 있다.
+   * 🔴 **거르개 값이 더 이상 상태 하나가 아니다** (2026-10-21) — 「실행 대기」가 한 칸 더 선다. 가르는 규칙은
+   *    화면에 적지 않고 순수 함수 한 곳에 둔다(`requestMatchesStatusFilter`): 이 저장소에는 화면 렌더 시험이
+   *    없어서, 여기 적은 조건은 아무도 돌려 보지 못한 채 운영으로 나간다.
+   */
+  const [statusFilter, setStatusFilter] = useState<RequestStatusFilter>("ALL");
+  const filtered = requests.filter((r) => requestMatchesStatusFilter(statusFilter, { status: r.status, issueLock: issueLocks[r.id] ?? null }));
   /**
    * 내가 거둘 수 있는 줄인가 — **본인이 낸, 아직 대기(PENDING)인 것**.
    * 🔴 기록 내역에 있던 조건 그대로다(`r.status === "PENDING" && r.requestedBy === 내 id`). 부품이 한 개라도
@@ -317,14 +340,15 @@ export function RequestManagerScreen({
           상태
           <select
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as RequestStatus | "ALL")}
+            onChange={(e) => setStatusFilter(e.target.value as RequestStatusFilter)}
             className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-sm text-zinc-900"
             aria-label="상태로 거르기"
           >
             <option value="ALL">전체 상태</option>
-            {REQUEST_STATUS_ORDER.map((s) => (
+            {/* 🔵 고르개에 보이는 글자는 [상태] 칸의 글자와 **같은 한 벌**에서 온다 — 다르면 사람이 같은 것인 줄 모른다. */}
+            {REQUEST_STATUS_FILTER_ORDER.map((s) => (
               <option key={s} value={s}>
-                {REQUEST_STATUS_LABEL[s]}
+                {requestStatusFilterLabel(s)}
               </option>
             ))}
           </select>
@@ -389,6 +413,9 @@ export function RequestManagerScreen({
                 {filtered.map((r) => {
                   const actionStatus = actionStatusOf(r.status);
                   const canCancel = canCancelOf(r);
+                  // 🔵 둘 다 **잠긴 신청에만** 들어 있다(서버가 같은 묶음에서 만든다). 없으면 이 줄은 지금까지와 한 글자도 다르지 않다.
+                  const issueLock = issueLocks[r.id] ?? null;
+                  const issueTrail = issueTrails[r.id];
                   return (
                     <tr key={r.id} className="border-t border-zinc-200 align-top hover:bg-zinc-50">
                       <td title={fullAt(r.requestedAt)} className={`${TD} tabular text-xs whitespace-nowrap text-zinc-600`}>
@@ -410,8 +437,16 @@ export function RequestManagerScreen({
                       </td>
                       <td className={TD}>
                         <div className="flex flex-col gap-1">
-                          {/* 🔴 마감된 신청은 「확인됨」이 아니라 「마감」으로 보인다 — 가르는 자리는 `isClosedRequest` 하나뿐이다. */}
-                          <span className={`${BADGE} ${requestStatusBadge(r.status, r.closed)}`}>{requestStatusLabel(r.status, r.closed)}</span>
+                          {/* 🔴 마감된 신청은 「확인됨」이 아니라 「마감」, 결재가 끝나 실행만 남았으면 「결재 중」이 아니라 「실행 대기」다.
+                              가르는 자리는 화면이 아니라 `codes.ts` 의 그 한 곳이고, 여기서는 **받은 값을 넘기기만** 한다. */}
+                          <span className={`${BADGE} ${requestStatusBadge(r.status, r.closed, issueLock)}`}>{requestStatusLabel(r.status, r.closed, issueLock)}</span>
+                          {/* 🔵 결재가 걸린 줄에만 그린다 — 결재가 없는 줄에는 그릴 것이 없고, 전체 신청 목록이라 모든 줄에 그리면 표가 길어진다.
+                              🔵 폭을 묶어 둔다: 상자가 늘어나도 **이 칸 안에서만** 밀린다(그림 자신이 가로 스크롤을 들고 있다). */}
+                          {issueTrail ? (
+                            <div className="mt-0.5 max-w-72">
+                              <IssueApprovalTrail status={issueTrail.status} currentStep={issueTrail.currentStep} steps={issueTrail.steps} />
+                            </div>
+                          ) : null}
                           <HoldReason hold={r.hold} />
                         </div>
                       </td>
@@ -429,11 +464,11 @@ export function RequestManagerScreen({
                               canDecide={isAdmin}
                               canCancel={canCancel}
                               approvalRequired={approvalRequired}
-                              issueLock={issueLocks[r.id] ?? null}
+                              issueLock={issueLock}
                             />
-                          ) : issueLocks[r.id] ? (
+                          ) : issueLock ? (
                             /* 🔵 결재가 그 신청을 붙들고 있으면 단추는 없어도 **갈 곳은 말해 준다**(위 `IssueLockNotice`). */
-                            <IssueLockNotice lock={issueLocks[r.id]} />
+                            <IssueLockNotice lock={issueLock} />
                           ) : isAdmin ? (
                             <span className="text-xs text-zinc-400">처리할 것 없음</span>
                           ) : null}

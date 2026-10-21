@@ -1,6 +1,8 @@
 import { RequestManagerScreen } from "@/components/stock/RequestManagerScreen";
 import { isPartIssueApprovalRouteInForce, partIssueLockFor, type PartIssueLock } from "@/lib/approval/part-issue-gate";
 import { listOpenPartIssueStatusesByRequest } from "@/lib/approval/part-issue";
+import type { IssueApprovalTrailView } from "@/lib/approval/part-issue-screen";
+import { readPartIssueTrailsByRequest } from "@/lib/approval/part-issue-screen-data";
 import { getCurrentApprovalRoute } from "@/lib/approval/queries";
 import { roleAtLeast } from "@/lib/auth/role";
 import { requireRole } from "@/lib/auth/session";
@@ -56,13 +58,28 @@ export default async function RequestsPage({ searchParams }: { searchParams: Pro
    *    🔴 ①과 **따로 간다.** 절차를 꺼도 이미 올라간 결재건은 살아 있어 결재·실행될 수 있고, 그 사이
    *       [확인]으로 한 번 더 내보내면 **같은 부품이 두 번 나간다.**
    */
-  const [route, openApprovals] = await Promise.all([getCurrentApprovalRoute("PART_ISSUE"), listOpenPartIssueStatusesByRequest(requests.map((r) => r.id))]);
+  /**
+   * ③ **결재선 진행 그림에 먹일 자료** (2026-10-21, 조각 11f. 쓰는 분 요청: 「`/requests` 에서도 결재
+   *    진행 상황을 보고 싶다」). 결재가 걸린 신청만 들어 있다.
+   *    🔴 **「승인 요청건」이 쓰는 그 길을 그대로 쓴다**(`readPartIssueTrailsByRequest`). 그림이 그려야
+   *       하는 단계는 **그 결재건이 타고 있는 판**이지 지금 설정된 판이 아니다 — 현재 판을 집어다 그리면
+   *       절차를 바꾼 뒤 옛 건을 볼 때 **없는 결재자가 그려진다**(`IssueApprovalTrail` 머리말).
+   *    🔵 **여기(서버)서만 읽는다.** 화면 조각은 클라이언트 묶음이라 `server-only` 사슬을 물면 빌드가
+   *       깨진다 — 아래 `issueTrails` 는 **값만** 내려간다.
+   */
+  const [route, openApprovals, trailsByRequest] = await Promise.all([
+    getCurrentApprovalRoute("PART_ISSUE"),
+    listOpenPartIssueStatusesByRequest(requests.map((r) => r.id)),
+    readPartIssueTrailsByRequest(requests.map((r) => r.id)),
+  ]);
   const approvalRequired = isPartIssueApprovalRouteInForce(route);
   const issueLocks: Record<string, PartIssueLock> = {};
   for (const [requestId, statuses] of openApprovals) {
     const lock = partIssueLockFor(statuses);
     if (lock !== null) issueLocks[requestId] = lock;
   }
+  // 🔵 `Map` 이 아니라 평범한 객체로 내려보낸다 — 바로 위 `issueLocks` 와 같은 모양이어야 화면이 둘을 같게 다룬다.
+  const issueTrails: Record<string, IssueApprovalTrailView> = Object.fromEntries(trailsByRequest);
 
   /**
    * 🔴 **지금 보는 사람의 id** — 화면이 「내가 낸 신청인가」를 가려 [신청 취소]를 그린다 (2026-10-15).
@@ -72,6 +89,14 @@ export default async function RequestsPage({ searchParams }: { searchParams: Pro
    *    거기서 **「본인이 낸, 아직 PENDING 인 것」만** 받는다. 화면은 눌러도 거절당할 단추를 안 내미는 것뿐이다.
    */
   return (
-    <RequestManagerScreen requests={requests} notices={notices} isAdmin={isAdmin} currentUserId={session.user.id} approvalRequired={approvalRequired} issueLocks={issueLocks} />
+    <RequestManagerScreen
+      requests={requests}
+      notices={notices}
+      isAdmin={isAdmin}
+      currentUserId={session.user.id}
+      approvalRequired={approvalRequired}
+      issueLocks={issueLocks}
+      issueTrails={issueTrails}
+    />
   );
 }

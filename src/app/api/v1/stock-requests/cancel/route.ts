@@ -74,7 +74,13 @@ async function respond(requestKey: string, cancelled: boolean) {
     // 방금 읽은 신청이 사라지는 길은 없다(신청은 지우지 않는다). 그래도 지어내지 않는다.
     return NextResponse.json({ error: "server_error", message: "거둔 신청을 다시 읽지 못했습니다. GET /api/v1/stock-requests 로 상태를 확인하십시오." }, { status: 500, headers: NO_STORE });
   }
-  return NextResponse.json(toApiCancelResponse(cancelled, toApiRequestStatus(requestKey, row.request)), { headers: NO_STORE });
+  /**
+   * 🔵 **거둔 신청에는 살아 있는 결재건이 없다** (2026-10-21, 조각 11f에서 칸이 생겼다). 바깥에서 거둘 수 있는
+   *    것은 아직 대기(`PENDING`)인 신청뿐이고(`cancelExternalRequest` 의 WHERE), 결재가 올라간 신청은 그
+   *    상태가 아니다. 그래서 여기서는 결재건을 **읽지 않고** `null` 이라고 적어서 말한다 —
+   *    읽어 본 적이 없다는 사실을 칸에 드러내 두면, 나중에 거두는 규칙이 넓어질 때 여기가 눈에 걸린다.
+   */
+  return NextResponse.json(toApiCancelResponse(cancelled, toApiRequestStatus(requestKey, { ...row.request, issueLock: null })), { headers: NO_STORE });
 }
 
 function deny(d: CancelDenial) {

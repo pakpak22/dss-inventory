@@ -772,6 +772,40 @@ export async function listOpenPartIssueStatusesByRequest(requestIds: readonly st
   return out;
 }
 
+/**
+ * 반출 신청 묶음에 달린 **살아 있는** 결재건을 **줄 통째로** 한 번에 읽는다 (2026-10-21, 조각 11f).
+ * 없는 신청은 아예 키가 없다(바로 위 함수와 같은 관례).
+ *
+ * 🔴 **바로 위 `listOpenPartIssueStatusesByRequest` 를 넓히지 않고 옆에 둔 까닭**: 저 함수는 재고가
+ * 두 번 나가는 것을 막는 **문의 한쪽**이고(그 주석), 여기 것은 **그림을 그리려는** 조회다. 하나로
+ * 합치면 문이 그림에 딸려 다니게 된다 — 뒷날 그림을 걷어내는 사람이 문까지 들고 간다. 값도 다르다:
+ * 문에 필요한 것은 상태뿐이라 저쪽은 표 하나만 읽고, 여기는 신청·열린 단계까지 이어 읽는다.
+ * 🔵 **같은 묶음(`OPEN_PART_ISSUE_STATUSES`)으로 좁힌다** — 둘이 갈리면 문은 잠갔는데 그림이 없는
+ *    (또는 그 반대의) 줄이 생긴다.
+ *
+ * 🔴 **신청마다 묻지 않는다.** 부품 요청 관리는 목록을 통째로 그리는 화면이라, 신청마다 물으면
+ * 대기 30건이 질의 30번이 된다. 빈 입력이면 DB 를 부르지 않는다.
+ * 🔵 차례는 **오래된 것부터** — 위 함수와 같게 둔다. 그림을 고르는 쪽은 차례를 보지 않는다
+ *    (`pickPartIssueTrailSource` 가 잠금에게 묻는다).
+ */
+export async function listOpenPartIssueApprovalsByRequest(requestIds: readonly string[]): Promise<Map<string, PartIssueView[]>> {
+  const out = new Map<string, PartIssueView[]>();
+  const ids = [...new Set(requestIds)];
+  if (ids.length === 0) return out;
+
+  const rows = await listSelect()
+    .where(and(inArray(stockIssueApprovals.requestId, ids), inArray(stockIssueApprovals.status, [...OPEN_PART_ISSUE_STATUSES])))
+    .orderBy(asc(stockIssueApprovals.requestedAt));
+
+  for (const r of rows) {
+    const view = toView(r);
+    const list = out.get(view.requestId);
+    if (list) list.push(view);
+    else out.set(view.requestId, [view]);
+  }
+  return out;
+}
+
 /* ------------------------------------------------------------------ */
 /* 7. 머리말 알림 종이 쓰는 조회 둘 (2026-10-15, 조각 11d)                */
 /* 🔴 위의 함수들은 화면이 쓰고 있다 — 동작을 바꾸지 않고 **더하기만** 한다. */

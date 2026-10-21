@@ -1,22 +1,30 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { REQUEST_STATUSES } from "../src/db/schema/stock-requests";
+import { PART_ISSUE_LOCK_LABELS, type PartIssueLock } from "../src/lib/approval/part-issue-gate";
 import {
   ACTIONABLE_REQUEST_STATUSES,
   ADMIN_ONLY_TYPES,
+  AWAITING_EXECUTION_FILTER,
+  AWAITING_EXECUTION_REQUEST_BADGE,
+  AWAITING_EXECUTION_REQUEST_LABEL,
   CLAIMABLE_REQUEST_STATUSES,
+  CLOSED_REQUEST_BADGE,
   CLOSED_REQUEST_LABEL,
   CONFIRMATION_TYPES,
   DECIDED_REQUEST_STATUSES,
   ENTRY_TYPES,
   PENDING_REQUEST_STATUSES,
   REQUEST_STATUS_BADGE,
+  REQUEST_STATUS_FILTER_ORDER,
   REQUEST_STATUS_LABEL,
   REQUEST_STATUS_ORDER,
   isClaimableRequest,
   isClosedRequest,
   needsConfirmation,
+  requestMatchesStatusFilter,
   requestStatusBadge,
+  requestStatusFilterLabel,
   requestStatusLabel,
 } from "../src/lib/stock/codes";
 
@@ -210,22 +218,135 @@ describe("신청 상태의 글자와 색 (2026-10-15, 조각 10b)", () => {
     const lines = [{ quantity: 8, issued: 5 }];
     const closed = isClosedRequest("CONFIRMED", lines);
     assert.equal(closed, true, "일부만 나간 채 닫힌 신청");
-    assert.equal(requestStatusLabel("CONFIRMED", closed), CLOSED_REQUEST_LABEL);
-    assert.notEqual(requestStatusLabel("CONFIRMED", closed), REQUEST_STATUS_LABEL.CONFIRMED);
-    assert.notEqual(requestStatusBadge("CONFIRMED", closed), REQUEST_STATUS_BADGE.CONFIRMED);
+    assert.equal(requestStatusLabel("CONFIRMED", closed, null), CLOSED_REQUEST_LABEL);
+    assert.notEqual(requestStatusLabel("CONFIRMED", closed, null), REQUEST_STATUS_LABEL.CONFIRMED);
+    assert.notEqual(requestStatusBadge("CONFIRMED", closed, null), REQUEST_STATUS_BADGE.CONFIRMED);
   });
 
   it("다 나간 신청은 그냥 「확인됨」이다 — 마감 글자가 아무 데나 붙지 않는다", () => {
     const closed = isClosedRequest("CONFIRMED", [{ quantity: 8, issued: 8 }]);
     assert.equal(closed, false);
-    assert.equal(requestStatusLabel("CONFIRMED", closed), REQUEST_STATUS_LABEL.CONFIRMED);
-    assert.equal(requestStatusBadge("CONFIRMED", closed), REQUEST_STATUS_BADGE.CONFIRMED);
+    assert.equal(requestStatusLabel("CONFIRMED", closed, null), REQUEST_STATUS_LABEL.CONFIRMED);
+    assert.equal(requestStatusBadge("CONFIRMED", closed, null), REQUEST_STATUS_BADGE.CONFIRMED);
   });
 
   it("마감이 아닌 상태는 글자도 색도 표 그대로다", () => {
     for (const s of REQUEST_STATUSES) {
-      assert.equal(requestStatusLabel(s, false), REQUEST_STATUS_LABEL[s], s);
-      assert.equal(requestStatusBadge(s, false), REQUEST_STATUS_BADGE[s], s);
+      assert.equal(requestStatusLabel(s, false, null), REQUEST_STATUS_LABEL[s], s);
+      assert.equal(requestStatusBadge(s, false, null), REQUEST_STATUS_BADGE[s], s);
+    }
+  });
+});
+
+/**
+ * 「실행 대기」 — 결재가 끝나 [실행]만 남은 신청 (2026-10-21, 조각 11f).
+ *
+ * 🔴 **상태값이 아니다.** 「마감」과 같은 길이라, 지키는 것도 같다 — 글자와 색이 **짝으로** 나오는가,
+ *    차례(마감이 먼저)가 지켜지는가, 그리고 **결재가 없는 신청은 한 글자도 안 바뀌는가**.
+ */
+describe("「실행 대기」 글자와 색 (2026-10-21, 조각 11f)", () => {
+  it("🔴 결재가 **없는** 신청은 글자도 색도 2026-10-21 이전과 한 글자도 다르지 않다", () => {
+    for (const s of REQUEST_STATUSES) {
+      assert.equal(requestStatusLabel(s, false, null), REQUEST_STATUS_LABEL[s], s);
+      assert.equal(requestStatusBadge(s, false, null), REQUEST_STATUS_BADGE[s], s);
+    }
+  });
+
+  it("🔵 결재가 **도는 중**이면(승인 대기) 상태 표 그대로다 — 「결재 중」은 상태가 말한다", () => {
+    assert.equal(requestStatusLabel("IN_APPROVAL", false, "AWAITING_APPROVAL"), REQUEST_STATUS_LABEL.IN_APPROVAL);
+    assert.equal(requestStatusBadge("IN_APPROVAL", false, "AWAITING_APPROVAL"), REQUEST_STATUS_BADGE.IN_APPROVAL);
+  });
+
+  it("🔴 결재가 끝나 실행만 남으면 글자와 색이 **함께** 바뀐다 — 한쪽만 바뀌는 일이 없다", () => {
+    assert.equal(requestStatusLabel("IN_APPROVAL", false, "AWAITING_EXECUTION"), AWAITING_EXECUTION_REQUEST_LABEL);
+    assert.equal(requestStatusBadge("IN_APPROVAL", false, "AWAITING_EXECUTION"), AWAITING_EXECUTION_REQUEST_BADGE);
+    assert.notEqual(requestStatusLabel("IN_APPROVAL", false, "AWAITING_EXECUTION"), REQUEST_STATUS_LABEL.IN_APPROVAL);
+    assert.notEqual(requestStatusBadge("IN_APPROVAL", false, "AWAITING_EXECUTION"), REQUEST_STATUS_BADGE.IN_APPROVAL);
+  });
+
+  it("🔴 이 조각 **전에** 올라간 결재건은 신청이 아직 대기(PENDING)다 — 그 줄도 「실행 대기」로 보인다", () => {
+    assert.equal(requestStatusLabel("PENDING", false, "AWAITING_EXECUTION"), AWAITING_EXECUTION_REQUEST_LABEL);
+    assert.equal(requestStatusBadge("PENDING", false, "AWAITING_EXECUTION"), AWAITING_EXECUTION_REQUEST_BADGE);
+  });
+
+  it("🔴 **마감이 「실행 대기」를 이긴다** — 차례를 글자로 못 박아 둔 자리다", () => {
+    assert.equal(requestStatusLabel("CONFIRMED", true, "AWAITING_EXECUTION"), CLOSED_REQUEST_LABEL);
+    assert.equal(requestStatusBadge("CONFIRMED", true, "AWAITING_EXECUTION"), CLOSED_REQUEST_BADGE);
+  });
+
+  it("🔴 색이 「결재 중」과 다르다 — 담당자가 할 일이 다르다(기다리기 ↔ 가서 누르기)", () => {
+    assert.notEqual(AWAITING_EXECUTION_REQUEST_BADGE, REQUEST_STATUS_BADGE.IN_APPROVAL);
+  });
+
+  it("🔴 여덟 상태 어느 색과도, 마감 색과도 겹치지 않는다 — 두 뜻이 한 색을 쓰면 가를 수 없다", () => {
+    for (const s of REQUEST_STATUSES) assert.notEqual(AWAITING_EXECUTION_REQUEST_BADGE, REQUEST_STATUS_BADGE[s], s);
+    assert.notEqual(AWAITING_EXECUTION_REQUEST_BADGE, CLOSED_REQUEST_BADGE);
+  });
+
+  it("🔴 글자도 여덟 상태·마감 어느 것과도 겹치지 않는다", () => {
+    for (const s of REQUEST_STATUSES) assert.notEqual(AWAITING_EXECUTION_REQUEST_LABEL, REQUEST_STATUS_LABEL[s], s);
+    assert.notEqual(AWAITING_EXECUTION_REQUEST_LABEL, CLOSED_REQUEST_LABEL);
+  });
+
+  it("🔵 글자는 잠금이 쓰던 말과 같은 뿌리다 — 두 화면이 같은 순간을 다른 말로 부르지 않는다", () => {
+    assert.ok(PART_ISSUE_LOCK_LABELS.AWAITING_EXECUTION.startsWith(AWAITING_EXECUTION_REQUEST_LABEL), `잠금 문구와 갈렸다: ${PART_ISSUE_LOCK_LABELS.AWAITING_EXECUTION}`);
+  });
+});
+
+/**
+ * 상태 거르개 — 🔴 **「결재 중」과 「실행 대기」가 갈려야 한다** (2026-10-21, 조각 11f).
+ *
+ * 둘은 상태가 같고(`IN_APPROVAL`) 잠금만 다른 것이 보통이라, 상태만 보고 거르면 한쪽을 고를 길이 없다.
+ */
+describe("상태 거르개의 「실행 대기」 (2026-10-21, 조각 11f)", () => {
+  const row = (status: (typeof REQUEST_STATUSES)[number], issueLock: PartIssueLock | null) => ({ status, issueLock });
+  const inApproval = row("IN_APPROVAL", "AWAITING_APPROVAL");
+  const awaiting = row("IN_APPROVAL", "AWAITING_EXECUTION");
+  const plain = row("PENDING", null);
+
+  it("거르개 차례가 상태 여덟에 「실행 대기」 하나를 더한 것이다 — 빠지거나 겹치지 않는다", () => {
+    assert.deepEqual([...REQUEST_STATUS_FILTER_ORDER].sort(), [...REQUEST_STATUSES, AWAITING_EXECUTION_FILTER].sort());
+    assert.equal(new Set(REQUEST_STATUS_FILTER_ORDER).size, REQUEST_STATUS_FILTER_ORDER.length);
+  });
+
+  it("🔵 「실행 대기」는 「결재 중」 바로 뒤에 선다 — 갈라야 하는 둘이 나란히 보여야 한다", () => {
+    const i = REQUEST_STATUS_FILTER_ORDER.indexOf("IN_APPROVAL");
+    assert.ok(i >= 0, "「결재 중」이 거르개에서 사라졌다");
+    assert.equal(REQUEST_STATUS_FILTER_ORDER[i + 1], AWAITING_EXECUTION_FILTER);
+  });
+
+  it("🔴 고르개 글자가 [상태] 칸의 글자와 같다 — 다르면 사람이 같은 것인 줄 모른다", () => {
+    for (const s of REQUEST_STATUSES) assert.equal(requestStatusFilterLabel(s), requestStatusLabel(s, false, null), s);
+    assert.equal(requestStatusFilterLabel(AWAITING_EXECUTION_FILTER), requestStatusLabel("IN_APPROVAL", false, "AWAITING_EXECUTION"));
+  });
+
+  it("🔴 「결재 중」으로 거르면 **실행 대기 줄이 안 섞인다**", () => {
+    assert.equal(requestMatchesStatusFilter("IN_APPROVAL", inApproval), true);
+    assert.equal(requestMatchesStatusFilter("IN_APPROVAL", awaiting), false, "실행 대기 줄이 「결재 중」에 섞였다");
+  });
+
+  it("🔴 「실행 대기」로 거르면 **결재 중 줄이 안 섞인다**", () => {
+    assert.equal(requestMatchesStatusFilter(AWAITING_EXECUTION_FILTER, awaiting), true);
+    assert.equal(requestMatchesStatusFilter(AWAITING_EXECUTION_FILTER, inApproval), false, "결재 중 줄이 「실행 대기」에 섞였다");
+    assert.equal(requestMatchesStatusFilter(AWAITING_EXECUTION_FILTER, plain), false);
+  });
+
+  it("🔴 이 조각 전에 올라간 건(상태는 PENDING)도 「대기」가 아니라 「실행 대기」로 걸린다 — 목록의 글자와 같다", () => {
+    const legacy = row("PENDING", "AWAITING_EXECUTION");
+    assert.equal(requestMatchesStatusFilter("PENDING", legacy), false);
+    assert.equal(requestMatchesStatusFilter(AWAITING_EXECUTION_FILTER, legacy), true);
+  });
+
+  it("「전체 상태」는 무엇이든 받는다", () => {
+    for (const r of [inApproval, awaiting, plain]) assert.equal(requestMatchesStatusFilter("ALL", r), true);
+  });
+
+  it("🔵 결재가 없는 줄은 지금까지와 똑같이 **제 상태 칸에서만** 나온다", () => {
+    for (const s of REQUEST_STATUSES) {
+      const r = row(s, null);
+      assert.equal(requestMatchesStatusFilter(s, r), true, s);
+      assert.equal(requestMatchesStatusFilter(AWAITING_EXECUTION_FILTER, r), false, s);
+      for (const other of REQUEST_STATUSES) if (other !== s) assert.equal(requestMatchesStatusFilter(other, r), false, `${s} → ${other}`);
     }
   });
 });

@@ -1,5 +1,13 @@
 import { CHARGE_TYPES, ENTRY_TYPES, PURPOSES, type ChargeType, type EntryType, type Purpose, type Sheet } from "@/db/schema/stock";
 import type { RequestSource, RequestStatus } from "@/db/schema/stock-requests";
+/**
+ * 🔴 **타입만 가져온다.** 값을 가져오면 되돌아오는 고리가 생긴다 — 저쪽
+ * (`@/lib/approval/part-issue-gate`)은 `part-issue-rules.ts` 를 거쳐 **이 파일의 값**
+ * (`reopenedRequestStatus`)을 다시 가져가기 때문이다. `import type` 은 컴파일할 때 지워지므로
+ * 실제로 도는 코드에는 고리가 남지 않는다. 🔵 잠금을 **만드는** 자리는 끝까지 저쪽 하나다
+ * (`partIssueLockFor`) — 여기서는 받은 값을 **읽기만** 한다.
+ */
+import type { PartIssueLock } from "@/lib/approval/part-issue-gate";
 
 /**
  * 수량 변경 기록의 코드값 → 화면 글자 (DESIGN 4-1절). 저장은 영문, 화면은 한글. 화면 전체가 이 표 하나를 쓴다.
@@ -298,14 +306,124 @@ export const REQUEST_STATUS_BADGE: Record<RequestStatus, string> = {
 export const CLOSED_REQUEST_LABEL = "마감";
 export const CLOSED_REQUEST_BADGE = "bg-amber-100 text-amber-900";
 
-/** 화면에 보일 글자 — 마감된 신청은 「확인됨」이 아니라 「마감」이다. `closed` 는 `isClosedRequest` 가 센 값이다. */
-export function requestStatusLabel(status: RequestStatus, closed: boolean): string {
-  return closed ? CLOSED_REQUEST_LABEL : REQUEST_STATUS_LABEL[status];
+/**
+ * **결재가 끝나 [실행]만 남은** 신청의 글자와 색 (2026-10-21, 조각 11f).
+ *
+ * 🔴 **「실행 대기」도 상태값이 아니다** — 바로 위 「마감」과 **같은 길**이다(그 주석). 상태는 그대로 두고
+ *    (보통 `IN_APPROVAL`), 가르는 값은 서버가 이미 내려보내는 잠금 하나뿐이다 —
+ *    `src/lib/approval/part-issue-gate.ts` 의 `partIssueLockFor` 가 `AWAITING_EXECUTION` 이라 답한 것.
+ *    상태를 새로 만들면 enum 마이그레이션이 또 필요하고, 적용 전까지 단추가 깨진다.
+ * 🔵 글자는 그 잠금이 이미 쓰던 말에서 왔다(`PART_ISSUE_LOCK_LABELS.AWAITING_EXECUTION` = 「실행 대기 중」).
+ *    배지는 한 낱말 자리라 「중」만 뗐다 — 같은 것을 가리키는 말이 둘로 갈리지 않게 그 이상은 바꾸지 않는다.
+ * 🔴 **색이 「결재 중」과 달라야 한다.** 담당자가 할 일이 다르기 때문이다 — 「결재 중」은 결재자를
+ *    **기다리는** 것이고, 「실행 대기」는 **사람이 「승인 요청건」에 가서 누르면 되는** 것이다. 같은 색이면
+ *    기다릴 것으로 보고 지나친다.
+ * 🔵 청록을 고른 까닭: 위 여덟 색(주황·남색·회색 둘·파랑·초록·빨강·보라)과 마감의 주황, 어느 것과도
+ *    겹치지 않는 남은 계열이다. 초록(확인됨)과 가까워 보이지만 색조가 갈려 「끝났다」로 읽히지 않는다.
+ *    🔴 그 「겹치지 않음」은 눈이 아니라 **시험이 전수로** 지킨다(`tests/stock-requests.test.ts`).
+ */
+export const AWAITING_EXECUTION_REQUEST_LABEL = "실행 대기";
+export const AWAITING_EXECUTION_REQUEST_BADGE = "bg-teal-100 text-teal-800";
+
+/**
+ * 「결재가 끝나 실행만 남았나」 — 서버가 내려보낸 잠금 하나로 가린다.
+ *
+ * 🔵 **아무도 다시 세지 않는다.** 잠금을 만드는 자리는 `partIssueLockFor` 하나이고, 화면도 바깥 통로도
+ *    그 값을 받아 여기로 넘기기만 한다. 글자 고르기와 거르기가 **같은 이 한 줄**을 보게 두는 것이
+ *    「목록의 글자」와 「거르개가 고르는 것」이 갈리지 않게 하는 자리다.
+ */
+function awaitsExecution(lock: PartIssueLock | null): boolean {
+  return lock === "AWAITING_EXECUTION";
 }
 
-/** 위와 짝이 되는 배지 색. 글자와 색을 따로 고르면 「마감인데 초록」 같은 짝이 생긴다. */
-export function requestStatusBadge(status: RequestStatus, closed: boolean): string {
-  return closed ? CLOSED_REQUEST_BADGE : REQUEST_STATUS_BADGE[status];
+/**
+ * 지금 이 신청을 **뭐라고 부르고 무슨 색으로 그릴까** — 글자와 색을 **한 번에** 고른다.
+ *
+ * 🔴 **따로 고르지 않는 까닭**: 「실행 대기인데 남색」 같은 짝이 생긴다(위 `REQUEST_STATUS_BADGE` 주석의
+ *    경고 그대로). 아래 두 함수는 **반드시** 이 한 곳을 지나간다.
+ * 🔴 **차례를 글자로 못 박는다 — ① 마감 ② 실행 대기 ③ 상태 표.** 마감된 신청에 살아 있는 결재건이
+ *    남아 있을 수는 없지만(실행하면 결재건이 닫힌다), 차례를 적어 두지 않으면 그런 줄이 하나라도 생기는
+ *    날 **같은 신청이 화면마다 다른 이름으로 불린다.** 적어 두면 그때도 답이 하나다.
+ */
+function requestStatusDisplay(status: RequestStatus, closed: boolean, lock: PartIssueLock | null): { label: string; badge: string } {
+  if (closed) return { label: CLOSED_REQUEST_LABEL, badge: CLOSED_REQUEST_BADGE };
+  if (awaitsExecution(lock)) return { label: AWAITING_EXECUTION_REQUEST_LABEL, badge: AWAITING_EXECUTION_REQUEST_BADGE };
+  return { label: REQUEST_STATUS_LABEL[status], badge: REQUEST_STATUS_BADGE[status] };
+}
+
+/**
+ * 화면에 보일 글자 — 마감된 신청은 「확인됨」이 아니라 「마감」이고, 결재가 끝나 실행만 남은 신청은
+ * 「결재 중」이 아니라 「실행 대기」다.
+ *
+ * @param closed `isClosedRequest` 가 센 값.
+ * @param lock 그 신청을 붙들고 있는 결재건의 잠금. 결재가 걸려 있지 않으면 `null`.
+ *   🔴 **기본값을 두지 않는다.** 두면 부르는 자리가 늘 때 아무 말 없이 「잠금 없음」으로 굳어
+ *   한 화면만 옛 글자를 보여 준다 — 오류가 아니라 **빠짐**이라 아무도 신고하지 않는다.
+ *   잠금이 없는 자리는 `null` 이라고 **적어서** 말한다.
+ */
+export function requestStatusLabel(status: RequestStatus, closed: boolean, lock: PartIssueLock | null): string {
+  return requestStatusDisplay(status, closed, lock).label;
+}
+
+/** 위와 짝이 되는 배지 색. 🔴 **같은 한 곳**에서 고른다 — 따로 고르면 「마감인데 초록」 같은 짝이 생긴다. */
+export function requestStatusBadge(status: RequestStatus, closed: boolean, lock: PartIssueLock | null): string {
+  return requestStatusDisplay(status, closed, lock).badge;
+}
+
+/* ------------------------------------------------------------------ */
+/* 상태 거르개 — 상태 여덟에 「실행 대기」가 하나 더 선다 (2026-10-21)     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 거르개의 「실행 대기」 칸이 쓰는 값.
+ *
+ * 🔵 **잠금의 글자를 그대로 쓴다**(`PartIssueLock` 의 `AWAITING_EXECUTION`). 거르는 조건이 곧 그 잠금이라,
+ *    글자를 새로 지으면 둘을 맞춰 보는 사람이 같은 것인지 알 수 없다.
+ * 🔴 상태 이름(`RequestStatus`)과 **겹치지 않는 글자여야 한다** — 겹치면 거르개 값 하나가 두 뜻이 된다.
+ */
+export const AWAITING_EXECUTION_FILTER = "AWAITING_EXECUTION";
+
+/** 거르개가 고를 수 있는 값 — 「전체 상태」 · 상태 여덟 · 「실행 대기」. */
+export type RequestStatusFilter = "ALL" | RequestStatus | typeof AWAITING_EXECUTION_FILTER;
+
+/**
+ * 거르개가 도는 차례 — 🔴 **상태 차례(`REQUEST_STATUS_ORDER`)에서 뽑아 쓴다.** 따로 적으면 상태를 하나
+ * 더했을 때 한쪽만 고쳐진다.
+ *
+ * 🔵 「실행 대기」를 **「결재 중」 바로 뒤**에 끼운다 — 일이 흘러가는 차례가 그렇고(결재가 끝나면 실행이다),
+ *    서로 갈라야 하는 둘이 나란히 서야 사람이 「이 둘이 다르구나」를 고르개에서 바로 본다.
+ */
+export const REQUEST_STATUS_FILTER_ORDER: readonly Exclude<RequestStatusFilter, "ALL">[] = REQUEST_STATUS_ORDER.flatMap((s) =>
+  s === "IN_APPROVAL" ? [s, AWAITING_EXECUTION_FILTER] : [s],
+);
+
+/**
+ * 고르개에 보일 글자 — 🔴 **[상태] 칸의 글자와 같은 한 벌에서 온다.** 다르면 사람은 고른 것과 보이는 것이
+ * 같은 것인 줄 모른다.
+ */
+export function requestStatusFilterLabel(filter: Exclude<RequestStatusFilter, "ALL">): string {
+  return filter === AWAITING_EXECUTION_FILTER ? AWAITING_EXECUTION_REQUEST_LABEL : REQUEST_STATUS_LABEL[filter];
+}
+
+/**
+ * 그 줄이 지금 거르개에 걸리나 — **순수 함수**다.
+ *
+ * 🔴 **「결재 중」으로 걸렀을 때 실행 대기 줄이 섞이면 안 된다.** 둘은 상태가 같고(`IN_APPROVAL`) 잠금만
+ *    다른 경우가 보통이라, 상태만 보고 거르면 한 쪽을 고를 길이 아예 없다. 그래서 **실행을 기다리는 줄은
+ *    상태 쪽 칸에서 빼고**(아래 `!awaiting`), 「실행 대기」 칸에서만 나오게 한다 — 목록의 글자가
+ *    「실행 대기」인 줄은 고르개에서도 「실행 대기」다.
+ * 🔵 **화면에 손으로 적지 않고 여기 두는 까닭**: 이 저장소에는 화면 렌더 시험이 없다. 화면 안에 적은
+ *    조건은 아무도 돌려 보지 못한 채 운영으로 나간다(`src/lib/approval/part-issue-screen.ts` 머리말과
+ *    같은 까닭이고, 같은 처방이다).
+ * 🔵 **`codes.ts` 에 둔 까닭**: 가르는 데 필요한 글자(상태 표·「실행 대기」)가 전부 이 파일에 있다.
+ *    잠금 쪽(`part-issue-gate.ts`)에 두면 **거기서 상태 표를 되가져가야** 하고, 그러면 글자와 거르기가
+ *    두 파일에 나뉜다.
+ */
+export function requestMatchesStatusFilter(filter: RequestStatusFilter, row: { status: RequestStatus; issueLock: PartIssueLock | null }): boolean {
+  if (filter === "ALL") return true;
+  const awaiting = awaitsExecution(row.issueLock);
+  if (filter === AWAITING_EXECUTION_FILTER) return awaiting;
+  return !awaiting && row.status === filter;
 }
 
 export const PURPOSE_LABEL: Record<Purpose, string> = {

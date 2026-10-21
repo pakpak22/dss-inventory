@@ -1,3 +1,4 @@
+import { partIssueLockFor } from "./part-issue-gate";
 import { PART_ISSUE_STATUS_LABELS, type PartIssueStatus } from "./part-issue-rules";
 import type { EntryType } from "@/lib/stock/codes";
 
@@ -63,6 +64,41 @@ export type IssueApprovalTrailStep = {
   /** 신청자 본인이라 결재를 받지 않는 단계인가. */
   skipped: boolean;
 };
+
+/**
+ * 결재선 진행 그림 하나가 받는 것 전부 (2026-10-21, 조각 11f).
+ *
+ * 🔴 **결재건 카드(`IssueApprovalCard`)에서 그림에 쓰는 셋만 뽑은 모양이다.** 부품 요청 관리
+ * (`/requests`)는 결재건을 **보여 주는** 화면이 아니라 신청을 처리하는 화면이라, 사유·줄별 수량·
+ * [신청 취소] 같은 칸까지 내려보내면 쓰지도 않을 값이 줄마다 브라우저로 실려 나간다.
+ * 🔵 칸 이름은 `IssueApprovalTrail` 의 매개변수와 **같게** 둔다 — 화면이 옮겨 담지 않고 그대로 편다.
+ */
+export type IssueApprovalTrailView = {
+  status: PartIssueStatus;
+  /** 지금 열려 있는 단계. 결재가 끝났으면 `null`. */
+  currentStep: { stepOrder: number; approverName: string } | null;
+  /** 🔴 이 건이 **타고 있는 판**의 단계들 — 지금 설정된 판이 아니다(서버가 결재건의 판으로 읽는다). */
+  steps: IssueApprovalTrailStep[];
+};
+
+/**
+ * 한 신청에 달린 살아 있는 결재건들 중 **그림이 말해야 하는 한 건**을 고른다. 없으면 `null`.
+ *
+ * 🔴 **고르는 차례를 새로 적지 않는다 — 잠금에게 묻는다**(`partIssueLockFor`). 부품 요청 관리의
+ * [상태] 칸이 「결재 중」인지 「실행 대기」인지도 그 함수가 정하므로, 그림이 다른 건을 그리면
+ * **한 줄 안에서 글자와 그림이 서로 다른 말을 한다.** 차례를 여기 손으로 베껴 적으면 언젠가
+ * 한쪽만 고쳐지고, 그때 어긋남은 오류가 아니라 **눈으로만 보이는 거짓말**이 된다.
+ *
+ * 🔵 **목록으로 받는 까닭**은 `partIssueLockFor` 머리말 그대로다 — 표의 부분 유니크 색인이 살아 있는
+ *    결재건을 하나로 묶어 두므로 오늘 오는 것은 0개 아니면 1개지만, 「하나」로 적어 두면 둘째가
+ *    생기는 날 **아무 말 없이 엉뚱한 건을 그린다.**
+ */
+export function pickPartIssueTrailSource<T extends { status: PartIssueStatus }>(views: readonly T[]): T | null {
+  const lock = partIssueLockFor(views.map((v) => v.status));
+  if (lock === null) return null;
+  const wanted: PartIssueStatus = lock === "AWAITING_APPROVAL" ? "PENDING_APPROVAL" : "APPROVED";
+  return views.find((v) => v.status === wanted) ?? null;
+}
 
 /** 결재건 한 장. 🔴 포털 번호도, 사람의 id 도 담지 않는다(머리말). */
 export type IssueApprovalCard = {

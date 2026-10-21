@@ -15,7 +15,7 @@ import {
 } from "../src/lib/api/stock-request-status";
 import { checkBearerToken } from "../src/lib/api/token-gate";
 import { env } from "../src/lib/env";
-import { CLOSED_REQUEST_LABEL, INTAKE_NUMBER_RE, REQUEST_STATUS_LABEL } from "../src/lib/stock/codes";
+import { AWAITING_EXECUTION_REQUEST_LABEL, CLOSED_REQUEST_LABEL, INTAKE_NUMBER_RE, REQUEST_STATUS_LABEL } from "../src/lib/stock/codes";
 
 /**
  * A/S 가 **올린 신청의 지금 상태를 물어 가는 통로**의 울타리 (2026-10-15, `GET /api/v1/stock-requests`).
@@ -40,6 +40,8 @@ const SOURCE: RequestStatusSource = {
   decidedAt: null,
   decisionNote: "",
   hold: null,
+  // 🔵 결재가 걸려 있지 않은 신청이 기본이다 — 그때 글자는 2026-10-21 이전과 한 글자도 다르지 않다.
+  issueLock: null,
 };
 
 const source = (over: Partial<RequestStatusSource> = {}): RequestStatusSource => ({ ...SOURCE, ...over });
@@ -246,6 +248,66 @@ describe("🔴 마감 — 상태가 아니라 세어서 가린다 (2026-10-15)",
       assert.equal(q.closed, false, status);
       assert.equal(q.status.label, REQUEST_STATUS_LABEL[status], status);
     }
+  });
+});
+
+/**
+ * 🔴 **「실행 대기」도 상태값이 아니다** (2026-10-21, 조각 11f).
+ *
+ * 같은 건이 재고 관리 화면에서는 「실행 대기」인데 A/S 수리 건 상세에서는 「결재 중」으로 보이면, 두 사람이
+ * 전화로 맞춰 볼 때 서로 다른 것을 말하게 된다. 그래서 이 통로도 **같은 함수**(`requestStatusLabel`)로
+ * 글자를 고른다 — 🔴 **다만 `code` 는 손대지 않는다**: A/S 가 그 값으로 [요청 취소] 단추를 가린다.
+ */
+describe("🔴 실행 대기 — 글자만 바뀌고 code 는 그대로 (2026-10-21, 조각 11f)", () => {
+  it("결재가 끝나 실행만 남으면 label 이 「실행 대기」다", () => {
+    const q = toApiRequestStatus("AS-1", source({ status: "IN_APPROVAL", issueLock: "AWAITING_EXECUTION" }));
+    assert.equal(q.status.label, AWAITING_EXECUTION_REQUEST_LABEL);
+    assert.notEqual(q.status.label, REQUEST_STATUS_LABEL.IN_APPROVAL);
+  });
+
+  it("🔴 **`code` 는 한 글자도 바뀌지 않는다** — A/S 가 이 값으로 [요청 취소] 단추를 가린다", () => {
+    for (const status of ["IN_APPROVAL", "PENDING", "PARTIAL"] as const) {
+      const q = toApiRequestStatus("AS-1", source({ status, issueLock: "AWAITING_EXECUTION" }));
+      assert.equal(q.status.code, status, status);
+    }
+    // 🔴 저쪽이 단추를 여는 조건 그대로 — 글자가 바뀌어도 그 판정은 흔들리지 않는다.
+    assert.equal(toApiRequestStatus("AS-1", source({ status: "PENDING", issueLock: "AWAITING_EXECUTION" })).status.code, "PENDING");
+  });
+
+  it("🔵 결재가 **도는 중**이면 지금까지와 같은 「결재 중」이다 — 바뀌는 것은 실행 대기 하나뿐", () => {
+    const q = toApiRequestStatus("AS-1", source({ status: "IN_APPROVAL", issueLock: "AWAITING_APPROVAL" }));
+    assert.equal(q.status.label, REQUEST_STATUS_LABEL.IN_APPROVAL);
+    assert.equal(q.status.code, "IN_APPROVAL");
+  });
+
+  it("🔴 결재가 **없는** 신청은 글자가 2026-10-21 이전과 한 글자도 다르지 않다", () => {
+    for (const status of ["PENDING", "CONFIRMING", "PARTIAL", "ON_HOLD", "REJECTED", "CANCELLED", "IN_APPROVAL", "CONFIRMED"] as const) {
+      const q = toApiRequestStatus("AS-1", source({ status, issueLock: null }));
+      assert.equal(q.status.label, REQUEST_STATUS_LABEL[status], status);
+    }
+  });
+
+  it("🔴 마감이 「실행 대기」를 이긴다 — 재고 관리 화면과 같은 차례다", () => {
+    const q = toApiRequestStatus(
+      "AS-1",
+      source({ status: "CONFIRMED", issueLock: "AWAITING_EXECUTION", lines: [{ ...LINE, quantity: 8, issued: 5 }], decidedByName: "정영빈", decidedAt: "2026-10-21T04:00:00.000Z" }),
+    );
+    assert.equal(q.closed, true);
+    assert.equal(q.status.label, CLOSED_REQUEST_LABEL);
+  });
+
+  it("🔴 돌려주는 칸이 늘지 않는다 — 잠금은 글자를 고르는 데만 쓰고 밖으로 내보내지 않는다", () => {
+    const withLock = toApiRequestStatus("AS-1", source({ issueLock: "AWAITING_EXECUTION" }));
+    const without = toApiRequestStatus("AS-1", source({ issueLock: null }));
+    assert.deepEqual(Object.keys(withLock).sort(), Object.keys(without).sort());
+  });
+
+  it("🔵 두 묻는 법이 같은 줄을 지난다 — 열쇠로 묻든 인수번호로 묻든 같은 글자다", () => {
+    const row = source({ status: "IN_APPROVAL", issueLock: "AWAITING_EXECUTION" });
+    const byKey = buildStatusResponse(["AS-1"], new Map([["AS-1", row]]), "2026-10-21T10:00:00.000Z");
+    const byIntake = buildIntakeStatusResponse([{ requestKey: "AS-1", request: row }], "2026-10-21T10:00:00.000Z");
+    assert.equal(byKey.requests[0]?.status.label, AWAITING_EXECUTION_REQUEST_LABEL);
+    assert.deepEqual(byKey.requests[0], byIntake.requests[0]);
   });
 });
 

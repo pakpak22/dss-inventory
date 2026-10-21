@@ -246,3 +246,72 @@ describe("⑦ 🔵 [불출 신청]의 사유는 **선택**이다 (2026-10-15 쓰
     assert.ok(actions.includes('<input name="reason" required minLength={2} maxLength={500} className={FIELD} placeholder="예: 부품 입고 대기, 신청자 확인 필요" />'), "보류 사유의 울타리가 함께 풀렸다");
   });
 });
+
+/* ------------------------------------------------------------------ */
+
+/**
+ * ⑧ 「실행 대기」와 진행 그림 (2026-10-21, 조각 11f).
+ *
+ * 🔴 여기서 글자로 재는 것은 둘이다:
+ *  1. **같은 건을 두 시스템이 같은 이름으로 부른다** — A/S 통로가 재고 관리 화면과 **같은 조회·같은
+ *     판정**으로 잠금을 읽는가. 비슷한 것을 저쪽에 새로 적으면 두 화면이 다른 답을 하는 날이 오는데,
+ *     그 어긋남은 오류를 내지 않아 **아무도 신고하지 않는다.**
+ *  2. **줄마다 묻지 않는가** — 이 통로는 신청을 여러 건 한 번에 내주므로, 줄마다 물으면 호출 한 번이
+ *     질의 수십 번이 된다.
+ */
+describe("⑧ 「실행 대기」 — 두 화면이 같은 이름으로 부른다 (2026-10-21)", () => {
+  it("🔴 A/S 통로가 **재고 관리 화면과 같은 조회·같은 판정**으로 잠금을 읽는다", () => {
+    const route = src("src/app/api/v1/stock-requests/route.ts");
+    assert.ok(route.includes("listOpenPartIssueStatusesByRequest("), "통로가 결재건을 아예 읽지 않는다 — 글자가 옛것으로 남는다");
+    assert.ok(route.includes("partIssueLockFor("), "통로가 잠금 판정을 제 손으로 적었다 — 두 화면이 다른 답을 하는 날이 온다");
+  });
+
+  it("🔴 통로가 **묶음으로 한 번에** 읽는다 — 줄마다 물으면 호출 한 번이 질의 수십 번이 된다", () => {
+    const body = bodyOf(src("src/app/api/v1/stock-requests/route.ts"), "async function issueLocksOf");
+    assert.ok(body.includes("listOpenPartIssueStatusesByRequest(requestIds)"), "묶음 조회가 아니다");
+    for (const call of ["issueLocksOf(rows.map((r) => r.request.id))", "issueLocksOf(found.map((f) => f.request.id))"]) {
+      assert.ok(src("src/app/api/v1/stock-requests/route.ts").includes(call), `묻는 법 한쪽이 잠금을 안 싣는다: ${call}`);
+    }
+  });
+
+  it("🔴 통로가 내주는 **`code` 는 손대지 않는다** — A/S 가 그 값으로 [요청 취소] 단추를 가린다", () => {
+    const status = src("src/lib/api/stock-request-status.ts");
+    assert.ok(status.includes("status: { code: r.status, label: requestStatusLabel(r.status, closed, r.issueLock) }"), "`code` 가 상태 그대로가 아니다 — A/S 의 단추가 조용히 어긋난다");
+  });
+
+  it("🔴 글자가 적힌 자리는 **한 곳**이다 — 통로도 화면도 「실행 대기」를 제 손으로 박지 않는다", () => {
+    // 🔵 주석에 적힌 「실행 대기」는 설명이다. 재는 것은 **따옴표에 박힌 글자** — 그것이 두 벌이 되면 갈린다.
+    const quoted = /["'`]실행 대기["'`]/;
+    for (const file of ["src/lib/api/stock-request-status.ts", "src/components/stock/RequestManagerScreen.tsx", "src/app/api/v1/stock-requests/route.ts"]) {
+      assert.ok(!quoted.test(src(file)), `${file} 에 「실행 대기」가 글자로 박혀 있다 — 글자를 고치는 날 한쪽만 바뀐다`);
+    }
+    assert.ok(quoted.test(src("src/lib/stock/codes.ts")), "글자가 적힌 그 한 곳이 사라졌다 — 시험이 낡았다");
+  });
+});
+
+describe("⑧-2 결재선 진행 그림 — 판정은 서버가 하고 화면은 그린다 (2026-10-21)", () => {
+  it("🔴 자료를 읽는 일은 **서버 컴포넌트**가 한다 — 화면 조각이 읽으면 빌드가 깨진다", () => {
+    const page = src("src/app/(app)/requests/page.tsx");
+    assert.ok(page.includes("readPartIssueTrailsByRequest(requests.map((r) => r.id))"), "서버가 진행 그림 자료를 묶음으로 읽지 않는다");
+    assert.ok(page.includes("issueTrails={issueTrails}"), "읽어 놓고 화면에 내려보내지 않는다");
+    assert.ok(!src("src/components/stock/RequestManagerScreen.tsx").includes("part-issue-screen-data"), "화면 조각이 server-only 사슬을 끌어온다");
+  });
+
+  it("🔴 화면이 **그릴 건을 스스로 고르지 않는다** — 고르는 자리는 순수 함수 한 곳이다", () => {
+    const screen = src("src/components/stock/RequestManagerScreen.tsx");
+    assert.ok(!screen.includes("pickPartIssueTrailSource("), "화면이 그릴 결재건을 스스로 고른다");
+    assert.ok(screen.includes("<IssueApprovalTrail status={issueTrail.status}"), "받은 값을 그대로 펴지 않는다");
+  });
+
+  it("🔴 그림의 단계는 **그 결재건이 타고 있는 판**이다 — 지금 설정된 판을 집어 오지 않는다", () => {
+    const body = bodyOf(src("src/lib/approval/part-issue-screen-data.ts"), "export async function readPartIssueTrailsByRequest");
+    assert.ok(body.includes("routeStepsByRouteId("), "판을 결재건의 route_id 로 읽지 않는다");
+    assert.ok(!body.includes("getCurrentApprovalRoute"), "현재 판을 집어다 그린다 — 절차를 바꾸면 없는 결재자가 그려진다");
+  });
+
+  it("🔴 **그림도 잠금과 같은 묶음**에서 나온다 — 한쪽에만 있는 줄이 생기면 글자와 그림이 갈린다", () => {
+    const body = bodyOf(src("src/lib/approval/part-issue.ts"), "export async function listOpenPartIssueApprovalsByRequest");
+    assert.ok(body.includes("inArray(stockIssueApprovals.status, [...OPEN_PART_ISSUE_STATUSES])"), "살아 있는 결재건 묶음으로 좁히지 않는다");
+    assert.ok(body.includes("if (ids.length === 0) return out;"), "빈 입력에도 DB 를 부른다");
+  });
+});
