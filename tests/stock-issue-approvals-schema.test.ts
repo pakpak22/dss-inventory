@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { getTableConfig, PgDialect } from "drizzle-orm/pg-core";
-import { stockIssueApprovalSteps, stockIssueApprovals } from "../src/db/schema/stock-issue-approvals";
+import { stockIssueApprovalStatusEnum, stockIssueApprovalSteps, stockIssueApprovals } from "../src/db/schema/stock-issue-approvals";
 import { stockRequests } from "../src/db/schema/stock-requests";
 import { approvalRoutes } from "../src/db/schema/approval-routes";
 
@@ -108,9 +108,118 @@ describe("stock_issue_approvals — 칸", () => {
 
   it("실행 기록과 상태가 같은 말이 되게 DB 가 막는다", () => {
     assert.deepEqual(
-      approvals.checks.map((c) => c.name),
-      ["stock_issue_approvals_execution_metadata"],
+      approvals.checks.map((c) => c.name).sort(),
+      ["stock_issue_approvals_execution_metadata", "stock_issue_approvals_execution_rejection_metadata"],
     );
+  });
+});
+
+/**
+ * 🔴 **실행 대기에서 반려** (2026-10-21).
+ *
+ * 2026-10-21 에 「결재 중」을 만들면서 결재가 도는 동안 담당자의 [반려]·[보류]·[신청 취소]를
+ * 닫았고, 그 결과 **결재가 다 끝나 [실행]만 남으면 아무도 그 건을 멈출 수 없었다.** 이 묶음이
+ * 그 빚을 갚은 자리의 울타리다 — 지키는 것은 **옛 줄이 살아남는가**와 **기존 울타리가 한 글자도
+ * 안 바뀌었는가** 둘이다.
+ */
+describe("stock_issue_approvals — 실행 대기 반려 (2026-10-21)", () => {
+  const rejectionColumns = ["execution_rejected_by", "execution_rejected_by_name", "execution_rejected_at", "execution_rejected_reason"];
+
+  it("🔴 새 칸이 **전부 널 허용**이다 — 이미 있는 결재건들이 살아남아야 한다", () => {
+    for (const name of rejectionColumns) {
+      const col = columnOf(approvals, name);
+      assert.ok(col, `${name} 이 없으면 「누가 왜 막았나」를 적을 자리가 없다`);
+      assert.equal(col.notNull, false, `${name} 을 NOT NULL 로 올리면 옛 줄 때문에 마이그레이션이 그 자리에서 멈춘다`);
+    }
+  });
+
+  it("🔴 **본보기는 실행 칸 셋**이다 — 모양이 짝이라야 다음 사람이 같은 규약으로 읽는다", () => {
+    assert.equal(columnOf(approvals, "execution_rejected_by")?.getSQLType(), columnOf(approvals, "executed_by")?.getSQLType());
+    assert.equal(columnOf(approvals, "execution_rejected_by_name")?.getSQLType(), columnOf(approvals, "executed_by_name")?.getSQLType());
+    assert.equal(columnOf(approvals, "execution_rejected_at")?.getSQLType(), columnOf(approvals, "executed_at")?.getSQLType());
+  });
+
+  it("🔴 막은 사람에 FK 가 없다 — A/S 쪽 계정일 수 있다(표 머리말)", () => {
+    const fk = approvals.foreignKeys.find((f) => f.reference().columns.some((c) => c.name === "execution_rejected_by"));
+    assert.equal(fk, undefined);
+  });
+
+  it("🔴 사유 칸에 `''` 기본값을 두지 않는다 — 「안 적었다」와 「반려한 적 없다」가 같은 모양이 된다", () => {
+    const col = columnOf(approvals, "execution_rejected_reason");
+    assert.ok(col);
+    assert.equal(col.hasDefault, false, "기본값이 생기면 아래 CHECK 가 두 경우를 가를 수 없다");
+  });
+
+  it("🔴 **기존 execution_metadata CHECK 가 한 글자도 안 바뀌었다** — 새 칸을 끌어들이면 옛 줄이 전부 걸린다", () => {
+    const found = approvals.checks.find((c) => c.name === "stock_issue_approvals_execution_metadata");
+    assert.ok(found);
+    const rendered = new PgDialect().sqlToQuery(found.value).sql;
+    assert.doesNotMatch(rendered, /execution_rejected/, "실행 쌍에 반려 칸을 더하면 마이그레이션이 실패한다");
+    for (const fragment of [
+      "(status <> 'EXECUTED' AND executed_by IS NULL AND executed_by_name IS NULL AND executed_at IS NULL AND entry_id IS NULL)",
+      "(status = 'EXECUTED' AND executed_by IS NOT NULL AND executed_by_name IS NOT NULL AND executed_at IS NOT NULL AND entry_id IS NOT NULL)",
+    ]) {
+      assert.ok(rendered.includes(fragment), `사라진 갈래: ${fragment}`);
+    }
+  });
+
+  it("🔴 새 CHECK 는 **따로** 서 있고, 네 칸이 **다 같이** 차거나 다 비어야 한다", () => {
+    const found = approvals.checks.find((c) => c.name === "stock_issue_approvals_execution_rejection_metadata");
+    assert.ok(found, "DB 가 막지 않으면 서버 함수를 직접 부르는 길로 사유 없는 반려가 들어온다");
+    const rendered = new PgDialect().sqlToQuery(found.value).sql;
+    // 비는 쪽 — 네 칸이 **전부** NULL.
+    for (const name of rejectionColumns) assert.ok(rendered.includes(`${name} IS NULL`), `${name} 이 비는 갈래에 없다`);
+    // 차는 쪽 — 네 칸이 **전부** NOT NULL, 그리고 사유는 빈 글자가 아니다.
+    for (const name of rejectionColumns) assert.ok(rendered.includes(`${name} IS NOT NULL`), `${name} 이 차는 갈래에 없다`);
+    assert.ok(rendered.includes("execution_rejected_reason <> ''"), "사유 없는 반려가 DB 를 통과한다");
+  });
+
+  it("🔴 **옛 줄이 전부 통과한다** — 첫 갈래가 「상태가 그 값이 아니고 네 칸이 다 NULL」이다", () => {
+    // 옛 줄은 네 칸이 전부 NULL 이고, 상태는 이 값이 생기기 전의 다섯 중 하나다 —
+    // 그래서 **상태가 무엇이든** 첫 갈래로 통과한다. 둘 중 하나라도 어긋나면 적용 때 깨진다.
+    const found = approvals.checks.find((c) => c.name === "stock_issue_approvals_execution_rejection_metadata");
+    assert.ok(found);
+    const rendered = new PgDialect().sqlToQuery(found.value).sql;
+    const emptyBranch = `(status::text <> 'EXECUTION_REJECTED' AND ${rejectionColumns.map((n) => `${n} IS NULL`).join(" AND ")})`;
+    assert.ok(rendered.includes(emptyBranch), `옛 줄이 통과하는 갈래가 없다\n${rendered}`);
+  });
+
+  it("🔴 `status::text` 다 — enum 값을 **갓 더한 트랜잭션 안에서 쓰면** 적용이 깨진다", () => {
+    // PostgreSQL: `unsafe use of new value … of enum type`. drizzle 의 migrator 는 밀린
+    // 마이그레이션 전부를 한 트랜잭션으로 돌리므로 파일을 쪼개도 소용없다 — 글자로 견준다.
+    const found = approvals.checks.find((c) => c.name === "stock_issue_approvals_execution_rejection_metadata");
+    assert.ok(found);
+    const rendered = new PgDialect().sqlToQuery(found.value).sql;
+    assert.ok(rendered.includes("status::text"), "`::text` 가 사라졌다 — 이 마이그레이션은 적용 때 깨진다");
+    assert.doesNotMatch(rendered, /status <> 'EXECUTION_REJECTED'/, "enum 과 직접 견주면 갓 더한 값이라 거절당한다");
+    assert.doesNotMatch(rendered, /status = 'EXECUTION_REJECTED'/, "enum 과 직접 견주면 갓 더한 값이라 거절당한다");
+  });
+
+  it("🔴 CHECK 둘 다 **바인딩 자리가 없다** — `$1` 이 구워지면 마이그레이션이 돌지 않는다", () => {
+    // 🔵 drizzle 의 sql 템플릿은 `${}` 로 넘긴 상수를 자리표시자로 굽는다. 오류 없이 생성되고
+    //    적용 때 깨지는 결함이라 눈으로는 안 잡힌다 — 여기서 값으로 센다.
+    for (const name of ["stock_issue_approvals_execution_metadata", "stock_issue_approvals_execution_rejection_metadata"]) {
+      const found = approvals.checks.find((c) => c.name === name);
+      assert.ok(found, name);
+      const query = new PgDialect().sqlToQuery(found.value);
+      assert.deepEqual(query.params, [], `${name} 에 바인딩 자리가 생겼다 — CHECK 는 상수를 글자로 적어야 한다`);
+      assert.doesNotMatch(query.sql, /\$\d/, `${name} 에 $1 꼴이 들어 있다`);
+    }
+  });
+
+  it("🔵 새 상태값은 **부분 유니크 색인의 묶음에 없다** — 그 신청에 다시 올릴 수 있다", () => {
+    const uq = approvals.indexes.find((i) => i.config.name === "stock_issue_approvals_request_open_uq");
+    assert.ok(uq?.config.where);
+    const where = new PgDialect().sqlToQuery(uq.config.where).sql;
+    assert.doesNotMatch(where, /EXECUTION_REJECTED/, "닫힌 건을 살아 있는 것으로 세면 그 신청의 [확인] 자리가 영원히 잠긴다");
+    // 🔴 색인은 **고치지 않았다** — 조건절이 지금 그대로여야 위 동작이 저절로 된다.
+    assert.ok(where.includes("'PENDING_APPROVAL'") && where.includes("'APPROVED'"), `색인 조건절이 바뀌었다: ${where}`);
+  });
+
+  it("🔴 새 enum 값이 **맨 끝**에 있다 — 가운데 끼우면 다음 db:generate 가 있지도 않은 차이를 본다", () => {
+    const values = [...stockIssueApprovalStatusEnum.enumValues];
+    assert.equal(values.at(-1), "EXECUTION_REJECTED");
+    assert.deepEqual(values.slice(0, -1), ["PENDING_APPROVAL", "APPROVED", "EXECUTED", "REJECTED", "CANCELLED"], "앞의 다섯은 차례까지 그대로다");
   });
 });
 

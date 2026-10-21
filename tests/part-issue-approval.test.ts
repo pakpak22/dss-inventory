@@ -5,6 +5,7 @@ import {
   checkCanCancelPartIssue,
   checkCanDecidePartIssue,
   checkCanExecutePartIssue,
+  checkCanRejectExecutionPartIssue,
   checkIssueQuantities,
   checkRejectReason,
   isOpenPartIssueStatus,
@@ -242,6 +243,95 @@ describe("③ 어떤 상태에서 무엇을 할 수 있나", () => {
     assert.deepEqual([...OPEN_PART_ISSUE_STATUSES], ["PENDING_APPROVAL", "APPROVED"]);
     const open = PART_ISSUE_STATUSES.filter((s) => isOpenPartIssueStatus(s));
     assert.deepEqual(open, ["PENDING_APPROVAL", "APPROVED"]);
+  });
+});
+
+/**
+ * ============================================================================
+ * ④ 실행 대기에서 반려 (2026-10-21)
+ * ============================================================================
+ * 2026-10-21 에 「결재 중」을 만들면서 결재가 도는 동안 담당자의 [반려]·[보류]·[신청 취소]를
+ * 닫았다. 그 결과 **결재가 다 끝나 [실행]만 남으면 아무도 그 건을 멈출 수 없었다** — 재고가
+ * 모자라도, 신청이 잘못됐다는 것을 뒤늦게 알아도, 할 수 있는 일은 「실행하지 않고 두기」뿐이었다.
+ *
+ * 🔴 이 묶음이 지키는 것 둘:
+ *  ① **새 판정이 `APPROVED` 하나에서만 열린다**(전수로). 특히 `PENDING_APPROVAL` 에서 열리면
+ *     2026-10-21 결정이 다시 깨진다 — 결재자에게 뜬 건이 담당자 손에 소리 없이 닫힌다.
+ *  ② **기존 판정 셋이 한 글자도 안 바뀌었다.** 새 상태가 생겼다고 `checkCanDecidePartIssue`·
+ *     `checkCanExecutePartIssue`·`checkCanCancelPartIssue` 가 넓어지면 닫힌 건이 되살아난다.
+ * ============================================================================
+ */
+describe("④ 실행 대기에서 반려 — checkCanRejectExecutionPartIssue (2026-10-21)", () => {
+  it("🔴 **`APPROVED` 일 때만** 열린다 — 나머지는 전부 거절 (전수)", () => {
+    for (const status of PART_ISSUE_STATUSES) {
+      assert.equal(checkCanRejectExecutionPartIssue(status).ok, status === "APPROVED", status);
+    }
+  });
+
+  it("🔴 결재 중(`PENDING_APPROVAL`)에서는 열리지 않는다 — 2026-10-21 결정을 다시 깨지 않는다", () => {
+    const gate = checkCanRejectExecutionPartIssue("PENDING_APPROVAL");
+    assert.equal(gate.ok, false);
+    // 막을 때는 **지금 할 수 있는 일**까지 말한다(「할 수 없습니다」만 주면 몇 번 더 눌러 보다 포기한다).
+    assert.ok(gate.message.includes("거두기"), gate.message);
+  });
+
+  it("🔴 이미 나간 건은 못 막는다 — 되돌리는 것은 반려가 아니라 입고다", () => {
+    const gate = checkCanRejectExecutionPartIssue("EXECUTED");
+    assert.equal(gate.ok, false);
+    assert.ok(gate.message.includes("입고"), gate.message);
+  });
+
+  it("🔴 두 번 막을 것이 없다 — 이미 닫힌 건은 전부 거절", () => {
+    for (const status of ["REJECTED", "CANCELLED", "EXECUTION_REJECTED"] as const) {
+      assert.equal(checkCanRejectExecutionPartIssue(status).ok, false, status);
+    }
+  });
+
+  it("막을 때는 지금 상태를 한글로 알려 준다 — 코드값이 그대로 나가지 않는다 (전수)", () => {
+    for (const status of PART_ISSUE_STATUSES) {
+      const gate = checkCanRejectExecutionPartIssue(status);
+      if (gate.ok) continue;
+      assert.ok(!gate.message.includes(status), `${status} — 코드값이 사람에게 나간다: ${gate.message}`);
+    }
+    const cancelled = checkCanRejectExecutionPartIssue("CANCELLED");
+    assert.equal(cancelled.ok, false);
+    assert.ok(cancelled.message.includes(PART_ISSUE_STATUS_LABELS.CANCELLED), cancelled.message);
+  });
+
+  it("🔴 **실행할 수 있는 건과 멈출 수 있는 건이 같다** — 한쪽만 넓으면 못 멈추는 건이 목록에 뜬다 (전수)", () => {
+    for (const status of PART_ISSUE_STATUSES) {
+      assert.equal(checkCanRejectExecutionPartIssue(status).ok, checkCanExecutePartIssue(status).ok, status);
+    }
+  });
+
+  it("🔴 사유 규칙은 **결재 중 반려와 같은 함수**다 — 두 벌이면 한쪽만 느슨해지는 날이 온다", () => {
+    assert.equal(checkRejectReason("재고가 모자랍니다").ok, true);
+    assert.equal(checkRejectReason("").ok, false);
+    assert.equal(checkRejectReason("   ").ok, false);
+  });
+
+  it("🔴 **기존 판정 셋이 한 글자도 안 넓어졌다** — 새 상태에서도, 결재 중에서도 (전수)", () => {
+    // 결재는 여전히 `PENDING_APPROVAL` 에서만.
+    for (const status of PART_ISSUE_STATUSES) {
+      assert.equal(checkCanDecidePartIssue(status).ok, status === "PENDING_APPROVAL", status);
+      assert.equal(checkCanExecutePartIssue(status).ok, status === "APPROVED", status);
+      assert.equal(checkCanCancelPartIssue(status, "kim", "kim").ok, status === "PENDING_APPROVAL", status);
+    }
+  });
+
+  it("🔴 실행 대기에서 반려된 건은 **닫힌 건**이다 — 결재도 실행도 거두기도 되지 않고, 살아 있지도 않다", () => {
+    assert.equal(checkCanDecidePartIssue("EXECUTION_REJECTED").ok, false);
+    assert.equal(checkCanExecutePartIssue("EXECUTION_REJECTED").ok, false);
+    assert.equal(checkCanCancelPartIssue("EXECUTION_REJECTED", "kim", "kim").ok, false);
+    assert.equal(isOpenPartIssueStatus("EXECUTION_REJECTED"), false, "살아 있는 것으로 세면 그 신청의 [확인] 자리가 영원히 잠긴다");
+  });
+
+  it("🔵 **반려됨과 다른 값이다** — 사유를 찾을 자리가 서로 다른데 겉으로 같아 보이면 안 된다", () => {
+    assert.notEqual(PART_ISSUE_STATUS_LABELS.EXECUTION_REJECTED, PART_ISSUE_STATUS_LABELS.REJECTED);
+    assert.notEqual(PART_ISSUE_STATUS_LABELS.EXECUTION_REJECTED, PART_ISSUE_STATUS_LABELS.CANCELLED);
+    // 글자로 「어디서 멈췄는지」가 읽혀야 한다 — 그 자리가 곧 사유를 찾을 곳이다.
+    assert.ok(PART_ISSUE_STATUS_LABELS.EXECUTION_REJECTED.includes("실행"), PART_ISSUE_STATUS_LABELS.EXECUTION_REJECTED);
+    assert.ok(PART_ISSUE_STATUS_LABELS.EXECUTION_REJECTED.includes("반려"), PART_ISSUE_STATUS_LABELS.EXECUTION_REJECTED);
   });
 });
 

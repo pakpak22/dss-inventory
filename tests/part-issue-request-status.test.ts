@@ -37,6 +37,14 @@ import {
  * ============================================================================
  */
 
+/**
+ * 🔴 **갈래를 손으로 베껴 적지 않는다.** 전수 시험이 글자 목록을 따로 들고 있으면, 갈래가
+ * 늘어난 날 **시험은 통과하는데 새 갈래만 아무도 안 돌려 본** 상태가 된다 — 2026-10-21 에
+ * 다섯째 출구(`EXECUTION_REJECTED`)가 생기면서 실제로 걸린 자리다. 한 벌로 두고 아래에서
+ * 「갈래가 넷인가」를 함께 센다.
+ */
+const ALL_EXITS: PartIssueRequestExit[] = ["ISSUE_REQUESTED", "APPROVAL_CANCELLED", "APPROVAL_REJECTED", "EXECUTION_REJECTED"];
+
 describe("결재가 움직일 때 부품 요청이 가는 자리 — 네 출구 (2026-10-21, 조각 11e)", () => {
   it("🔴 [불출 신청] 이 서면 요청은 「결재 중」이다 — 더는 PENDING 이 아니다", () => {
     assert.equal(requestStatusAfterPartIssue("ISSUE_REQUESTED", 0), "IN_APPROVAL");
@@ -67,26 +75,72 @@ describe("결재가 움직일 때 부품 요청이 가는 자리 — 네 출구 
     assert.equal(requestStatusAfterPartIssue("APPROVAL_REJECTED", 3), "REJECTED", "일부 나갔어도 결재 반려는 요청을 닫는다");
   });
 
-  it("🔴 네 번째 출구(실행)는 이 함수에 없다 — confirmRequest 가 「다 나갔나」를 세어 정한다", () => {
+  it("🔴 다섯 번째 출구(실행)는 이 함수에 없다 — confirmRequest 가 「다 나갔나」를 세어 정한다", () => {
     // 상태 하나로 답할 수 없는 일이라 일부러 안 넣었다. 넣으면 같은 셈이 두 벌이 된다.
-    const exits: PartIssueRequestExit[] = ["ISSUE_REQUESTED", "APPROVAL_CANCELLED", "APPROVAL_REJECTED"];
-    for (const exit of exits) {
+    for (const exit of ALL_EXITS) {
       assert.notEqual(requestStatusAfterPartIssue(exit, 0), "CONFIRMED", exit);
       assert.notEqual(requestStatusAfterPartIssue(exit, 9), "CONFIRMED", exit);
     }
   });
 
   it("🔴 출구가 전부 「결재 중」에서 **빠져나온다** — 갇히는 길이 하나도 없다", () => {
-    for (const exit of ["APPROVAL_CANCELLED", "APPROVAL_REJECTED"] as const) {
+    for (const exit of ["APPROVAL_CANCELLED", "APPROVAL_REJECTED", "EXECUTION_REJECTED"] as const) {
       assert.notEqual(requestStatusAfterPartIssue(exit, 0), "IN_APPROVAL", exit);
       assert.notEqual(requestStatusAfterPartIssue(exit, 4), "IN_APPROVAL", exit);
     }
   });
 
   it("가는 자리는 전부 실제로 있는 상태다 (스키마 enum 과 맞는다)", () => {
-    const exits: PartIssueRequestExit[] = ["ISSUE_REQUESTED", "APPROVAL_CANCELLED", "APPROVAL_REJECTED"];
-    for (const exit of exits) {
+    for (const exit of ALL_EXITS) {
       for (const issued of [0, 7]) {
+        assert.ok((REQUEST_STATUSES as readonly string[]).includes(requestStatusAfterPartIssue(exit, issued)), `${exit}/${issued}`);
+      }
+    }
+  });
+});
+
+/**
+ * ============================================================================
+ * 다섯째 출구 — 담당자가 **실행 대기에서 반려** (2026-10-21)
+ * ============================================================================
+ * 🔴 **이 출구는 위 셋 어디에도 안 맞는다.** 셋은 전부 「결재가 도는 중」(`PENDING_APPROVAL`)을
+ * 전제하는데, 이것은 **결재가 다 끝난 `APPROVED`** 에서만 일어난다. 그래서 갈래를 새로 더했다 —
+ * 그러지 않고 거두기(`APPROVAL_CANCELLED`)에 끼우면 「담당자 손으로 돌려보낸다」가 따라붙어
+ * **담당자가 막은 신청이 그 담당자의 대기 목록에 되살아난다.**
+ * ============================================================================
+ */
+describe("🔴 다섯째 출구 — 실행 대기에서 반려 (2026-10-21)", () => {
+  it("🔴 신청도 끝난다 — 결재 반려와 **같은 자리**로 보낸다", () => {
+    assert.equal(requestStatusAfterPartIssue("EXECUTION_REJECTED", 0), "REJECTED");
+    assert.equal(requestStatusAfterPartIssue("EXECUTION_REJECTED", 0), requestStatusAfterPartIssue("APPROVAL_REJECTED", 0));
+  });
+
+  it("🔴 **일부 나간 신청에서도 끝난다** — 거두기처럼 PENDING·PARTIAL 로 되돌리지 않는다", () => {
+    // 되돌리면 막은 당사자인 담당자의 대기 목록에 되살아나고, 그대로 [확인]을 누르면
+    // **방금 막은 부품이 그냥 나간다.**
+    assert.equal(requestStatusAfterPartIssue("EXECUTION_REJECTED", 3), "REJECTED");
+    assert.notEqual(requestStatusAfterPartIssue("EXECUTION_REJECTED", 3), reopenedRequestStatus(3));
+    assert.notEqual(requestStatusAfterPartIssue("EXECUTION_REJECTED", 0), reopenedRequestStatus(0));
+  });
+
+  it("🔴 **갇히지 않는다** — 「결재 중」에서 빠져나오고, 간 자리는 다시 결재할 수 없는 끝난 자리다", () => {
+    const after = requestStatusAfterPartIssue("EXECUTION_REJECTED", 0);
+    assert.notEqual(after, "IN_APPROVAL", "결재건은 닫혔는데 신청이 「결재 중」이면 아무 단추도 없는 완전한 교착이다");
+    assert.ok((DECIDED_REQUEST_STATUSES as readonly string[]).includes(after), "끝난 묶음에 들어가야 요청 관리 목록에서 더 재촉하지 않는다");
+    assert.ok(!(PENDING_REQUEST_STATUSES as readonly string[]).includes(after));
+  });
+
+  it("🔴 **담당자의 대기 목록에 되살아나지 않는다** — 집을 수도, 재촉하지도 않는다", () => {
+    const after = requestStatusAfterPartIssue("EXECUTION_REJECTED", 0);
+    assert.equal(isClaimableRequest(after), false, "집을 수 있으면 방금 막은 부품이 [확인] 한 번으로 나간다");
+    assert.ok(!(ACTIONABLE_REQUEST_STATUSES as readonly string[]).includes(after));
+    assert.ok(!(EXECUTABLE_REQUEST_STATUSES as readonly string[]).includes(after), "실행 묶음에도 없다 — 닫힌 신청으로 다시 들어올 길이 없다");
+  });
+
+  it("🔴 함수가 쥔 갈래가 **넷이고**, 넷 다 실제로 있는 신청 상태로 간다 (전수)", () => {
+    assert.equal(ALL_EXITS.length, 4, "갈래가 늘거나 줄었다 — 다섯째(실행)는 confirmRequest 몫이라 여기 없다");
+    for (const exit of ALL_EXITS) {
+      for (const issued of [0, 3, 9]) {
         assert.ok((REQUEST_STATUSES as readonly string[]).includes(requestStatusAfterPartIssue(exit, issued)), `${exit}/${issued}`);
       }
     }

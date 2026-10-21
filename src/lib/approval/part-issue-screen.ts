@@ -148,6 +148,13 @@ export const PART_ISSUE_STATUS_BADGE: Record<PartIssueStatus, string> = {
   EXECUTED: "bg-green-100 text-green-800",
   REJECTED: "bg-red-100 text-red-800",
   CANCELLED: "bg-zinc-100 text-zinc-500",
+  /**
+   * 🔵 **반려와 같은 빨강이다.** 둘 다 「막혔다」이고 사람이 다음에 할 일도 같다(새로 신청한다) —
+   * 거의 같은 빨강을 하나 더 만들면 **색이 다른데 뜻은 같은** 자리가 되어 오히려 읽기 어렵다.
+   * 가르는 것은 글자이고(「반려됨」 ↔ 「실행 대기에서 반려됨」), 배지는 언제나 색과 글자를 함께
+   * 그린다(`partIssueStatusBadge` · CLAUDE.md 9-7절). 🔴 **색만으로 둘을 가르게 만들지 마라.**
+   */
+  EXECUTION_REJECTED: "bg-red-100 text-red-800",
 };
 
 /** 배지에 쓸 글자와 색을 **한 번에** 고른다 — 따로 고르면 「반려인데 초록」 같은 짝이 생긴다. */

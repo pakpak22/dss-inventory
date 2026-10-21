@@ -51,7 +51,20 @@ import { findNextRouteStepToApprove, type RouteStepAssignment } from "./route";
  * 나아가는 길:
  *   PENDING_APPROVAL → APPROVED → EXECUTED
  *   PENDING_APPROVAL → REJECTED | CANCELLED
+ *   APPROVED         → EXECUTION_REJECTED   **실행 대기에서 담당자가 멈춘 것**
  *   EXECUTED         → (끝)   **이미 나간 것은 되돌릴 수 없다**
+ *
+ * ── 🔴 `REJECTED` 와 `EXECUTION_REJECTED` 를 **뭉개지 않는다** (2026-10-21) ──
+ * 2026-10-21 에 「결재 중」을 만들면서 **결재가 도는 동안 담당자의 [반려]·[보류]·[신청 취소]를
+ * 닫았다.** 그 결과 결재가 다 끝나 [실행]만 남으면 **아무도 그 건을 멈출 수 없었다** — 재고가
+ * 모자라도, 신청이 잘못됐다는 것을 뒤늦게 알아도, 할 수 있는 일은 「실행하지 않고 두기」뿐이라
+ * 그 건은 「실행할 건」 목록에 영원히 떠 있었다. 그 빚을 갚는 값이다.
+ *
+ * 🔴 **기존 `REJECTED` 를 재사용하지 않는 까닭**: 저것은 **결재자가 결재 중에 반려한 것**이고
+ * 사유가 **단계 줄**(`stock_issue_approval_steps.note`)에 적힌다. 실행 대기에는 **열린 단계가
+ * 하나도 없다**(다 끝났다) — 같은 값으로 적으면 「누가 왜 막았나」를 찾을 자리가 서로 다른데
+ * 겉으로는 같은 상태로 보인다. 🔵 「거둠(`CANCELLED`)」도 아니다: 그것은 **올린 사람이** 무르는
+ * 길이고, 여기는 **담당자가** 막는 길이라 글자가 거짓말이 된다.
  *
  * 🔴 값 목록은 표의 enum(`src/db/schema/stock-issue-approvals.ts`)과 **글자 그대로 같아야
  * 한다.** 스키마 파일이 도메인 층을 가져오지 않는 이 저장소의 관례라 두 벌이 되고
@@ -60,16 +73,22 @@ import { findNextRouteStepToApprove, type RouteStepAssignment } from "./route";
  *
  * 🔴 **새 값은 맨 끝에 더한다** — `ALTER TYPE … ADD VALUE` 는 언제나 뒤에 붙는다.
  */
-export const PART_ISSUE_STATUSES = ["PENDING_APPROVAL", "APPROVED", "EXECUTED", "REJECTED", "CANCELLED"] as const;
+export const PART_ISSUE_STATUSES = ["PENDING_APPROVAL", "APPROVED", "EXECUTED", "REJECTED", "CANCELLED", "EXECUTION_REJECTED"] as const;
 export type PartIssueStatus = (typeof PART_ISSUE_STATUSES)[number];
 
-/** 🔴 코드 값은 사람이 읽을 말이 아니다 (CLAUDE.md 10절). 화면 글자가 적힌 곳은 여기 하나다. */
+/**
+ * 🔴 코드 값은 사람이 읽을 말이 아니다 (CLAUDE.md 10절). 화면 글자가 적힌 곳은 여기 하나다.
+ *
+ * 🔵 `REJECTED` 와 `EXECUTION_REJECTED` 는 **글자로 갈린다** — 둘 다 「반려」지만 멈춘 자리가
+ *    다르고, 그 자리가 곧 **사유를 찾을 곳**이다(앞은 단계 줄, 뒤는 결재건 쪽 칸).
+ */
 export const PART_ISSUE_STATUS_LABELS: Record<PartIssueStatus, string> = {
   PENDING_APPROVAL: "결재 중",
   APPROVED: "승인됨(아직 안 나감)",
   EXECUTED: "불출 완료",
   REJECTED: "반려됨",
   CANCELLED: "거둠",
+  EXECUTION_REJECTED: "실행 대기에서 반려됨",
 };
 
 /**
@@ -95,6 +114,21 @@ export const PART_ISSUE_STEP_STATUS_LABELS: Record<PartIssueStepStatus, string> 
  * 🔴 표의 **부분 유니크 색인**(`stock_issue_approvals_request_open_uq`)이 보는 묶음과
  * **글자 그대로 같아야 한다.** 한 반출 신청에 살아 있는 결재건은 하나뿐이고, 그 사실이
  * 11c 의 잠금이 기대는 근거다. 두 곳이 갈라지면 화면은 「없다」는데 저장이 23505 로 터진다.
+ *
+ * ── 🔴 `EXECUTION_REJECTED` 는 여기 **없다**, 그리고 그것이 맞다 (2026-10-21) ──
+ * 색인이 보는 묶음에서 빠진다는 것은 **그 신청에 결재건을 다시 올릴 수 있게 된다**는 뜻이다.
+ * 닫힌 건(`EXECUTED`·`REJECTED`·`CANCELLED`)과 **같은 대접**이고, 세 까닭으로 맞다:
+ *  1. 실행 대기에서 반려된 건은 **끝난 건**이다 — 결재도 실행도 거두기도 되지 않는다(아래 판정 넷).
+ *     살아 있는 것으로 세면 그 신청의 [확인] 자리가 **영원히 잠긴 채** 남는다(`partIssueLockFor`).
+ *  2. 색인에서 빠지지 않으면 **같은 신청에 두 번째 결재건을 올릴 수 없다.** 반려는 「이번엔
+ *     안 된다」이지 「이 신청은 영영 안 된다」가 아니어야 한다 — 반려된 뒤 처음 단계부터 다시
+ *     올리는 길은 `REJECTED` 에서 이미 열려 있고, 여기만 닫으면 규칙이 두 벌이 된다.
+ *  3. 🔵 **그런데 오늘 당장 다시 올라오지는 않는다.** 실행 대기 반려는 반출 신청 자체도
+ *     `REJECTED` 로 닫기 때문이다(`requestStatusAfterPartIssue`) — 닫힌 신청은 집을 수 없어
+ *     (`isClaimableRequest`) 결재를 올릴 화면이 없다. 색인이 열어 두는 것은 **제약이지 길이
+ *     아니다**: 나중에 「반려된 신청을 되살린다」가 생겨도 DB 가 막아서지 않는다는 뜻이다.
+ * 🔴 **색인은 고치지 않았다.** 조건절(`status in ('PENDING_APPROVAL','APPROVED')`)이 이미
+ * 이 묶음과 글자 그대로 같고, 새 값은 거기 없으므로 **저절로** 위 동작이 된다.
  */
 export const OPEN_PART_ISSUE_STATUSES = ["PENDING_APPROVAL", "APPROVED"] as const satisfies readonly PartIssueStatus[];
 
@@ -107,9 +141,9 @@ export function isOpenPartIssueStatus(status: PartIssueStatus): boolean {
 /* ------------------------------------------------------------------ */
 
 /**
- * 결재건이 움직여 **반출 신청(`stock_requests`)의 자리를 바꾸는** 네 순간 중 **셋**.
+ * 결재건이 움직여 **반출 신청(`stock_requests`)의 자리를 바꾸는** 다섯 순간 중 **넷**.
  *
- * 🔴 **네 번째(실행)는 여기 없다.** 실행은 `confirmRequest` 가 「다 나갔나」를 세어 `CONFIRMED` 나
+ * 🔴 **다섯째(실행)는 여기 없다.** 실행은 `confirmRequest` 가 「다 나갔나」를 세어 `CONFIRMED` 나
  *    `PARTIAL` 을 정하는데, 그 셈에는 이번에 나간 수량과 이미 나간 수량이 필요해 상태 하나로 답할 수 없다.
  *    그 규칙은 그 함수 하나가 쥐고 있고(`src/lib/stock/requests.ts`), 여기서 다시 적으면 두 벌이 된다.
  *    🔵 그래서 이 묶음의 이름은 「결재가 **신청의 자리를 직접 적는** 순간들」이다.
@@ -120,7 +154,17 @@ export type PartIssueRequestExit =
   /** 올린 사람이 [거두기] — 결재건이 `CANCELLED`. 신청은 담당자 손으로 **돌아온다**. */
   | "APPROVAL_CANCELLED"
   /** 결재자가 [반려] — 결재건이 `REJECTED`. 신청도 **끝난다**. */
-  | "APPROVAL_REJECTED";
+  | "APPROVAL_REJECTED"
+  /**
+   * 담당자가 **실행 대기에서 [반려]** — 결재건이 `EXECUTION_REJECTED`. 신청도 **끝난다**.
+   *
+   * 🔴 **위 셋 어디에도 못 끼운다.** 셋은 전부 「결재가 도는 중」을 전제한다 —
+   * `APPROVAL_CANCELLED`·`APPROVAL_REJECTED` 는 열린 단계가 있는 `PENDING_APPROVAL` 에서만
+   * 일어나고, 이 출구는 **결재가 다 끝난 `APPROVED`** 에서만 일어난다. 하나로 뭉개면 거두기의
+   * 「담당자 손으로 돌려보낸다」가 따라붙어 **담당자가 막은 신청이 그 담당자의 대기 목록에
+   * 되살아난다.**
+   */
+  | "EXECUTION_REJECTED";
 
 /**
  * 그 순간 **신청이 가야 할 자리**.
@@ -129,7 +173,12 @@ export type PartIssueRequestExit =
  * SET status` 에 직접 적은 글자는 **아무도 돌려 보지 못한 채** 운영으로 나간다. 들고 나는 길 중 하나라도
  * 빠지면 신청이 `IN_APPROVAL` 에 **갇힌다** — 그 자리는 확인·반려·마감·보류·취소를 **전부** 거절하는
  * 상태라, 갇히면 담당자도 신청자도 손쓸 길이 없고 부품은 영영 안 나간다.
- * 🔵 `tests/part-issue-request-status.test.ts` 가 이 함수로 네 길을 전부 못 박는다.
+ * 🔵 `tests/part-issue-request-status.test.ts` 가 이 함수로 다섯 길을 전부 못 박는다.
+ *
+ * 🔴 **출구를 더할 때마다 「갇히지 않는가」를 다시 본다.** 2026-10-21 에 더한 `EXECUTION_REJECTED`
+ * 가 그 경고에 걸리는 자리였다 — 담당자가 실행 대기에서 막았는데 신청을 `IN_APPROVAL` 에 그대로
+ * 두면, 결재건은 닫혔는데 신청은 아무 단추도 받지 않는 **완전한 교착**이 된다(결재건이 닫혀서
+ * [실행]조차 없다). 아래 갈래가 `REJECTED` 로 **빠져나오는** 것이 그 경고를 지키는 자리다.
  *
  * - `ISSUE_REQUESTED` → **`IN_APPROVAL`.** 🔴 **자동 승인도 똑같다.** 결재선이 전부 신청자 본인이면 결재건은
  *   그 자리에서 `APPROVED` 가 되지만(`planPartIssueApproval` 의 `AUTO_APPROVED`) **재고는 아직 안 나갔다** —
@@ -143,6 +192,12 @@ export type PartIssueRequestExit =
  *   되살아나 담당자가 그대로 내주게 되고, 반려한 결재자의 뜻이 사라진다.
  *   🔴 반려 사유는 신청의 **결정 사유 칸**(`decision_note`)에 복사한다 — 신청자가 보는 화면과 A/S 통로는
  *   결재건이 아니라 신청을 읽으므로, 복사하지 않으면 「왜 반려됐는지」가 어디에도 안 보인다.
+ * - `EXECUTION_REJECTED` → **`REJECTED`.** 🔴 **`APPROVAL_REJECTED` 와 같은 자리로 보낸다** —
+ *   일어난 일이 「담당자가 이 불출을 막았다」로 같고, 신청 쪽에는 그 둘을 가를 칸이 없다(가르는 것은
+ *   결재건의 상태다). 🔴 **`PENDING`·`PARTIAL` 로 되돌리지 않는다**: 되돌리면 막은 당사자인 담당자의
+ *   대기 목록에 그 신청이 되살아나고, 그대로 [확인]을 누르면 **방금 막은 부품이 그냥 나간다.**
+ *   🔵 되살릴 일이 있으면 신청자가 새로 신청한다(`APPROVAL_REJECTED` 와 같은 2026-10-21 결정).
+ *   🔴 사유 복사도 `APPROVAL_REJECTED` 와 같다 — 신청의 `decision_note` 로 가야 신청자에게 보인다.
  *
  * @param issuedTotal 그 신청에서 **이미 나간 수량의 합**. 🔵 `APPROVAL_CANCELLED` 에서만 쓰인다.
  */
@@ -154,6 +209,11 @@ export function requestStatusAfterPartIssue(exit: PartIssueRequestExit, issuedTo
       return "REJECTED";
     case "APPROVAL_CANCELLED":
       return reopenedRequestStatus(issuedTotal);
+    // 🔵 바로 위와 **가는 자리가 같지만 갈래를 합치지 않는다.** 둘은 다른 사건이고(결재 중 반려 ↔
+    //    실행 대기 반려) 언젠가 한쪽만 바뀔 수 있다 — 합쳐 두면 그날 둘 다 바뀐다. 갈래마다
+    //    한 줄로 적혀 있어야 시험도 이 함수의 길을 하나씩 짚을 수 있다.
+    case "EXECUTION_REJECTED":
+      return "REJECTED";
   }
 }
 
@@ -325,6 +385,37 @@ export function checkCanExecutePartIssue(status: PartIssueStatus): PartIssueGate
   if (status === "APPROVED") return { ok: true };
   if (status === "EXECUTED") return { ok: false, message: "이미 불출된 건입니다." };
   return { ok: false, message: `아직 불출할 수 없는 건입니다 (지금 ${PART_ISSUE_STATUS_LABELS[status]}).` };
+}
+
+/**
+ * **실행 대기에서 반려**할 수 있는 상태인가 (2026-10-21).
+ *
+ * 🔴 `APPROVED` 하나뿐이다 — `checkCanExecutePartIssue` 와 **같은 자리**다. 「실행할 수 있는
+ * 건」과 「실행 대기에서 멈출 수 있는 건」은 같은 건이어야 한다. 한쪽만 넓으면 목록에 떠 있는데
+ * 멈출 수 없는 건이나, 멈출 수는 있는데 실행은 못 하는 건이 생긴다.
+ *  · `PENDING_APPROVAL` — 🔴 **여기서 열면 2026-10-21 결정을 깬다.** 결재가 도는 동안은 담당자가
+ *    그 건을 닫지 못한다(결재자에게 뜬 건이 소리 없이 사라지면 안 된다). 결재 중인 건을 무르는
+ *    길은 **올린 사람의 [거두기]**(`checkCanCancelPartIssue`)이지 담당자의 반려가 아니다.
+ *  · `EXECUTED` — 이미 나갔다. 되돌리는 것은 반려가 아니라 입고다.
+ *  · `REJECTED`·`CANCELLED`·`EXECUTION_REJECTED` — 이미 닫힌 건이다. 두 번 막을 것이 없다.
+ *
+ * 🔴 **기존 `rejectRequest`·`holdRequest`(반출 신청 쪽)의 조건을 넓혀 이 일을 하지 않는다.**
+ * 저 둘은 `REJECTABLE_REQUEST_STATUSES`·`CLAIMABLE_REQUEST_STATUSES` 를 WHERE 에 그대로 쓰는데,
+ * 거기에 `IN_APPROVAL` 을 넣으면 **결재가 도는 중인 신청까지 함께 열린다.** 그래서 판정을
+ * **따로** 둔다 — 이쪽은 신청이 아니라 **결재건**을 보고, 열리는 자리가 `APPROVED` 하나다.
+ *
+ * 🔵 **누가** 누를 수 있는지는 여기서 보지 않는다(관리자다). `checkCanExecutePartIssue` 와 같은
+ * 모양이고, 그 판정은 부르는 쪽(서버 액션·화면)이 쥔다 — 이 파일은 `server-only` 를 물지 않는다.
+ * 🔵 **사유**는 `checkRejectReason` 이 본다. 결재 중 반려와 **같은 함수**를 쓴다 — 사유를 받는
+ *    규칙이 두 벌이 되면 한쪽만 느슨해지는 날이 온다.
+ */
+export function checkCanRejectExecutionPartIssue(status: PartIssueStatus): PartIssueGate {
+  if (status === "APPROVED") return { ok: true };
+  if (status === "EXECUTED") return { ok: false, message: "이미 불출된 건입니다. 되돌리려면 입고로 처리하십시오." };
+  if (status === "PENDING_APPROVAL") {
+    return { ok: false, message: "아직 결재가 도는 중입니다. 결재가 끝난 뒤에 멈출 수 있습니다 — 지금 무르려면 올린 분이 [거두기] 를 누르면 됩니다." };
+  }
+  return { ok: false, message: `실행 대기에서 반려할 수 없는 건입니다 (지금 ${PART_ISSUE_STATUS_LABELS[status]}).` };
 }
 
 /**

@@ -65,8 +65,13 @@ import { stockRequests } from "./stock-requests";
  * 🔴 **새 값은 반드시 맨 끝에 더한다.** `ALTER TYPE … ADD VALUE` 는 언제나 뒤에 붙으므로,
  * 가운데에 끼우면 코드의 차례와 DB 의 차례가 어긋나 다음 `db:generate` 가 있지도 않은 차이를
  * 감지한다(선례: `stock_request_status` 의 `PARTIAL` · `ON_HOLD`). 차례 자체에 뜻은 없다.
+ *
+ * 🔴 `EXECUTION_REJECTED` — **결재가 다 끝나 실행만 남은 건을 담당자가 막은 것**(2026-10-21).
+ * 왜 `REJECTED` 를 재사용하지 않는지, 왜 `CANCELLED` 가 아닌지는 `part-issue-rules.ts` 의
+ * `PART_ISSUE_STATUSES` 주석에 있다. 🔵 이 값은 아래 **부분 유니크 색인의 묶음에 없다** — 색인
+ * 주석에 그 뜻을 적어 두었다.
  */
-export const stockIssueApprovalStatusEnum = pgEnum("stock_issue_approval_status", ["PENDING_APPROVAL", "APPROVED", "EXECUTED", "REJECTED", "CANCELLED"]);
+export const stockIssueApprovalStatusEnum = pgEnum("stock_issue_approval_status", ["PENDING_APPROVAL", "APPROVED", "EXECUTED", "REJECTED", "CANCELLED", "EXECUTION_REJECTED"]);
 
 /**
  * 단계 한 줄의 상태.
@@ -129,6 +134,30 @@ export const stockIssueApprovals = pgTable(
     executedBy: uuid("executed_by"),
     executedByName: text("executed_by_name"),
     executedAt: timestamp("executed_at", { withTimezone: true }),
+    /**
+     * 🔴 **실행 대기에서 막은 사람**과 그때의 이름·시각·사유 (2026-10-21).
+     *
+     * 위 실행 칸 셋(`executed_*`)과 **같은 모양**이다 — 사람에 FK 가 없고(머리말), 이름은 그때의
+     * 사본이며, 상태(`EXECUTION_REJECTED`)와 한 쌍이다(아래 새 CHECK).
+     *
+     * ── 🔴 **사유를 결재건 쪽에 두는 까닭** ─────────────────────────────
+     * 결재 중 반려의 사유는 **단계 줄**(`stock_issue_approval_steps.note`)에 적힌다. 그런데 실행
+     * 대기에는 **열린 단계가 하나도 없다** — 단계는 전부 `APPROVED` 로 닫혔다. 거기 아무 줄에나
+     * 사유를 적으면 「그 결재자가 반려했다」는 거짓이 되고, 사유만을 위해 가짜 단계 줄을 하나
+     * 더 넣으면 「열린 줄은 하나뿐」(단계 표의 부분 유니크 색인)이 지키던 사슬이 흐트러진다.
+     * 그래서 **결재건 쪽에 칸을 둔다**(2026-10-21 쓰는 분 결정 ④).
+     *
+     * 🔴 **넷 다 널 허용이다.** 이미 있는 결재건들이 살아남아야 한다 — NOT NULL 로 올리면
+     * 그 줄들 때문에 마이그레이션이 그 자리에서 멈춘다(`decided_by_sub` 를 nullable 로 둔 것과
+     * 같은 까닭).
+     * 🔴 **사유 칸은 `''` 기본값을 두지 않는다.** 위 `reason`(올릴 때의 글)은 선택이라
+     * `NOT NULL DEFAULT ''` 인데, **반려 사유는 필수다**(`checkRejectReason`). 빈 글자를 기본값으로
+     * 두면 「안 적었다」와 「반려한 적 없다」가 같은 모양이 되어 아래 CHECK 가 가를 수 없다.
+     */
+    executionRejectedBy: uuid("execution_rejected_by"),
+    executionRejectedByName: text("execution_rejected_by_name"),
+    executionRejectedAt: timestamp("execution_rejected_at", { withTimezone: true }),
+    executionRejectedReason: text("execution_rejected_reason"),
   },
   (t) => [
     /**
@@ -136,8 +165,15 @@ export const stockIssueApprovals = pgTable(
      *
      * 11c 가 「결재 중인 신청은 담당자가 바로 확인하지 못한다」로 잠글 때 기대는 사실이 이것이고,
      * **화면 검사만으로는 두 번 올라가는 것을 못 막는다**(두 사람이 같은 신청을 동시에 올릴 수
-     * 있고, 화면을 거치지 않고 부를 수도 있다). 닫힌 건(`EXECUTED`·`REJECTED`·`CANCELLED`)은
-     * 세지 않으므로, 반려된 뒤 처음 단계부터 다시 올리는 길은 그대로 열려 있다.
+     * 있고, 화면을 거치지 않고 부를 수도 있다). 닫힌 건(`EXECUTED`·`REJECTED`·`CANCELLED`·
+     * `EXECUTION_REJECTED`)은 세지 않으므로, 반려된 뒤 처음 단계부터 다시 올리는 길은 그대로
+     * 열려 있다.
+     *
+     * 🔴 **`EXECUTION_REJECTED` 를 더하면서 조건절을 고치지 않았다 — 그게 맞는 동작이다**
+     * (2026-10-21). 새 값은 `in (…)` 목록에 없으므로 **저절로 색인에서 빠져** 그 신청에 결재건을
+     * 다시 올릴 수 있게 된다. 닫힌 건을 살아 있는 것으로 세면 그 신청의 [확인] 자리가 **영원히
+     * 잠긴 채** 남는다(`partIssueLockFor`). 까닭 셋은 `part-issue-rules.ts` 의
+     * `OPEN_PART_ISSUE_STATUSES` 주석에 적어 두었다.
      *
      * 🔴 묶는 상태 목록은 `part-issue-rules.ts` 의 `OPEN_PART_ISSUE_STATUSES` 와 같아야 한다 —
      * 시험이 그 둘을 맞춰 본다.
@@ -161,6 +197,34 @@ export const stockIssueApprovals = pgTable(
         (status <> 'EXECUTED' AND executed_by IS NULL AND executed_by_name IS NULL AND executed_at IS NULL AND entry_id IS NULL)
         OR
         (status = 'EXECUTED' AND executed_by IS NOT NULL AND executed_by_name IS NOT NULL AND executed_at IS NOT NULL AND entry_id IS NOT NULL)
+      `,
+    ),
+    /**
+     * 🔴 **실행 대기 반려 기록과 상태도 같은 말이다** (2026-10-21). 위 실행 쌍과 같은 모양이고,
+     * **사유까지 한 쌍에 넣었다** — 사유 없는 반려는 올린 사람이 무엇을 고쳐야 할지 알 수 없고,
+     * 앞단(`checkRejectReason`)만으로는 서버 함수를 직접 부르는 길이 열려 있다.
+     *
+     * ── 🔴 위 `…_execution_metadata` 를 **건드리지 않고 따로 둔 까닭** ────
+     * 저 제약에 새 칸을 끌어들이면 **옛 줄이 전부 걸려 마이그레이션이 그 자리에서 실패한다**
+     * (단계 표의 `…_decision_metadata` 에 `decided_by` 를 넣지 않은 것과 같은 까닭). 따로 두면
+     * 옛 줄은 네 칸이 전부 NULL 이라 **첫 갈래로 통과한다** — 상태가 무엇이든 그렇다.
+     *
+     * ── 🔴 `status::text` 다. **`::text` 를 지우지 마라** ─────────────────
+     * 위 제약처럼 `status <> 'EXECUTION_REJECTED'` 로 적으면 **이 마이그레이션이 적용 때
+     * 깨진다.** `ALTER TYPE … ADD VALUE` 로 갓 더한 enum 값은 **같은 트랜잭션 안에서 쓸 수 없고**
+     * (PostgreSQL: `unsafe use of new value … of enum type`), drizzle 의 migrator 는 밀린
+     * 마이그레이션 **전부를 한 트랜잭션**으로 돌린다(`drizzle-orm/pg-core/dialect.js` 의
+     * `session.transaction`). 파일을 둘로 쪼개도 같은 트랜잭션이라 소용없다.
+     * 🔵 `status::text` 로 견주면 글자 상수가 enum 으로 변환되지 않아(= `enum_in` 을 거치지
+     *    않아) 그 제한에 걸리지 않는다. 옛 줄의 상태는 **이미 커밋된** 값이라 읽는 쪽도 안전하다.
+     * 🔵 뜻은 똑같다 — enum 값은 글자가 곧 값이다.
+     */
+    check(
+      "stock_issue_approvals_execution_rejection_metadata",
+      sql`
+        (status::text <> 'EXECUTION_REJECTED' AND execution_rejected_by IS NULL AND execution_rejected_by_name IS NULL AND execution_rejected_at IS NULL AND execution_rejected_reason IS NULL)
+        OR
+        (status::text = 'EXECUTION_REJECTED' AND execution_rejected_by IS NOT NULL AND execution_rejected_by_name IS NOT NULL AND execution_rejected_at IS NOT NULL AND execution_rejected_reason IS NOT NULL AND execution_rejected_reason <> '')
       `,
     ),
   ],
