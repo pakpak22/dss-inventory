@@ -371,6 +371,97 @@ export function requestStatusBadge(status: RequestStatus, closed: boolean, lock:
 }
 
 /* ------------------------------------------------------------------ */
+/* 신청 줄에 서는 사유 상자 둘 — 보류 사유 · 결정 사유 (2026-10-21)       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 사유 상자의 색 한 벌 — 상자 바탕 · 본문 · 아랫줄(누가·언제).
+ *
+ * 🔵 셋을 **한 덩이**로 두는 까닭: 바탕만 바꾸고 글자색을 두고 오면 연한 바탕에 연한 글자가 남는다.
+ *    배지가 바탕·글자를 한 글자로 묶어 두는 것(`REQUEST_STATUS_BADGE`)과 같은 까닭이고, 여기는 줄이
+ *    둘이라 묶음이 셋이 됐을 뿐이다.
+ */
+export interface ReasonBoxTone {
+  box: string;
+  body: string;
+  meta: string;
+}
+
+/**
+ * 보류 사유 상자의 색 (2026-10-15 조각 10a 에 화면 파일이 들고 있던 것을 2026-10-21 에 여기로 옮겼다 —
+ * **보이는 모양은 한 픽셀도 바뀌지 않았다**).
+ *
+ * 🔴 옮긴 까닭은 바로 아래 결정 사유 상자가 **이 색과 달라야** 하기 때문이다. 색이 화면 파일에 흩어져
+ *    있으면 「다르다」를 시험이 재지 못하고 눈으로만 재게 되는데, 이 저장소에는 화면 렌더 시험이 없다.
+ * 🔵 보라를 쓰는 까닭은 상태 배지의 보류와 같다(`REQUEST_STATUS_BADGE` 주석): 「사람이 일부러 멈춰 둔 것」이고
+ *    담당자가 **풀어 줘야** 나아간다.
+ */
+export const HOLD_REASON_TONE: ReasonBoxTone = { box: "bg-violet-50", body: "text-violet-900", meta: "text-violet-700" };
+
+/**
+ * 결정 사유 상자의 색 (2026-10-21).
+ *
+ * 🔴 **보류(보라)와 달라야 한다.** 보류는 「멈춰 있다 — 담당자가 풀면 다시 간다」이고 결정은 「끝났다 —
+ *    더 손댈 것이 없다」라서, 담당자가 그 줄에 해야 할 일이 정반대다. 같은 색이면 멈춘 줄을 찾으려고
+ *    훑을 때 끝난 줄이 함께 걸린다.
+ * 🔵 **중립색(zinc)을 고른 까닭 셋.** ① 이 저장소의 중립색이 zinc 다(CLAUDE.md 9-3절: 「중립색은 zinc 를
+ *    쓴다 — 사내 다수파」). ② **색조가 없는 것이 뜻에 맞는다**: 이 상자는 반려(나쁜 소식)와 마감(정상적인
+ *    마무리)을 **둘 다** 담는다. 빨강을 고르면 마감이 사고처럼 보이고, 주황을 고르면 반려가 아직 할 일처럼
+ *    보인다. 색조가 있는 상자는 「네가 뭔가 해야 한다」로 읽히는데 여기는 할 일이 없다. ③ A/S 쪽에서 **같은
+ *    자료를 그리는 짝**(`PartRequestSection` 의 결정 구역)도 중립색이다 — 두 화면이 같은 것을 다른 색으로
+ *    그리면 오가는 사람이 다른 것인 줄 안다.
+ * 🔴 **바탕을 100 으로 둔다(50 이 아니다).** A/S 쪽 짝은 50 인데, 거기는 흰 카드 위에 서고 여기는 **표의 줄**
+ *    위에 선다. 이 표의 줄은 `hover` 에 zinc-50 으로 바뀌므로(`RequestManagerScreen` 의 `tr`), 50 으로 두면
+ *    **마우스를 얹는 순간 상자가 사라진다.**
+ */
+export const DECISION_NOTE_TONE: ReasonBoxTone = { box: "bg-zinc-100", body: "text-zinc-800", meta: "text-zinc-600" };
+
+/**
+ * 결정 사유 상자에 그릴 것 — **그릴지 말지**와 **글자·색**을 한 곳에서 고른다.
+ *
+ * 🔴 **사유가 비면 `null` 이다 — 빈 상자를 그리지 않는다.** A/S 쪽 짝이 같은 규칙이고
+ *    (`PartRequestSection`: 사유가 있을 때만 그린다), **두 화면이 같은 규칙을 써야** 오가는 사람이
+ *    「저쪽엔 있는데 여기엔 왜 없지」로 헷갈리지 않는다.
+ * 🔴 **「취소」에는 사유라는 개념이 아예 없다.** 거두는 함수(`cancelRequest`·`cancelExternalRequest`,
+ *    `./requests`)가 사유를 **받지 않는다** — 누가·언제만 적고 `decision_note` 는 빈 글자 그대로다.
+ *    그래서 취소된 신청에는 이 상자가 안 선다. 🔵 다음 사람이 「취소 사유가 왜 안 보이지」로 헤매지 않게
+ *    적어 둔다: 안 보이는 것이 아니라 **처음부터 없다**. 보이게 하려면 거두는 쪽에서 사유를 받아야 한다.
+ * 🔵 사유가 적히는 자리는 둘뿐이다 — **반려**(`rejectRequest`)와 **마감**(`closeRequest`). 확인됨은
+ *    사유를 받지 않으므로 저절로 안 그려지고, 결재에서 반려된 건은 그 반려 사유가 신청의 이 칸으로
+ *    복사돼 온다(`lib/approval/part-issue-rules.ts`).
+ * 🔴 **글자는 셋으로 갈린다.** 상자 위에 선 상태 배지가 「마감」인데 상자가 「반려 사유」라고 하면 같은 줄이
+ *    두 말을 한다. 가르는 차례는 상태 배지와 **같다 — ① 마감 ② 반려 ③ 그 밖**(`requestStatusDisplay`).
+ *    🔵 ③은 지금 도달하지 않는다(사유가 적히는 자리가 둘뿐이라). 그래도 두는 까닭은 「반려」로 뭉개면
+ *       나중에 사유를 적는 자리가 하나 더 생겼을 때 **그 줄이 반려라고 거짓말을 하기** 때문이다.
+ */
+export const DECISION_NOTE_LABEL_CLOSED = "마감 사유";
+export const DECISION_NOTE_LABEL_REJECTED = "반려 사유";
+export const DECISION_NOTE_LABEL_OTHER = "결정 사유";
+
+export interface RequestDecisionNoteView {
+  label: string;
+  tone: ReasonBoxTone;
+  note: string;
+  /** 결정한 사람. 🔴 옛 줄은 비어 있을 수 있어 `null` 을 빈 글자로 눕힌다 — 화면이 「null」을 찍지 않게. */
+  byName: string;
+  /** 결정한 때. 없으면 `null` 이고, 그때 화면은 **아랫줄에서 시각만 뺀다**(상자는 그대로 선다). */
+  at: string | null;
+}
+
+export function requestDecisionNote(request: {
+  status: RequestStatus;
+  closed: boolean;
+  decisionNote: string;
+  decidedByName: string | null;
+  decidedAt: string | null;
+}): RequestDecisionNoteView | null {
+  const note = request.decisionNote.trim();
+  if (note === "") return null;
+  const label = request.closed ? DECISION_NOTE_LABEL_CLOSED : request.status === "REJECTED" ? DECISION_NOTE_LABEL_REJECTED : DECISION_NOTE_LABEL_OTHER;
+  return { label, tone: DECISION_NOTE_TONE, note, byName: request.decidedByName ?? "", at: request.decidedAt };
+}
+
+/* ------------------------------------------------------------------ */
 /* 상태 거르개 — 상태 여덟에 「실행 대기」가 하나 더 선다 (2026-10-21)     */
 /* ------------------------------------------------------------------ */
 

@@ -17,10 +17,12 @@ import type { IssueApprovalTrailView } from "@/lib/approval/part-issue-screen";
 import { OWNER_LABEL, formatQuantity, type Owner } from "@/lib/parts/codes";
 import {
   ENTRY_TYPE_LABEL,
+  HOLD_REASON_TONE,
   REQUEST_SOURCE_LABEL,
   REQUEST_STATUS_FILTER_ORDER,
   canCancelRequest,
   isClaimableRequest,
+  requestDecisionNote,
   requestMatchesStatusFilter,
   requestStatusBadge,
   requestStatusFilterLabel,
@@ -84,6 +86,18 @@ export interface ManagerRequestRow {
   requestedBy: string | null;
   requestedByName: string;
   requestedAt: string;
+  /**
+   * 결정 사유 — **담당자가 「왜 반려했더라」·「왜 남은 걸 접었더라」를 여기서 본다** (2026-10-21).
+   *
+   * 🔴 조회(`listAllRequests`)는 이 세 칸을 **처음부터 싣고 있었다**. 싣고 있었고 A/S 에도 내주고 있었는데
+   *    (`lib/api/stock-request-status.ts`) 정작 이 화면만 안 그려서, 담당자가 제가 적은 사유를 보려면
+   *    변경 이력(`/audit`)을 뒤져야 했다. 그래서 **조회는 한 글자도 안 고치고 받아 그리기만** 한다.
+   * 🔵 빈 글자일 수 있다(사유가 적히지 않는 길로 끝난 신청). 그릴지 말지는 화면이 아니라
+   *    `requestDecisionNote` 한 곳이 가린다 — 그쪽 주석에 「취소에는 사유가 없다」까지 적혀 있다.
+   */
+  decisionNote: string;
+  decidedByName: string | null;
+  decidedAt: string | null;
 }
 
 const BADGE = "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap";
@@ -169,18 +183,47 @@ function aboutOf(r: ManagerRequestRow): string {
   return `${head}${r.note ? `${head ? " · " : ""}${r.note}` : ""}`;
 }
 
+/** 사유 상자 둘이 **같은 틀**을 쓴다 — 나란히 섰을 때 폭·여백이 다르면 같은 종류의 것으로 안 보인다. */
+const REASON_BOX = "max-w-64 rounded-md px-2 py-1.5 text-xs";
+
 /**
  * 보류 사유. **담당자 화면에도 보여 준다** — 다른 사람이 멈춰 둔 것을 보고 「왜 멈춰 있는지」를 변경 이력에서
  * 뒤지게 하지 않으려는 것이다(A/S 원본의 `HoldReason` 과 같은 까닭).
+ *
+ * 🔵 색만 `codes.ts` 로 옮겼다(2026-10-21) — **보이는 모양은 그대로다.** 바로 아래 결정 사유 상자가 이 색과
+ *    달라야 하는데, 색이 화면 파일에 남아 있으면 그 「다름」을 시험이 재지 못한다.
  */
 function HoldReason({ hold }: { hold: ManagerRequestRow["hold"] }) {
   if (!hold) return null;
   return (
-    <div className="max-w-64 rounded-md bg-violet-50 px-2 py-1.5 text-xs">
-      <p className="text-violet-900">{hold.reason}</p>
-      <p className="mt-0.5 text-violet-700">
+    <div className={`${REASON_BOX} ${HOLD_REASON_TONE.box}`}>
+      <p className={HOLD_REASON_TONE.body}>{hold.reason}</p>
+      <p className={`mt-0.5 ${HOLD_REASON_TONE.meta}`}>
         {hold.heldByName} · {formatRequestedAt(hold.heldAt)}
       </p>
+    </div>
+  );
+}
+
+/**
+ * 결정 사유 — **왜 반려했는지 · 왜 남은 것을 접었는지** (2026-10-21).
+ *
+ * 🔴 **그릴지 말지도, 글자도, 색도 전부 `requestDecisionNote` 한 곳에서 온다.** 여기서 다시 가리지 않는다 —
+ *    사유가 비면 `null` 이라 상자 자체가 안 선다.
+ * 🔴 **머리글을 붙이는 까닭**: 위 보류 상자에는 머리글이 없다(바로 위에 선 「보류」 배지가 이미 그 말을 한다).
+ *    그런데 상자가 둘이 되면 머리글 없는 상자 둘이 나란히 서서 어느 쪽이 무엇인지 알 수 없다. 색만으로
+ *    가르게 두지 않고 **글자로도 말한다.**
+ * 🔵 시각이 없으면 **아랫줄에서 시각만 뺀다** — 상자를 통째로 숨기면 사유가 함께 사라진다.
+ */
+function DecisionNote({ request }: { request: ManagerRequestRow }) {
+  const decision = requestDecisionNote(request);
+  if (!decision) return null;
+  const meta = [decision.byName, decision.at === null ? "" : formatRequestedAt(decision.at)].filter(Boolean).join(" · ");
+  return (
+    <div className={`${REASON_BOX} ${decision.tone.box}`}>
+      <p className={`font-medium ${decision.tone.body}`}>{decision.label}</p>
+      <p className={`mt-0.5 ${decision.tone.body}`}>{decision.note}</p>
+      {meta === "" ? null : <p className={`mt-0.5 ${decision.tone.meta}`}>{meta}</p>}
     </div>
   );
 }
@@ -448,6 +491,10 @@ export function RequestManagerScreen({
                             </div>
                           ) : null}
                           <HoldReason hold={r.hold} />
+                          {/* 🔵 보류 상자 **바로 아래**에 둔다 — 둘 다 「이 줄이 왜 이 상태인가」를 말하는 상자라
+                              같은 자리에 모여 있어야 한다. 둘이 한 줄에 함께 서는 일은 지금 생기지 않지만
+                              (사유가 적히는 반려·마감은 보류로 돌아가지 않는다) 그 전제를 코드에 박지 않는다. */}
+                          <DecisionNote request={r} />
                         </div>
                       </td>
                       {showActions ? (
