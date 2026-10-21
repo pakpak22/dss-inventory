@@ -26,7 +26,10 @@ function item(over: Record<string, unknown> = {}) {
 describe("포털 응답 읽기", () => {
   it("아홉 칸이 다 글자인 줄은 그대로 실린다", () => {
     const feed = normalizePortalNotificationFeed({ items: [item()], count: 1, degraded: false });
-    assert.deepEqual(feed, { items: [item()], count: 1, degraded: false, dismissed: [] });
+    // 🔴 `acknowledged` 는 2026-10-22 에 **늘어난 칸**이다(✓ 로 확인한 열쇠). 답에 그 칸이
+    //    없으면 빈 배열이고 종은 예전 그대로 그려진다 — 뜻과 쓰는 자리는
+    //    tests/notifications-acknowledgement.test.ts 에.
+    assert.deepEqual(feed, { items: [item()], count: 1, degraded: false, dismissed: [], acknowledged: [] });
   });
 
   it("🔴 칸이 하나라도 글자가 아니면 **그 줄만** 버린다", () => {
@@ -73,7 +76,9 @@ describe("포털 응답 읽기", () => {
 
   it("객체가 아닌 답은 「못 물어봤다」로 본다", () => {
     for (const body of [null, undefined, "응답", 3, true]) {
-      assert.deepEqual(normalizePortalNotificationFeed(body), { items: [], count: 0, degraded: true, dismissed: [] });
+      // 🔴 못 물어봤을 때는 지움도 확인도 **빈 배열**이다 — 거를 것이 없다는 뜻이고,
+      //    그때는 지웠던·확인해 둔 줄이 다시 뜬다(틀렸을 때 덜 나쁜 쪽).
+      assert.deepEqual(normalizePortalNotificationFeed(body), { items: [], count: 0, degraded: true, dismissed: [], acknowledged: [] });
     }
   });
 });

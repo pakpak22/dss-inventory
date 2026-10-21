@@ -1,8 +1,8 @@
 import { NotificationBell } from "@dss/ui";
 import type { Role } from "@/db/schema/users";
-import { dismissAllNotificationsAction, dismissNotificationAction } from "@/app/actions/notifications";
+import { acknowledgeNotificationAction, dismissAllNotificationsAction, dismissNotificationAction } from "@/app/actions/notifications";
 import { visibleNotificationKeys } from "@/lib/notifications/dismiss-keys";
-import { fetchPortalNotifications, withoutDismissed } from "@/lib/notifications/portal";
+import { fetchPortalNotifications, withoutAcknowledged, withoutDismissed } from "@/lib/notifications/portal";
 import { listInventoryNotifications } from "@/lib/notifications/queries";
 
 /**
@@ -58,6 +58,37 @@ import { listInventoryNotifications } from "@/lib/notifications/queries";
  * 🔵 포털이 보낸 `others.count` 는 **손대지 않는다.** 남의 줄 몫이고 지움이 이미
  *    반영돼 있다. 줄이는 것은 우리가 더한 제 줄 몫뿐이다.
  *
+ * ── 🔴 확인(onAcknowledge)도 **넘긴다** (2026-10-22) ────────────────────
+ * 2026-10-22 까지 아래 종 자리에는 「**넘기지 않는 이유**」가 적혀 있었다: 이 시스템의
+ * 알림은 상태가 바뀌면 저절로 사라지고, 포털에서 온 줄은 **그 알림을 만든 시스템에서만**
+ * 확인을 적을 수 있다는 것이었다.
+ *
+ * 🔴 **뒷말의 전제가 사라졌다.** 포털에 확인을 적는 통로가 생겼다(dss-auth 의
+ *    `/api/integration/notification-acknowledgements`, 2026-10-22). 지움과 똑같이 **남의
+ *    시스템 줄이어도 여기서 적을 수 있다.**
+ *
+ * 🔴 **앞말도 사용자 요구 앞에서 깨졌다.** 「상태가 바뀌면 사라진다」가 [재고 부족]에는
+ *    맞지 않는다 — 그 줄은 **사건이 아니라 상태**라 부품을 채워 넣기 전까지 계속 서 있다
+ *    (bell-items.ts 의 MAX_LOW_STOCK_ITEMS 주석). 사용자가 「[재고부족] 같은 경우는
+ *    확인하면 알림이 사라지도록」이라고 콕 집은 줄이 바로 그것이다(2026-10-22).
+ *
+ * 🔴 **그래서 이 집은 제 줄도 보낸다 — 휴가·게시판과 반대다.** 그 둘은 제 줄을 일부러 안
+ *    보냈다(휴가의 제 줄은 결재 대기뿐이고, 게시판은 글을 열면 사라지는 다른 길이 이미
+ *    있었다). 여기는 제 줄에 [재고 부족]이 있고 **제 확인 기록 표가 없어** 적을 곳이
+ *    포털뿐이다. 포털의 확인 통로는 **전체 목록**을 보고 지문을 계산하므로 제 줄도 그 안에
+ *    있다.
+ *
+ * 🔵 **안전한 까닭 — 판단은 전부 포털이 한다.** 포털은 분류가 「정보 확인용(INFO)」인 줄만
+ *    `acknowledged` 에 담는다. 이 시스템의 승인용 줄(확인 대기·결재 차례)은 확인을 적어도
+ *    **안 빠진다.** 그래서 이 조각에는 종류를 가리는 갈래가 한 줄도 없다.
+ *
+ * 🔴 **두 방향이 다 있어야 한다.** ①만 하면 반쪽이다 — 제 줄은 **제 DB 에서 그리므로**
+ *    포털에 확인을 적어도 이 집 종에서는 안 사라진다. ②가 아래 `withoutAcknowledged` 다.
+ *
+ * 🔴 확인이 **실패해도 그 줄이 향하던 화면으로 가는 것을 막지 않는다.** 이동은 평범한
+ *    `<a href>` 가 하고, @dss/ui 가 이 함수를 try 로 감싼다(BellBehavior 의
+ *    notifyAcknowledged). 서버 액션 쪽도 제 손으로 한 번 더 삼킨다.
+ *
  * ── 🔴 「보이는 알림 지우기」(onDismissAll)도 **넘긴다** (2026-10-20) ────
  * 줄이 여럿이면 ✕ 를 여러 번 눌러야 했다. 그 단추는 A/S 에만 있었는데, 이제 @dss/ui 가
  * **단추도 글자도 개수도** 그린다 — 사이트가 하는 일은 함수를 넘기는 것뿐이다(그쪽
@@ -82,7 +113,14 @@ export async function HeaderNotificationBell({ userId, role, subject }: { userId
   const [raw, others] = await Promise.all([listInventoryNotifications({ id: userId, role, sub: subject }), fetchPortalNotifications(subject)]);
 
   // 🔴 이 한 줄이 없으면 「여기서 지웠는데 여기서만 그대로 뜬다」가 된다(위 머리말).
-  const mine = withoutDismissed(raw, others.dismissed);
+  const notDismissed = withoutDismissed(raw, others.dismissed);
+
+  // 🔴 **확인(✓)은 지움(✕)과 따로 거른다** (2026-10-22, 위 머리말의 「확인」 절).
+  //    두 열쇠 목록을 한 배열로 이어 붙여 한 번에 거르면 코드가 한 줄 짧아지는 대신 **수명이
+  //    정반대인 두 뜻이 섞인다** — 지움은 다시 로그인하면 돌아오고 확인은 안 돌아온다.
+  //    섞어 두면 확인을 지움으로 읽어 안 돌아와야 할 줄이 돌아오거나, 지움을 확인으로 읽어
+  //    영영 사라진다. 그래서 **차례로 두 번** 거른다.
+  const mine = withoutAcknowledged(notDismissed, others.acknowledged);
 
   const items = [...mine.items, ...others.items];
 
@@ -107,11 +145,13 @@ export async function HeaderNotificationBell({ userId, role, subject }: { userId
       // 🔴 두 쪽을 **더한다**(위 머리말). items.length 가 아니다.
       count={mine.count + others.count}
       label="알림"
-      // onAcknowledge 를 넘기지 않는다 — 이 시스템의 알림은 **상태가 바뀌면 사라지고**
-      // (확인·반려하면 대기가 빠지고, 반려는 7일 뒤 저절로 — notifications/bell-items.ts),
-      // 포털에서 온 줄은 그 알림을 만든 시스템에서만 확인을 적을 수 있다.
-      //
-      // colorScheme 도 넘기지 않는다. 이 사이트는 밝은 화면뿐이라 기본값 "host"
+      // 🔴 줄을 **누르면** 「확인했다」가 포털에 적힌다(2026-10-22, 위 머리말의 확인 절).
+      //    2026-10-22 까지 여기에는 「넘기지 않는 이유」가 적혀 있었고 그 전제가 사라졌다.
+      //    🔴 ✕(onDismiss)와 **다른 일**이다 — 합치지 말 것. 수명이 정반대다.
+      //    🔵 제 줄이든 포털 줄이든 가리지 않고 보낸다. 무엇이 실제로 사라질지는 포털이
+      //       정하고(정보 확인용 줄만), 승인용 줄은 확인을 적어도 종에 남는다.
+      onAcknowledge={acknowledgeNotificationAction}
+      // colorScheme 은 넘기지 않는다. 이 사이트는 밝은 화면뿐이라 기본값 "host"
       // (조상에 .dark 가 있을 때만 어두워진다)가 그대로 옳다(@dss/ui README 4절).
       //
       // 🔴 `onDismiss` 를 **넘겼을 때만** 줄마다 ✕ 가 그려진다(@dss/ui). 넘기는 것은

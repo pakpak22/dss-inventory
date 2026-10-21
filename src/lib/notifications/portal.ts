@@ -76,13 +76,38 @@ export type PortalNotificationFeed = {
    * 것이지 지워지는 자료가 아니라 그 편이 종을 통째로 끄는 것보다 낫다.
    */
   dismissed: string[];
+  /**
+   * 🔴 그 사람이 **✓ 로 확인한** 알림의 열쇠 — 재고관리 몫만 온다(2026-10-22, 포털의 3dd31bf).
+   *
+   * 🔴 **위 `dismissed` 와 한 뭉치로 만들지 마라. 수명이 정반대다.**
+   *  · ✕ 지움은 「지금은 그만 보겠다」라 **로그아웃하면 돌아온다.**
+   *  · ✓ 확인은 「해소됐다」라 **안 돌아온다.**
+   * 합쳐 두면 확인을 지움으로 읽어 **안 돌아와야 할 줄이 돌아오거나**, 지움을 확인으로
+   * 읽어 **영영 사라진다.** 그래서 거르는 자리도 둘이다(`withoutDismissed` ·
+   * `withoutAcknowledged`).
+   *
+   * 🔴 **담기는 조건이 지움보다 좁다.** 지움은 「지웠는가」 하나지만, 확인은 셋이 모두
+   * 맞을 때만 담긴다 — 기록이 있고, **그때 본 내용과 지금 내용이 같고**, 포털 관리자가 그
+   * 종류를 **「정보 확인용(INFO)」**으로 정해 두었을 때다. 판정은 전부 포털이 한다.
+   * 🔵 그래서 이 시스템의 승인용 줄(확인 대기·결재 차례)은 눌러도 여기 안 담겨 **종에
+   *    남는다** — 사용자가 「동작이 필요한 알림은 해소될 때까지 남아 있게」라고 한 그 요구가
+   *    이 한 칸으로 지켜진다. 이 사이트에 종류를 가리는 갈래가 한 줄도 없는 까닭이다.
+   * 🔵 반대로 「한계수량 이하인 부품이 N종 더 있습니다」처럼 id 가 고정인 줄도 **3종이
+   *    10종이 되면 내용이 달라져** 이 목록에서 빠지고 다시 보인다.
+   *
+   * 🔵 뺄 것이 없으면 **빈 배열**이다. 포털이 확인 기록을 못 읽었거나 우리에게 못 물어봤을
+   *    때도 빈 배열이고 `degraded` 가 선다 — 그때는 확인해 둔 줄이 다시 뜬다. **틀렸을 때 덜
+   *    나쁜 쪽**이다(「안 뺀다」가 틀리면 처리한 알림이 한 번 더 보이고, 「뺀다」가 틀리면
+   *    아직 안 한 일이 안 보인다).
+   */
+  acknowledged: string[];
 };
 
 /**
  * 못 물어봤을 때의 답. 🔴 **던지지 않는다** — 알림 하나 때문에 머리말이, 곧 모든
  * 화면이 깨지는 일은 없어야 한다.
  */
-const UNREACHABLE: PortalNotificationFeed = { items: [], count: 0, degraded: true, dismissed: [] };
+const UNREACHABLE: PortalNotificationFeed = { items: [], count: 0, degraded: true, dismissed: [], acknowledged: [] };
 
 /** 한 줄의 아홉 칸. 하나라도 글자가 아니면 **그 줄만** 버린다. */
 function toPortalBellItem(row: unknown): NotificationBellItem | null {
@@ -132,7 +157,12 @@ export function normalizePortalNotificationFeed(body: unknown): PortalNotificati
   //    걸러지지 않을 뿐 종은 예전 그대로 그려진다. 글자가 아닌 조각은 버린다.
   const dismissed = Array.isArray(answer.dismissed) ? answer.dismissed.filter((key): key is string => typeof key === "string" && key !== "") : [];
 
-  return { items, count, degraded: answer.degraded === true, dismissed };
+  // 🔴 **지움과 따로 읽는다.** 한 배열로 이어 붙이면 뜻이 섞이고(위 `acknowledged` 주석)
+  //    두 번 다시 가를 수 없다. 칸이 없는 옛 포털에도 돌아가야 하므로 없으면 빈 배열이다 —
+  //    그때는 확인해 둔 줄이 다시 뜰 뿐이고 종은 예전 그대로 그려진다.
+  const acknowledged = Array.isArray(answer.acknowledged) ? answer.acknowledged.filter((key): key is string => typeof key === "string" && key !== "") : [];
+
+  return { items, count, degraded: answer.degraded === true, dismissed, acknowledged };
 }
 
 /**
@@ -158,6 +188,38 @@ export function withoutDismissed(mine: { items: readonly NotificationBellItem[];
   if (dismissed.length === 0) return { items: [...mine.items], count: mine.count };
 
   const hidden = new Set(dismissed);
+  const items = mine.items.filter((row) => !hidden.has(row.key));
+  const removed = mine.items.length - items.length;
+  if (removed === 0) return { items, count: mine.count };
+
+  return { items, count: Math.max(0, mine.count - removed) };
+}
+
+/**
+ * 🔴 **포털이 돌려준 「확인(✓)」으로 「이 시스템의 알림」에서 제 줄을 뺀다** (2026-10-22).
+ *
+ * ── 🔴 왜 `withoutDismissed` 옆에 **따로** 서 있나 ──────────────────────
+ * 셈은 같지만 **다루는 것이 다르다.** 지움은 「지금은 그만 보겠다」라 로그아웃하면
+ * 돌아오고, 확인은 「해소됐다」라 돌아오지 않는다. 두 열쇠 목록을 한 배열로 이어 붙여
+ * 한 번에 거르면 코드가 짧아지는 대신 **두 뜻이 섞여** 다시 가를 수 없게 된다 — 그래서
+ * 부르는 쪽도 이 둘을 **차례로 두 번** 부른다(HeaderNotificationBell).
+ *
+ * 🔴 **✕ 쪽 함수를 고쳐 나눠 쓰지 않았다.** 사용자가 「[X] 는 지금대로」라고 못 박았고
+ *    (2026-10-22), 그 함수는 이미 돌고 있는 길이다. 두 벌이 어긋나는 위험은 시험이 막는다 —
+ *    `tests/notifications-acknowledgement.test.ts` 가 같은 입력을 양쪽에 넣어 셈이 갈라지지
+ *    않았는지 본다.
+ *
+ * 🔴 **여기서 종류를 가리지 않는다.** 「동작이 필요한 알림은 남아 있게」는 포털이 지킨다 —
+ *    승인용(ACTION) 줄의 열쇠는 애초에 `acknowledged` 에 담겨 오지 않는다. 여기서 한 번 더
+ *    가르면 두 곳이 서로 다른 규칙을 들게 되고, 어긋나도 오류가 한 줄도 안 난다.
+ *
+ * 🔴 **개수도 함께 줄인다**, **0 아래로 내려가지 않는다**, **열쇠는 `item.key` 를 그대로
+ *    본다** — 셋 다 위 `withoutDismissed` 와 같은 까닭이고 거기 적혀 있다.
+ */
+export function withoutAcknowledged(mine: { items: readonly NotificationBellItem[]; count: number }, acknowledged: readonly string[]): { items: NotificationBellItem[]; count: number } {
+  if (acknowledged.length === 0) return { items: [...mine.items], count: mine.count };
+
+  const hidden = new Set(acknowledged);
   const items = mine.items.filter((row) => !hidden.has(row.key));
   const removed = mine.items.length - items.length;
   if (removed === 0) return { items, count: mine.count };
@@ -324,4 +386,99 @@ export async function dismissPortalNotifications(subject: string, keys: readonly
   }
 
   return recorded;
+}
+
+/* ========================================================================== */
+/* 「이 알림은 확인했다」 — 누른 줄을 포털에 적는다 (2026-10-22)               */
+/*                                                                           */
+/* 🔴 바로 위 ✕(지움)과 **뜻이 다르다.** ✕ 는 「지금은 그만 보겠다」라 다시     */
+/*    로그인하면 돌아오고, 줄을 **누르는 것**은 「해소됐다」라 돌아오지 않는다. */
+/*    포털의 표도 그래서 둘이고 통로도 둘이다.                                 */
+/*                                                                           */
+/* 🔴 **무엇을 없앨지 이 사이트는 판단하지 않는다.** 나가는 것은 열쇠뿐이고,   */
+/*    포털이 제 목록에서 그 줄을 찾아 **내용 지문을 직접 계산**해 적는다.       */
+/*    사이트가 지문을 정할 수 있으면 아무 값이나 넣어 그 알림을 영영 안 보이게  */
+/*    만들 수 있기 때문이다. 종에서 빠지는 것은 (기록이 있고 · 지문이 지금      */
+/*    내용과 같고 · 분류가 「정보 확인용」) 셋이 다 맞을 때뿐이라, **결재        */
+/*    차례·확인 대기처럼 동작이 필요한 줄은 확인을 적어도 남는다.**            */
+/*                                                                           */
+/* ── 🔴 이 집은 **제 줄도 보낸다**(휴가·게시판과 반대다) ─────────────────── */
+/* 사용자가 예로 든 **[재고 부족]이 바로 이 시스템의 제 알림**이고, 「확인하면  */
+/* 사라지게」라고 콕 집었다(2026-10-22). 그런데 이 시스템에는 **제 확인 기록 표 */
+/* 가 없다** — 적을 곳이 포털뿐이다. 포털의 확인 통로는 **전체 목록**을 보고    */
+/* 지문을 계산하므로(부른 사이트에게도 한 번 묻는다 — dss-auth 의              */
+/* `사이트-알림-통로.md` 「빠져 있는 것」 절의 2026-10-22 덧글) 제 줄도 그 안에 */
+/* 있다. 제 줄의 열쇠도 모양이 같아(`dss-inventory:…`) 그대로 받아 적히고,      */
+/* 다음 왕복에서 `acknowledged` 로 돌아온다 — 거르는 일은 위                   */
+/* `withoutAcknowledged` 가 한다.                                             */
+/*                                                                           */
+/* ── 🔴 왜 지움 쪽과 **나눠 쓰지 않았나** ─────────────────────────────── */
+/* 두 통로는 자격증명도·몸통 모양도·상한도 같아 한 함수로 묶고 주소만 달리     */
+/* 받을 수 있다. 그래도 묶지 않았다 — 묶으려면 **이미 돌고 있는 지움 쪽 코드를 */
+/* 고쳐야** 하는데, 이번 조각의 요구가 「[X] 는 지금대로」였다(2026-10-22).     */
+/* 두 벌이라 한쪽만 고쳐지는 날이 온다 — 그래서 요청 모양이 어긋나면 시험이    */
+/* 잡는다(tests/notifications-acknowledgement.test.ts 의 「지움 쪽과 요청 모양이 */
+/* 같다」가 두 함수의 몸통을 맞대어 본다).                                     */
+/* ========================================================================== */
+
+/**
+ * 「이 알림은 확인했다」를 포털에 적는다. 🔴 **어떤 일이 있어도 던지지 않는다** — 읽는
+ * 쪽·지움 쪽과 같은 약속이고, 여기서는 한 가지가 더 걸려 있다: 이 함수는 사람이 줄을
+ * **누른 그 순간**에 불리는데 그 누름은 **다른 화면으로 건너가는 일**이기도 하다. 예외가
+ * 새면 못 적는 데서 그치지 않고 **이동까지** 흔들린다(@dss/ui 의 `notifyAcknowledged` 가
+ * 한 겹 더 받아 주지만, 그것에 기대지 않는다).
+ *
+ * @param subject 포털의 users.id (= ID 토큰의 sub). 이 시스템은 `users.auth_sub` 로 들고
+ *                있다. 🔴 **서버가 제 세션에서 가진 값**이어야 한다 — 브라우저가 보낸 값을
+ *                그대로 넘기면 남의 알림을 확인 처리하는 통로가 된다.
+ * @param key     `{client_id}:{id}` 모양 **하나**. 모양이 틀리거나 모르는 시스템의 것은
+ *                포털이 조용히 버린다(`dropped`). 포털 목록에 그 줄이 없으면 `skipped` 인데
+ *                **실패가 아니다** — 다시 보내지 않는다.
+ *
+ * 🔴 지움과 달리 **열쇠를 하나만 받는다.** 확인은 줄을 하나 누르는 일이라 열쇠가 언제나
+ *    하나다. 지움처럼 200개씩 나눠 보내는 고리를 미리 두면 아무도 안 돌리는 고리가 된다 —
+ *    「확인 전부」 같은 단추가 생기는 날 그때 더한다(포털의 상한은 지움과 같은 값이다).
+ *
+ * @returns 적혔는가. 🔵 몇 번을 다시 보내도 안전하다 — 같은 열쇠를 두 번 확인하는 것은
+ *          한 번 확인하는 것과 같다.
+ */
+export async function acknowledgePortalNotification(subject: string, key: string): Promise<boolean> {
+  if (!subject) return false;
+
+  // 🔴 빈 열쇠는 아예 보내지 않는다 — 포털이 400(no_keys)으로 거절하므로 부르는 것은
+  //    거절 한 줄을 로그에 쌓는 일뿐이다(지움 쪽과 같다).
+  if (!key) return false;
+
+  let response: Response;
+  try {
+    // env 의 getter 는 값이 없으면 던진다 — 그래서 try 안에서 읽는다. 설정이 빠진 것
+    // 때문에 줄 한 번 누르기가 깨지면 안 된다.
+    const credentials = `${encodeURIComponent(env.ssoClientId)}:${encodeURIComponent(env.ssoClientSecret)}`;
+
+    response = await fetch(`${env.ssoIssuer}/api/integration/notification-acknowledgements`, {
+      method: "POST",
+      headers: {
+        authorization: `Basic ${Buffer.from(credentials, "utf8").toString("base64")}`,
+        "content-type": "application/x-www-form-urlencoded",
+        accept: "application/json",
+      },
+      // 🔴 칸 이름은 `keys` 다(하나여도) — 지움 통로와 **같은 모양**이고 포털도 같은
+      //    파서를 쓴다. 🔴 지문 칸은 **없다** — 「그때 본 내용」은 포털이 계산한다.
+      body: new URLSearchParams({ sub: subject, keys: key }).toString(),
+      cache: "no-store",
+      signal: AbortSignal.timeout(PORTAL_NOTIFICATIONS_TIMEOUT_MS),
+    });
+  } catch (e) {
+    // 🔴 남기는 것은 오류의 **종류**뿐이다. 열쇠에는 부품 No. 같은 업무 식별자가 들어
+    //    있어 그것도 찍지 않는다(포털이 같은 판단을 한다).
+    console.error("[notifications] 알림 확인을 적지 못했습니다:", { name: e instanceof Error ? e.name : "unknown" });
+    return false;
+  }
+
+  if (!response.ok) {
+    console.error("[notifications] 포털 알림 확인 통로 거절:", response.status);
+    return false;
+  }
+
+  return true;
 }
