@@ -1,3 +1,4 @@
+import { type ApprovalStepActor } from "./delegation";
 import { partIssueLockFor } from "./part-issue-gate";
 import { PART_ISSUE_STATUS_LABELS, type PartIssueStatus } from "./part-issue-rules";
 import type { EntryType } from "@/lib/stock/codes";
@@ -75,6 +76,20 @@ export type IssueApprovalTrailStep = {
   approverName: string;
   /** 신청자 본인이라 결재를 받지 않는 단계인가. */
   skipped: boolean;
+  /**
+   * 🔴 **그 자리를 실제로 누른 사람이 누구인가** (2026-10-22, 결재권 위임 마지막 조각).
+   *
+   * 위 `approverName` 은 **그 자리의 주인**(결재선에 적힌 사람)이고, 이것은 **그 자리에서 실제로
+   * 일어난 일**이다. 둘이 갈리는 길이 위임 하나뿐이라 2026-10-21 전에는 칸 자체가 없었다
+   * (`src/db/schema/stock-issue-approvals.ts` 의 `decided_by_sub` 주석).
+   *
+   * 🔴 **갈래는 넷이고, 그 판정은 화면이 하지 않는다** — 서버가 포털 번호 둘을 견주어
+   *    `approvalStepActor` 로 끝낸다(`skipped` 를 서버가 판정해 싣는 것과 **같은 자리·같은
+   *    까닭**이다. 머리말: 아래 어느 타입에도 번호를 담는 칸이 없다).
+   * 🔵 그래서 이 값에는 **이름밖에 없다** — 그대로 브라우저로 내려가도 신원을 가리키는 번호가
+   *    실려 나가지 않는다.
+   */
+  decidedBy: ApprovalStepActor;
 };
 
 /**
@@ -278,6 +293,41 @@ export function partIssueTrailMark(input: {
   if (status === "PENDING_APPROVAL") return PART_ISSUE_TRAIL_MARKS.CURRENT;
   return PART_ISSUE_TRAIL_MARKS.DONE;
 }
+
+/* ------------------------------------------------------------------ */
+/* 결재선 그림 — 「대신 눌렀다」를 상자에 덧붙이는 한 줄                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 🔴 **이름이 안 적힌 대리 결재**에 쓰는 글자. 표가 번호·이름 두 칸을 다 널 허용이라 생길 수
+ * 있는 모양이고, 그때 「(null 대리)」를 그리느니 **아는 것만** 말한다.
+ */
+export const PART_ISSUE_TRAIL_DELEGATE_UNNAMED = "(대리 결재)";
+
+/**
+ * 결재선 그림의 상자에 **덧붙일 한 줄**. 덧붙일 것이 없으면 `null`.
+ *
+ * 🔴 **대리로 눌린 자리에만 글자가 있다.** 나머지 셋은 전부 `null` 이고, 그 까닭이 갈래마다 다르다:
+ *  · `SELF` — 적힌 사람이 눌렀다. 덧붙일 말이 없다(지금까지와 한 글자도 다르지 않다).
+ *  · `UNDECIDED` — 아직 아무도 안 눌렀다. 「누가 눌렀나」를 말할 수 없다.
+ *  · `UNRECORDED` — 🔴 **옛 줄이다. 그래도 지금까지처럼 이름 하나만 그린다**(2026-10-22 결정).
+ *    「모른다」를 화면에 적으면 **2026-10-21 이전의 결재가 전부 수상해 보인다.** 그런데 그때는
+ *    위임 기능 자체가 없어서 **적힌 사람이 누른 것이 사실상 맞다.** 다만 「사실상 맞다」와
+ *    「적혀 있다」는 다른 말이라, **가르는 일은 코드가 계속한다**(`approvalStepActor` 의
+ *    `UNRECORDED` 갈래) — 화면에서만 `SELF` 와 같게 보일 뿐이다. 🔴 그래서 이 갈래를 위 `SELF`
+ *    와 **한 값으로 합치지 마라.** 합치는 순간 옛 줄이 「본인이 눌렀다」가 되어 과거를 지어낸다.
+ *
+ * 🔵 **「김○○ 결재 (이○○ 대리)」의 뒷부분**이다 — 앞의 이름은 상자가 이미 그리고 있다. 괄호를
+ *    씌우는 까닭은 바로 윗줄(결재자 이름)에 **매달린 말**로 읽히게 하려는 것이다: 괄호가 없으면
+ *    「이○○ 대리」가 직급(대리)으로 읽힐 자리가 생긴다.
+ */
+export function partIssueTrailDelegateLabel(actor: ApprovalStepActor): string | null {
+  if (actor.kind !== "DELEGATED") return null;
+  return actor.delegateName === null ? PART_ISSUE_TRAIL_DELEGATE_UNNAMED : `(${actor.delegateName} 대리)`;
+}
+
+/** 대리 줄에 다는 설명. 🔴 괄호 넉 자가 무슨 뜻인지는 글자로도 말해 둔다(색·기호만으로 말하지 않는다). */
+export const PART_ISSUE_TRAIL_DELEGATE_TITLE = "결재선에 적힌 분을 대신해 결재권을 위임받은 분이 결재했습니다. 윗줄이 원래 결재권자입니다.";
 
 /**
  * 그림 위에 적는 한 줄 — 「결재선 n/m단계 · 지금 차례: ○○○」.

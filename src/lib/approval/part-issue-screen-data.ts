@@ -2,8 +2,10 @@ import "server-only";
 import { asc, inArray } from "drizzle-orm";
 import { db } from "@/db/client";
 import { approvalRouteSteps } from "@/db/schema/approval-routes";
+import { stockIssueApprovalSteps } from "@/db/schema/stock-issue-approvals";
 import { users } from "@/db/schema/users";
 import { listAllRequests, type PendingRequestRow } from "@/lib/stock/requests";
+import { approvalStepActor, type ApprovalStepDecision } from "./delegation";
 import { listMyOpenPartIssueApprovals, listOpenPartIssueApprovalsByRequest, listPartIssueApprovalsToDecide, listPartIssueApprovalsToExecute } from "./part-issue";
 import { checkCanCancelPartIssue, type PartIssueView } from "./part-issue-rules";
 import {
@@ -27,12 +29,15 @@ import { isRouteStepSkippedForRequester } from "./route";
  *  1. **줄별 부품 이름과 지금 재고** — 결재건에 적힌 것은 `{ partId, quantity }` 뿐이다.
  *  2. **이 건이 타고 있는 판의 단계들** — 결재선 그림의 상자들.
  *  3. **건너뛴 자리인가** — 포털 번호 둘을 견주는 판정. 🔴 번호는 **여기서 끝난다**.
+ *  4. **그 자리를 실제로 누른 사람이 누구인가** (2026-10-22) — 본인 · 대리인 · 옛 줄 ·
+ *     아직 안 누름. 🔴 **이것도 포털 번호 둘을 견주는 판정**이라 3번과 같은 자리에서 끝낸다.
  *
  * ── 🔴 포털 번호는 화면으로 내려가지 않는다 ─────────────────────────────
- * 결재선 그림에 필요한 것은 이름이지 번호가 아니다. 판정(`isRouteStepSkippedForRequester`)을
- * 여기서 끝내고 `skipped` 한 칸만 싣는다 — 앞 조각이 `getCurrentApprovalRouteWithSubs` 와
- * `getCurrentApprovalRoute` 를 가른 까닭과 같다(`./queries.ts` 머리말). 화면이 받는 타입
- * (`./part-issue-screen.ts`)에는 번호를 담을 칸이 아예 없다.
+ * 결재선 그림에 필요한 것은 이름이지 번호가 아니다. 판정(`isRouteStepSkippedForRequester` ·
+ * `approvalStepActor`)을 여기서 끝내고 `skipped`·`decidedBy` 한 칸씩만 싣는다 — 앞 조각이
+ * `getCurrentApprovalRouteWithSubs` 와 `getCurrentApprovalRoute` 를 가른 까닭과 같다
+ * (`./queries.ts` 머리말). 화면이 받는 타입(`./part-issue-screen.ts`)에는 번호를 담을 칸이
+ * 아예 없다.
  *
  * ── 🔴 판정을 새로 적지 않는다 ──────────────────────────────────────────
  * 「건너뛰는가」는 서버가 사슬을 이을 때 보는 그 함수, 「거둘 수 있는가」는 `cancelPartIssueApproval`
@@ -79,6 +84,46 @@ async function routeStepsByRouteId(routeIds: readonly string[]) {
     const list = out.get(r.routeId) ?? [];
     list.push({ stepOrder: r.stepOrder, approverSub: r.approverSub, approverName: r.approverName });
     out.set(r.routeId, list);
+  }
+  return out;
+}
+
+/**
+ * 결재건들의 **단계 줄** — 「그 자리를 실제로 누가 눌렀나」를 가리는 데 필요한 칸만
+ * (2026-10-22, 결재권 위임 마지막 조각).
+ *
+ * 🔴 **바로 위 `routeStepsByRouteId` 와 다른 표다.** 저것은 결재선 **판**(`approval_route_steps`,
+ * 「누구 자리인가」)이고 이것은 그 판을 타고 실제로 돈 **결재 줄**(`stock_issue_approval_steps`,
+ * 「그 자리에서 무슨 일이 있었나」)이다. 열쇠도 다르다 — 저쪽은 `route_id`(여러 결재건이 한 판을
+ * 함께 탄다), 이쪽은 `approval_id`(건마다 제 줄이 있다). 🔴 둘을 `route_id` 하나로 묶으면
+ * **다른 건의 결재가 이 건의 상자에 그려진다.**
+ *
+ * 🔴 **줄이 없는 자리가 정상이다.** 단계는 차례가 올 때 한 줄씩 생기므로(표 머리말의 「미리 전부
+ * 넣어 두지 않는다」) 아직 차례가 안 온 자리·건너뛴 자리에는 줄이 아예 없다. 그 자리는
+ * `approvalStepActor(null)` 로 「아직 안 누름」이 된다.
+ * 🔵 건마다 묻지 않는다 — 위 두 함수와 같은 까닭이다(건이 20개면 질의가 20번이 된다).
+ */
+async function decisionStepsByApprovalId(approvalIds: readonly string[]) {
+  const out = new Map<string, Map<number, ApprovalStepDecision>>();
+  const ids = [...new Set(approvalIds)];
+  if (ids.length === 0) return out;
+
+  const rows = await db()
+    .select({
+      approvalId: stockIssueApprovalSteps.approvalId,
+      stepOrder: stockIssueApprovalSteps.stepOrder,
+      approverSub: stockIssueApprovalSteps.approverSub,
+      decidedAt: stockIssueApprovalSteps.decidedAt,
+      decidedBySub: stockIssueApprovalSteps.decidedBySub,
+      decidedByName: stockIssueApprovalSteps.decidedByName,
+    })
+    .from(stockIssueApprovalSteps)
+    .where(inArray(stockIssueApprovalSteps.approvalId, ids));
+
+  for (const r of rows) {
+    const byOrder = out.get(r.approvalId) ?? new Map<number, ApprovalStepDecision>();
+    byOrder.set(r.stepOrder, { approverSub: r.approverSub, decidedAt: r.decidedAt, decidedBySub: r.decidedBySub, decidedByName: r.decidedByName });
+    out.set(r.approvalId, byOrder);
   }
   return out;
 }
@@ -134,6 +179,10 @@ function linesOf(view: PartIssueView, request: PendingRequestRow | undefined): I
 }
 
 type RouteStepRows = ReadonlyMap<string, Array<{ stepOrder: number; approverSub: string | null; approverName: string }>>;
+type DecisionStepRows = ReadonlyMap<string, ReadonlyMap<number, ApprovalStepDecision>>;
+
+/** 그림 한 장을 그리는 데 필요한 **곁자료 셋**. 부르는 자리 둘이 같은 묶음을 넘긴다. */
+type TrailContext = { routeSteps: RouteStepRows; requesterSubs: ReadonlyMap<string, string>; decisionSteps: DecisionStepRows };
 
 /**
  * 이 건이 타고 있는 판의 단계들 → 그림의 상자들.
@@ -142,27 +191,34 @@ type RouteStepRows = ReadonlyMap<string, Array<{ stepOrder: number; approverSub:
  *    진행 그림(`readPartIssueTrailsByRequest`). 손으로 두 벌 적으면 「건너뛴 자리」가 한 화면에서만
  *    점선으로 보이는 날이 온다.
  * 🔴 판정을 새로 적지 않는다 — 서버가 사슬을 이을 때 보는 그 함수다. 포털 번호는 여기서 끝난다(머리말).
+ *
+ * 🔴 **상자 하나에 표 둘이 만난다** (2026-10-22): 「누구 자리인가」는 **판**(`routeSteps`)에서,
+ *    「그 자리에서 실제로 누가 눌렀나」는 그 건의 **결재 줄**(`decisionSteps`)에서 온다. 둘을 잇는
+ *    열쇠는 **단계 번호**다 — 건너뛴 번호가 건너뛴 채로 적히는 것(1 → 3)이 양쪽에서 같기 때문에
+ *    번호가 그대로 짝이 된다(표 머리말 · `IssueApprovalTrailStep.stepOrder`). 🔴 차례(index)로
+ *    짝지으면 건너뛴 판에서 **한 칸씩 밀려** 남의 결재가 그려진다.
+ * 🔵 줄이 없는 자리는 `null` 이 그대로 넘어가 「아직 안 누름」이 된다 — 여기서 가리지 않는다.
  */
-function trailOf(view: PartIssueView, routeSteps: RouteStepRows, requesterSubs: ReadonlyMap<string, string>): IssueApprovalTrailStep[] {
-  const requesterSub = requesterSubs.get(view.requestedBy) ?? null;
-  return (routeSteps.get(view.routeId) ?? []).map((step) => ({
+function trailOf(view: PartIssueView, ctx: TrailContext): IssueApprovalTrailStep[] {
+  const requesterSub = ctx.requesterSubs.get(view.requestedBy) ?? null;
+  const decisions = ctx.decisionSteps.get(view.id) ?? null;
+  return (ctx.routeSteps.get(view.routeId) ?? []).map((step) => ({
     stepOrder: step.stepOrder,
     approverName: step.approverName,
     skipped: isRouteStepSkippedForRequester(step.approverSub, requesterSub),
+    decidedBy: approvalStepActor(decisions?.get(step.stepOrder) ?? null),
   }));
 }
 
 function toCard(
   view: PartIssueView,
-  ctx: {
+  ctx: TrailContext & {
     viewerUserId: string;
     requests: ReadonlyMap<string, PendingRequestRow>;
-    routeSteps: RouteStepRows;
-    requesterSubs: ReadonlyMap<string, string>;
   },
 ): IssueApprovalCard {
   const request = ctx.requests.get(view.requestId);
-  const trail = trailOf(view, ctx.routeSteps, ctx.requesterSubs);
+  const trail = trailOf(view, ctx);
 
   return {
     id: view.id,
@@ -214,13 +270,15 @@ export async function readPartIssueApprovalScreen(viewer: { userId: string; appr
   ]);
 
   const all = [...toDecideViews, ...toExecuteViews, ...mineViews];
-  const [requestRows, routeSteps, requesterSubs] = await Promise.all([
+  const [requestRows, routeSteps, requesterSubs, decisionSteps] = await Promise.all([
     all.length === 0 ? Promise.resolve([] as PendingRequestRow[]) : listAllRequests(),
     routeStepsByRouteId(all.map((v) => v.routeId)),
     subsByUserId(all.map((v) => v.requestedBy)),
+    // 🔵 **결재건의 id 로** 읽는다 — 판이 아니라 그 건이 실제로 돈 줄이다(`decisionStepsByApprovalId`).
+    decisionStepsByApprovalId(all.map((v) => v.id)),
   ]);
   const requests = new Map(requestRows.map((r) => [r.id, r]));
-  const ctx = { viewerUserId: viewer.userId, requests, routeSteps, requesterSubs };
+  const ctx = { viewerUserId: viewer.userId, requests, routeSteps, requesterSubs, decisionSteps };
 
   const toExecute = toExecuteViews.map((v) => toCard(v, ctx));
   const mineAll = mineViews.map((v) => toCard(v, ctx));
@@ -261,10 +319,14 @@ export async function readPartIssueTrailsByRequest(requestIds: readonly string[]
   }
   if (picked.length === 0) return new Map();
 
-  const [routeSteps, requesterSubs] = await Promise.all([
+  const [routeSteps, requesterSubs, decisionSteps] = await Promise.all([
     routeStepsByRouteId(picked.map(([, v]) => v.routeId)),
     subsByUserId(picked.map(([, v]) => v.requestedBy)),
+    // 🔴 「승인 요청건」과 **같은 곁자료 셋**을 넘긴다 — 한쪽만 빠뜨리면 같은 결재가 두 화면에서
+    //    다른 얼굴이 된다(대리 표시가 한 화면에만 뜬다).
+    decisionStepsByApprovalId(picked.map(([, v]) => v.id)),
   ]);
+  const ctx = { routeSteps, requesterSubs, decisionSteps };
 
   return new Map(
     picked.map(([requestId, view]) => [
@@ -273,7 +335,7 @@ export async function readPartIssueTrailsByRequest(requestIds: readonly string[]
         status: view.status,
         // 🔵 A/S 번호(`approverUserId`)는 싣지 않는다 — 그림에 필요한 것은 이름뿐이다(`toCard` 와 같다).
         currentStep: view.currentStep ? { stepOrder: view.currentStep.stepOrder, approverName: view.currentStep.approverName } : null,
-        steps: trailOf(view, routeSteps, requesterSubs),
+        steps: trailOf(view, ctx),
       },
     ]),
   );

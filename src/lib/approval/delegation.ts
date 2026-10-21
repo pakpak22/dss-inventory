@@ -158,3 +158,78 @@ export function actingApproverSubs(
 ): ActingApproverSubs {
   return [actorSub, ...delegatorSubsFor(delegations, actorSub, now)];
 }
+
+/* ------------------------------------------------------------------ */
+/* 「그 단계를 실제로 누른 사람은 누구인가」 (2026-10-22, 결재권 위임 마지막 조각) */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 단계 한 줄에서 **이 판정이 보는 것만** 추린 모양. 표
+ * (`src/db/schema/stock-issue-approvals.ts` 의 `stock_issue_approval_steps`)의 칸 이름과 같다.
+ *
+ * 🔴 **도메인 층은 db 층을 가져오지 않는다** — 위 `ApprovalDelegationPeriod` 와 같은 관례다.
+ */
+export type ApprovalStepDecision = {
+  /**
+   * 🔴 그 단계에 **적힌** 결재자의 포털 번호 — 「누구 자리인가」다. 대리인이 눌러도 이 칸은
+   * 바뀌지 않는다(`decidePartIssueApproval` 이 건드리지 않는다).
+   */
+  approverSub: string;
+  /**
+   * 결정된 시각. 아직 열려 있는(`REQUESTED`) 줄이면 `null`.
+   *
+   * 🔴 **「결재됐나」를 이 칸으로 읽는다.** 표의 `…_decision_metadata` CHECK 가 「결정됐으면
+   * 시각이 있고, 안 됐으면 없다」를 지키므로 이 한 칸이면 갈린다. 상태를 따로 받으면 두
+   * 칸이 어긋난 줄을 상상해야 하는데, 그런 줄은 DB 가 만들지 못한다.
+   */
+  decidedAt: Date | null;
+  /** 🔴 **실제로 누른 사람**의 포털 번호. 아래 세 갈래를 보라. */
+  decidedBySub: string | null;
+  /** 그때 적어 둔 이름의 사본. */
+  decidedByName: string | null;
+};
+
+/**
+ * 한 단계를 **누가 눌렀는가**의 네 갈래.
+ *
+ * 🔵 이름 말고는 아무것도 담지 않는다 — **포털 번호가 화면까지 내려가지 않게** 하려는 것이고
+ * (`./part-issue-screen.ts` 머리말), 그래서 이 값은 그대로 화면으로 실어 보낼 수 있다.
+ */
+export type ApprovalStepActor =
+  /** 아직 결재되지 않은 자리 — 지금 차례이거나, 차례가 안 왔거나, 건너뛴 자리다. */
+  | { kind: "UNDECIDED" }
+  /** 적힌 사람이 **본인** 손으로 눌렀다. */
+  | { kind: "SELF" }
+  /**
+   * 🔴 **누가 눌렀는지 어디에도 안 적힌 옛 줄**이다. 「본인이 눌렀다」가 **아니다** —
+   * `decided_by_*` 칸이 생기기(2026-10-21) 전에 결재된 줄이라 적힐 자리가 없었다.
+   */
+  | { kind: "UNRECORDED" }
+  /**
+   * **대리인**이 대신 눌렀다. 🔵 `delegateName` 이 `null` 인 줄은 번호만 있고 이름이 안 적힌
+   * 줄이다 — 쓰는 코드는 둘을 언제나 함께 적지만(위 집행 자리), 표가 둘 다 널 허용이라
+   * 「대리인인데 이름을 모른다」를 지어내지 않고 그대로 들고 간다.
+   */
+  | { kind: "DELEGATED"; delegateName: string | null };
+
+/**
+ * 🔴 **세 갈래(+ 아직 안 누른 자리)를 가르는 유일한 자리다.** 화면마다 다시 적으면 한 화면에서만
+ * 대리가 보이거나, 더 나쁘게는 **옛 줄이 「본인」으로 둔갑**한다.
+ *
+ * @param step 단계 한 줄. 🔴 **그 자리에 줄 자체가 없으면 `null`** 을 넘긴다 — 결재선 그림은
+ *   아직 열리지 않은 단계·건너뛴 단계의 상자도 그리는데, 그 자리에는 단계 줄이 아예 없다
+ *   (단계는 차례가 올 때 한 줄씩 생긴다 — 표 머리말의 「미리 전부 넣어 두지 않는다」).
+ *
+ * ── 🔴 `NULL` 을 「본인」으로 읽지 마라 ──────────────────────────────────
+ * 표 쪽 주석(`decided_by_sub`)이 적어 둔 세 갈래 그대로다. 둘을 같은 것으로 읽으면 **과거를
+ * 지어내게 된다** — 그 줄에는 누가 눌렀는지가 어디에도 없다.
+ *
+ * 🔵 **갈래 넷을 전부 돌려준다.** 「대리인인가 아닌가」의 boolean 으로 줄이면 `UNRECORDED` 와
+ *    `SELF` 가 한 값으로 뭉개져, 뒷날 「대리로 결재된 건을 전부 보여 달라」에 답할 수 없다.
+ */
+export function approvalStepActor(step: ApprovalStepDecision | null): ApprovalStepActor {
+  if (step === null || step.decidedAt === null) return { kind: "UNDECIDED" };
+  if (step.decidedBySub === null) return { kind: "UNRECORDED" };
+  if (step.decidedBySub === step.approverSub) return { kind: "SELF" };
+  return { kind: "DELEGATED", delegateName: step.decidedByName };
+}

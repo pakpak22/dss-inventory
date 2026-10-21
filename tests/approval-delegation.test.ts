@@ -3,9 +3,11 @@ import { describe, it } from "node:test";
 
 import {
   actingApproverSubs,
+  approvalStepActor,
   delegatorSubsFor,
   isActiveDelegation,
   type ApprovalDelegationPeriod,
+  type ApprovalStepDecision,
 } from "../src/lib/approval/delegation";
 
 /**
@@ -237,5 +239,74 @@ describe("⑤ 지금 내 자격으로 누를 수 있는 번호들 (actingApprove
     // 🔵 빈 목록이 아니라 「아무 줄도 안 맞는 번호 하나」가 된다. 어느 쪽이든 결과는 0건이고,
     //    이 시험은 열쇠가 다시 뒤바뀌었을 때 **여기서** 깨지라고 있다.
     assert.deepEqual(actingApproverSubs([delegation("kim", "lee")], asId("lee"), at), [asId("lee")]);
+  });
+});
+
+/**
+ * ============================================================================
+ * 「그 단계를 실제로 누른 사람은 누구인가」 (2026-10-22, 위임 마지막 조각)
+ * ============================================================================
+ * 🔴 **`decided_by_sub` 의 값은 세 가지 뜻을 가진다**(표 쪽 주석). 거기에 「아직 아무도 안
+ * 눌렀다」를 더하면 갈래가 넷이고, 그 넷을 가르는 자리가 `approvalStepActor` 하나다.
+ *
+ * 여기서 못 박는 것:
+ *  1. 🔴 **`NULL` 은 「본인」이 아니다.** 이 칸이 생기기(2026-10-21) 전에 결재된 옛 줄은 누가
+ *     눌렀는지가 **어디에도 없다.** 둘을 한 값으로 읽으면 과거를 지어내게 된다.
+ *  2. **아직 안 눌린 자리**(열린 단계 · 줄이 아예 없는 자리)가 옛 줄로 둔갑하지 않는다.
+ *  3. **대리인은 번호 둘이 다를 때**다 — 깃발 칸이 따로 없으므로 이 견줌이 곧 판정이다.
+ * ============================================================================
+ */
+describe("approvalStepActor — 본인 · 대리인 · 옛 줄 · 아직 안 누름", () => {
+  const DECIDED_AT = new Date("2026-10-21T05:00:00.000Z");
+
+  /** 결재된 단계 한 줄. 자리의 주인은 언제나 kim 이다. */
+  const step = (over: Partial<ApprovalStepDecision> = {}): ApprovalStepDecision => ({
+    approverSub: sub("kim"),
+    decidedAt: DECIDED_AT,
+    decidedBySub: sub("kim"),
+    decidedByName: "김결재",
+    ...over,
+  });
+
+  it("① **본인** — 적힌 번호와 누른 번호가 같다", () => {
+    assert.deepEqual(approvalStepActor(step()), { kind: "SELF" });
+  });
+
+  it("② **대리인** — 번호가 다르면 그 사람 이름이 함께 온다", () => {
+    assert.deepEqual(approvalStepActor(step({ decidedBySub: sub("lee"), decidedByName: "이대리" })), {
+      kind: "DELEGATED",
+      delegateName: "이대리",
+    });
+  });
+
+  it("🔵 대리인인데 **이름이 안 적힌** 줄 — 번호만 믿고 이름을 지어내지 않는다", () => {
+    // 🔵 쓰는 코드는 둘을 언제나 함께 적지만 표가 둘 다 널 허용이라, 모양만은 있을 수 있다.
+    assert.deepEqual(approvalStepActor(step({ decidedBySub: sub("lee"), decidedByName: null })), {
+      kind: "DELEGATED",
+      delegateName: null,
+    });
+  });
+
+  it("③ 🔴 **옛 줄(`NULL`)은 「본인」이 아니다** — 누가 눌렀는지 어디에도 안 적혀 있다", () => {
+    const old = approvalStepActor(step({ decidedBySub: null, decidedByName: null }));
+    assert.deepEqual(old, { kind: "UNRECORDED" });
+    assert.notDeepEqual(old, { kind: "SELF" }, "옛 줄을 「본인이 눌렀다」로 읽으면 과거를 지어낸다");
+  });
+
+  it("④ **아직 결재 안 된 단계** — 열린 줄도, 줄이 아예 없는 자리도 「안 누름」이다", () => {
+    // 🔵 열린 줄(`REQUESTED`)은 결정 시각이 비어 있다(표의 `…_decision_metadata` CHECK).
+    assert.deepEqual(approvalStepActor(step({ decidedAt: null, decidedBySub: null, decidedByName: null })), { kind: "UNDECIDED" });
+    // 🔴 아직 차례가 안 온 자리·건너뛴 자리에는 단계 줄이 **아예 없다**(차례가 올 때 한 줄씩 생긴다).
+    assert.deepEqual(approvalStepActor(null), { kind: "UNDECIDED" });
+  });
+
+  it("🔴 **결정 시각이 먼저다** — 시각이 없으면 누른 번호가 적혀 있어도 「안 누름」이다", () => {
+    // 🔵 그런 줄은 CHECK 가 막아 생기지 않는다. 갈래의 차례가 뒤집히면 열린 단계가 「본인이
+    //    눌렀다」로 보이므로, 차례 자체를 여기서 못 박는다.
+    assert.deepEqual(approvalStepActor(step({ decidedAt: null })), { kind: "UNDECIDED" });
+  });
+
+  it("🔴 열쇠는 **포털 번호**다 — A/S 번호를 섞으면 본인이 대리인으로 보인다", () => {
+    assert.deepEqual(approvalStepActor(step({ decidedBySub: asId("kim") })), { kind: "DELEGATED", delegateName: "김결재" });
   });
 });

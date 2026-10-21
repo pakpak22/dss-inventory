@@ -1,6 +1,12 @@
 import { Fragment } from "react";
 import type { PartIssueStatus } from "@/lib/approval/part-issue-rules";
-import { partIssueProgressText, partIssueTrailMark, type IssueApprovalTrailStep } from "@/lib/approval/part-issue-screen";
+import {
+  partIssueProgressText,
+  partIssueTrailDelegateLabel,
+  partIssueTrailMark,
+  PART_ISSUE_TRAIL_DELEGATE_TITLE,
+  type IssueApprovalTrailStep,
+} from "@/lib/approval/part-issue-screen";
 
 /**
  * ============================================================================
@@ -25,6 +31,8 @@ import { partIssueProgressText, partIssueTrailMark, type IssueApprovalTrailStep 
  * ── 🔴 포털 번호는 여기 오지 않는다 ─────────────────────────────────────
  * 그림에 필요한 것은 **이름**이다. 「신청자 본인이라 건너뛴 자리인가」는 서버가 포털 번호 둘을
  * 견주어 `skipped` 한 칸으로 실어 보낸다(`src/lib/approval/part-issue-screen-data.ts` 머리말).
+ * 「그 자리를 실제로 누가 눌렀나」도 **똑같이** 서버가 번호 둘을 견주어 끝내고 `decidedBy` 한
+ * 칸(이름뿐)으로 실어 보낸다(2026-10-22, `approvalStepActor`).
  * ============================================================================
  */
 export function IssueApprovalTrail({
@@ -67,6 +75,13 @@ export function IssueApprovalTrail({
                 status,
                 skipped: step.skipped,
               });
+              /**
+               * 🔴 **대리로 눌린 자리에만 글자가 있다** — 본인·옛 줄·아직 안 누름은 전부 `null`
+               *    이라 지금까지와 한 글자도 다르지 않게 그려진다. 갈래 넷을 가르는 일은 서버가
+               *    끝냈고(`approvalStepActor`), 글자를 고르는 일은 순수 함수가 한다. 여기는 **있으면
+               *    한 줄 더 그린다**뿐이다 — 이 파일에 판정을 적지 않는다(머리말).
+               */
+              const delegate = partIssueTrailDelegateLabel(step.decidedBy);
               return (
                 <Fragment key={step.stepOrder}>
                   {index > 0 ? (
@@ -75,7 +90,21 @@ export function IssueApprovalTrail({
                     </span>
                   ) : null}
                   <div className="flex flex-col items-center gap-1">
-                    <span className={`rounded-md border px-3 py-2 text-xs whitespace-nowrap ${mark.boxClass}`}>{step.approverName}</span>
+                    {/* 🔴 **상자가 좁아 한 줄에 둘을 세우지 않는다** — 이름 둘을 한 줄에 붙이면 상자가
+                        옆으로 터지고, 결재선이 길면 그림 전체가 못 읽게 밀린다. 그래서 **위아래로**
+                        세운다: 윗줄이 **그 자리의 주인**(결재선에 적힌 사람)이고 아랫줄이 **그 자리에서
+                        실제로 누른 대리인**이다. 🔵 작고 흐린 글씨로 두는 것이 「주(主)와 종(從)」을
+                        말하는 자리다 — 결재선은 「누구 자리인가」를 보는 그림이고 대리는 그 자리에서
+                        일어난 일이라, 대리인 이름이 결재권자보다 눈에 먼저 들어오면 거꾸로 읽힌다.
+                        🔵 각 줄은 그대로 `whitespace-nowrap` 이라 이름이 중간에서 꺾이지 않는다. */}
+                    <span className={`rounded-md border px-3 py-2 text-xs whitespace-nowrap ${mark.boxClass}`}>
+                      <span className="block">{step.approverName}</span>
+                      {delegate !== null ? (
+                        <span className="mt-0.5 block text-[10px] font-normal text-zinc-500" title={PART_ISSUE_TRAIL_DELEGATE_TITLE}>
+                          {delegate}
+                        </span>
+                      ) : null}
+                    </span>
                     <span className="text-[11px] whitespace-nowrap text-zinc-400">
                       {step.stepOrder}단계 · {mark.stateLabel}
                     </span>

@@ -9,9 +9,11 @@ import {
   partIssueProgressEmptyText,
   partIssueProgressText,
   partIssueStatusBadge,
+  partIssueTrailDelegateLabel,
   partIssueTrailMark,
   pickPartIssueTrailSource,
   PART_ISSUE_EXECUTION_STANDING_NOTICE,
+  PART_ISSUE_TRAIL_DELEGATE_UNNAMED,
   PART_ISSUE_NOTHING_AWAITING_APPROVAL,
   PART_ISSUE_NOTHING_IN_PROGRESS,
   PART_ISSUE_NOTHING_TO_DECIDE,
@@ -20,6 +22,7 @@ import {
   PART_ISSUE_TRAIL_MARKS,
   type IssueApprovalCard,
 } from "../src/lib/approval/part-issue-screen";
+import { approvalStepActor } from "../src/lib/approval/delegation";
 import { partIssueLockFor } from "../src/lib/approval/part-issue-gate";
 import { PART_ISSUE_STATUS_LABELS, PART_ISSUE_STATUSES, type PartIssueStatus } from "../src/lib/approval/part-issue-rules";
 
@@ -451,5 +454,94 @@ describe("요청 비고가 「승인 요청건」까지 온다 (2026-10-22)", ()
     // 🔴 타입이 어긋나면 여기서 tsc 가 멈춘다(런타임 단언은 거드는 것일 뿐이다).
     const card: Pick<IssueApprovalCard, "reason" | "requestNote"> = { reason: "담당자가 결재자에게 쓴 글", requestNote: "신청한 사람이 적은 말" };
     assert.notEqual(card.reason, card.requestNote, "둘은 다른 사람의 말이다");
+  });
+});
+
+/**
+ * ============================================================================
+ * 대리 결재가 결재선 그림에 보인다 (2026-10-22, 위임 마지막 조각)
+ * ============================================================================
+ * 「누가 **실제로** 눌렀는가」는 2026-10-21 부터 DB 에 쌓이고 있었는데 **화면이 그 칸을 안
+ * 썼다.** 그림은 단계에 적힌 사람(`approverName`)만 그려서, 대리인이 결재해도 **원래
+ * 결재권자 이름으로만** 보였다.
+ *
+ * 🔴 여기서 못 박는 것 넷:
+ *  1. **대리로 눌린 자리에만 글자가 붙는다.** 본인·옛 줄·아직 안 누름은 지금까지와 한 글자도
+ *     다르지 않다(갈래 판정 자체는 `tests/approval-delegation.test.ts` 가 전수로 잰다).
+ *  2. 🔴 **옛 줄(`NULL`)에 「모른다」를 쓰지 않는다** — 2026-10-21 이전 결재가 전부 수상해
+ *     보인다. 그때는 위임 자체가 없어 적힌 사람이 누른 것이 사실상 맞다. 🔴 그래도 **코드는
+ *     그 둘을 계속 가른다**(`UNRECORDED` ≠ `SELF`).
+ *  3. **그림은 두 화면이 함께 쓴다** — 「승인 요청건」과 「부품 요청」. 한쪽만 되면 같은 결재가
+ *     두 얼굴이 된다.
+ *  4. **원래 결재권자가 주(主)이고 대리인이 종(從)이다** — 상자의 윗줄이 결재선에 적힌 사람이다.
+ * ============================================================================
+ */
+describe("대리 결재 표시 — partIssueTrailDelegateLabel (갈래 넷 전수)", () => {
+  it("🔴 **대리인**일 때만 글자가 있다 — 「(이대리 대리)」", () => {
+    assert.equal(partIssueTrailDelegateLabel({ kind: "DELEGATED", delegateName: "이대리" }), "(이대리 대리)");
+  });
+
+  it("🔵 이름이 안 적힌 대리 결재는 **아는 것만** 말한다 — 「(null 대리)」를 그리지 않는다", () => {
+    assert.equal(partIssueTrailDelegateLabel({ kind: "DELEGATED", delegateName: null }), PART_ISSUE_TRAIL_DELEGATE_UNNAMED);
+    assert.ok(!PART_ISSUE_TRAIL_DELEGATE_UNNAMED.includes("null"));
+  });
+
+  it("**본인**이 눌렀으면 덧붙일 말이 없다 — 지금까지와 한 글자도 다르지 않다", () => {
+    assert.equal(partIssueTrailDelegateLabel({ kind: "SELF" }), null);
+  });
+
+  it("🔴 **옛 줄(`NULL`)도 이름 하나뿐이다** — 「모른다」를 화면에 쓰지 않는다 (2026-10-22 결정)", () => {
+    assert.equal(partIssueTrailDelegateLabel({ kind: "UNRECORDED" }), null);
+  });
+
+  it("**아직 결재 안 된 단계**도 비어 있다 — 안 일어난 일을 말하지 않는다", () => {
+    assert.equal(partIssueTrailDelegateLabel({ kind: "UNDECIDED" }), null);
+  });
+
+  it("🔴 옛 줄과 본인이 화면에서만 같고 **갈래로는 갈려 있다** — 합치면 과거를 지어낸다", () => {
+    const old = approvalStepActor({ approverSub: "sub-kim", decidedAt: new Date("2026-10-01T00:00:00.000Z"), decidedBySub: null, decidedByName: null });
+    const self = approvalStepActor({ approverSub: "sub-kim", decidedAt: new Date("2026-10-22T00:00:00.000Z"), decidedBySub: "sub-kim", decidedByName: "김결재" });
+    assert.equal(partIssueTrailDelegateLabel(old), partIssueTrailDelegateLabel(self), "화면에서는 둘 다 이름 하나다");
+    assert.notEqual(old.kind, self.kind, "코드가 둘을 가르지 않는다 — 「대리로 결재된 건을 전부 보여 달라」에 답할 수 없게 된다");
+  });
+});
+
+describe("대리 결재가 **그림에 실제로 그려진다** (2026-10-22)", () => {
+  it("🔴 판정은 **서버가 끝낸다** — 화면이 받는 모양에 포털 번호가 없다", () => {
+    const data = src("src/lib/approval/part-issue-screen-data.ts");
+    assert.ok(data.includes("decidedBy: approvalStepActor("), "서버가 갈래를 안 가린다 — 화면이 번호를 받아 다시 가리게 된다");
+    const screenTypes = src("src/lib/approval/part-issue-screen.ts");
+    assert.ok(!/Sub(\??):\s*string/.test(screenTypes), "화면이 받는 타입에 포털 번호 칸이 생겼다 — 신원이 브라우저로 실려 나간다");
+  });
+
+  it("🔴 **단계 번호로 짝짓는다** — 차례(index)로 맞추면 건너뛴 판에서 남의 결재가 그려진다", () => {
+    const data = src("src/lib/approval/part-issue-screen-data.ts");
+    assert.ok(data.includes("decisions?.get(step.stepOrder) ?? null"), "판의 상자와 결재 줄을 단계 번호로 잇지 않는다");
+    // 🔴 결재 줄은 **결재건의 id** 로 읽는다. `route_id` 로 읽으면 같은 판을 탄 다른 건의 결재가 섞인다.
+    assert.ok(data.includes("inArray(stockIssueApprovalSteps.approvalId, ids)"), "결재 줄을 결재건 id 로 좁히지 않는다");
+  });
+
+  it("🔴 **두 화면이 같은 그림을 쓴다** — 한쪽만 되면 같은 결재가 두 얼굴이 된다", () => {
+    const data = src("src/lib/approval/part-issue-screen-data.ts");
+    // 🔵 「승인 요청건」의 카드와 「부품 요청」의 줄 — 둘 다 같은 `trailOf` 를 지난다.
+    assert.equal(data.match(/trailOf\(view, ctx\)/g)?.length, 2, "그림을 짓는 길이 하나가 아니다 — 한쪽에만 대리가 보이게 된다");
+    assert.equal(data.match(/decisionStepsByApprovalId\(/g)?.length, 3, "한쪽 화면이 결재 줄을 안 읽는다(정의 1 + 부르는 자리 2)");
+    for (const screen of ["src/components/stock/IssueApprovalScreen.tsx", "src/components/stock/RequestManagerScreen.tsx"]) {
+      assert.ok(src(screen).includes("<IssueApprovalTrail status="), `${screen} 이 그림을 안 쓴다`);
+    }
+  });
+
+  it("🔴 상자는 **윗줄이 원래 결재권자**다 — 대리인은 작고 흐린 아랫줄", () => {
+    const trail = src("src/components/stock/IssueApprovalTrail.tsx");
+    assert.ok(trail.includes("<span className=\"block\">{step.approverName}</span>"), "결재선에 적힌 사람이 윗줄이 아니다");
+    assert.ok(/text-\[10px\][^"]*text-zinc-500[^>]*>\s*\{delegate\}/s.test(trail), "대리인 줄이 결재권자보다 작고 흐리지 않다 — 주와 종이 뒤집힌다");
+    assert.ok(trail.includes("title={PART_ISSUE_TRAIL_DELEGATE_TITLE}"), "괄호 넉 자가 무슨 뜻인지 글자로 말해 주지 않는다");
+  });
+
+  it("🔴 화면은 판정을 **다시 적지 않는다** — 글자 고르기는 순수 함수가 한다", () => {
+    const trail = src("src/components/stock/IssueApprovalTrail.tsx");
+    assert.ok(trail.includes("partIssueTrailDelegateLabel(step.decidedBy)"), "화면이 순수 함수를 안 거친다");
+    assert.ok(!/decidedBy\.kind/.test(trail), "화면이 갈래를 직접 가른다 — 아무도 돌려 보지 못하는 규칙이 생겼다");
+    assert.ok(!/대리\)?`|대리"/.test(trail), "화면이 대리 글자를 손으로 적는다 — 순수 함수와 두 벌이 된다");
   });
 });
