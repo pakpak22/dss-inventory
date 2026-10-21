@@ -4,6 +4,9 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { isPartIssueApprovalRouteInForce, PART_ISSUE_APPROVAL_REQUIRED_MESSAGE } from "@/lib/approval/part-issue-gate";
 import { getCurrentApprovalRoute } from "@/lib/approval/queries";
+// 🔴 「이 신청은 어느 절차를 타는가」는 결재를 올리는 자리와 **같은 함수**로 정한다 — 둘이 갈리면
+//    결재가 조용히 우회된다(`src/lib/approval/request-scope.ts` 머리말에 그 구멍의 모양).
+import { getApprovalRouteScopeForRequest } from "@/lib/approval/request-scope";
 import { roleAtLeast } from "@/lib/auth/role";
 import { requireRole } from "@/lib/auth/session";
 import { ADMIN_ONLY_TYPES, needsConfirmation, sheetNoText, todaySeoul } from "@/lib/stock/codes";
@@ -138,9 +141,12 @@ export interface RequestActionState {
  * 🔵 조각 4d 에서 화면이 그 자리를 쓴다 — 다만 **칸을 다 비우면 아무것도 안 보낸다.**
  *    안 보내면 `quantities` 가 `null` 이라 **남은 수량 전부**이고, 그것이 조각 4b 까지의 동작 그대로다.
  *
- * ── 🔴 「부품 불출」 승인 절차가 쓰이고 있으면 이 길은 막힌다 (2026-10-15, 조각 11c) ──
+ * ── 🔴 그 신청의 승인 절차가 쓰이고 있으면 이 길은 막힌다 (2026-10-15, 조각 11c) ──
  * 화면만 바꾸면 **옛 화면을 띄워 둔 탭에서 그대로 나간다.** 그래서 서버에서도 같은 판정으로
  * 한 번 더 막는다.
+ * 🔴 **어느 절차인지는 그 신청의 「수리 건 종류」가 정한다**(2026-10-22) — 매쳐·제너레이터·
+ *    토탈 컨트롤러·모름의 네 갈래이고, 짝은 `src/lib/approval/route.ts` 한 곳에 적혀 있다.
+ *    결재를 올리는 자리와 **같은 함수**를 거친다(아래 `getApprovalRouteScopeForRequest`).
  *
  * 🔴 **문은 여기(서버 액션)에만 단다 — `confirmRequest` 안에 달면 안 된다.** 그 함수를 부르는
  *    곳이 둘이기 때문이다:
@@ -163,9 +169,6 @@ export async function confirmRequestAction(_prev: RequestActionState, formData: 
   const session = await requireRole("ADMIN", "/entries");
   const id = String(formData.get("requestId") ?? "");
   if (!id) return { error: "신청이 정해지지 않았습니다." };
-  if (isPartIssueApprovalRouteInForce(await getCurrentApprovalRoute("PART_ISSUE"))) {
-    return { error: PART_ISSUE_APPROVAL_REQUIRED_MESSAGE };
-  }
   const parsed = parseIssueQuantities(formData.get("quantities"));
   if (!parsed.ok) return { error: parsed.message };
   const note = String(formData.get("issueNote") ?? "")
@@ -174,6 +177,21 @@ export async function confirmRequestAction(_prev: RequestActionState, formData: 
     .slice(0, 500);
   let r;
   try {
+    /**
+     * ── 🔴 **문은 「그 신청의 용도」로 연다** (2026-10-22) ──────────────────
+     * 그 전에는 여기서 `"PART_ISSUE"` 를 글자 그대로 읽었다. 신청이 종류별 절차로 갈리기 시작한
+     * 지금 그대로 두면 **구멍이 생긴다**: 관리자가 매쳐 절차만 짜 두고 「부품 불출」을 비워 두면,
+     * 결재를 올리는 자리는 매쳐 절차를 요구하는데 이 문은 「비었으니 절차 없음」으로 읽고 **결재
+     * 없이 그 자리에서 부품을 내준다.** 그래서 용도를 정하는 함수가 양쪽에 하나다.
+     *
+     * 🔴 **`try` 안으로 들여놨다.** 신청 번호가 망가져 들어오거나 DB 가 잠깐 끊기면 이 읽기가
+     *    터지는데, 밖에 두면 그 예외가 그대로 오류 화면이 된다. 안에 두면 **아무것도 내주지 않고**
+     *    「잠시 뒤 다시 시도하십시오」로 끝난다 — 막히는 쪽으로 실패한다.
+     * 🔵 **문은 여전히 원장 호출보다 앞이다**(시험이 둘의 자리를 잰다).
+     */
+    if (isPartIssueApprovalRouteInForce(await getCurrentApprovalRoute(await getApprovalRouteScopeForRequest(id)))) {
+      return { error: PART_ISSUE_APPROVAL_REQUIRED_MESSAGE };
+    }
     /**
      * 🔴 **`via: "MANUAL"` 이 이 길을 가른다** (2026-10-21, 조각 11e). 결재가 돌고 있는 신청
      * (`IN_APPROVAL`)은 이 길로 **집히지 않는다** — 집히게 두면 관리자가 결재선을 끄는 순간

@@ -4,6 +4,10 @@ import { listOpenPartIssueStatusesByRequest } from "@/lib/approval/part-issue";
 import type { IssueApprovalTrailView } from "@/lib/approval/part-issue-screen";
 import { readPartIssueRejectionActorsByRequest, readPartIssueTrailsByRequest } from "@/lib/approval/part-issue-screen-data";
 import { getCurrentApprovalRoute } from "@/lib/approval/queries";
+// 🔴 「이 신청은 어느 절차를 타는가」의 짝표는 저장소에 한 곳뿐이다 — 서버 액션 둘은 이것을 감싼
+//    `getApprovalRouteScopeForRequest` 로 묻고, 이 화면은 신청을 이미 묶음으로 읽어 두었으므로
+//    **같은 순수 함수**를 직접 부른다(줄마다 DB 에 다시 묻지 않으려고).
+import { approvalRouteScopeForWorkflowKind, type ApprovalRouteScope } from "@/lib/approval/route";
 import { roleAtLeast } from "@/lib/auth/role";
 import { requireRole } from "@/lib/auth/session";
 import type { RequestDecisionActor } from "@/lib/stock/codes";
@@ -53,6 +57,12 @@ export default async function RequestsPage({ searchParams }: { searchParams: Pro
    *    **한 글자도 다르지 않다**(`isPartIssueApprovalRouteInForce`).
    *    🔵 포털 번호가 **빠진** 조회(`getCurrentApprovalRoute`)를 쓴다 — 여기서 필요한 것은 단계 수뿐이고,
    *       번호가 든 모양을 집어 오면 다음 사람이 그대로 화면에 실어 보낼 수 있다(`queries.ts` 머리말).
+   *    🔴 **화면 전체에 값 하나가 아니라 줄마다 다른 값이다** (2026-10-22). 신청마다 딸린 수리 건의
+   *       종류가 다르고, 종류마다 다른 절차를 타기 때문이다 — 매쳐 절차만 켜 두면 **매쳐 신청만**
+   *       [불출 신청]이고 나머지는 [확인] 그대로여야 한다. 하나로 뭉개면 둘 중 한쪽이 거짓말이 되고,
+   *       「단추는 [확인]인데 눌러 보니 거절」 또는 그 반대가 된다.
+   *    🔵 **판은 용도마다 한 번씩만 읽는다**(많아야 셋) — 신청 수와 무관하다. 줄마다 물으면 신청
+   *       서른 건이 질의 서른 번이 된다(아래 ②·③·④가 묶음으로 읽는 것과 같은 까닭).
    * ② **신청마다 살아 있는 결재건이 있는가, 있다면 어느 자리인가** — 신청 묶음으로 **한 번에** 읽고
    *    (`listOpenPartIssueStatusesByRequest`), 「승인 대기인가 · 실행 대기인가」 판정은 `partIssueLockFor`
    *    한 곳에서 한다. **잠긴 신청만** 담는다.
@@ -76,13 +86,27 @@ export default async function RequestsPage({ searchParams }: { searchParams: Pro
    *       결재선에 적힌 분과 갈려, 같은 반려를 알림 종과 이 화면이 **다른 사람 이름으로** 말했다.
    *       🔵 그 칸은 **건드리지 않는다**(감사 쪽이 그 값을 쓴다). 보여 줄 때 두 이름을 합칠 뿐이다.
    */
-  const [route, openApprovals, trailsByRequest, decisionActorsByRequest] = await Promise.all([
-    getCurrentApprovalRoute("PART_ISSUE"),
+  /**
+   * 🔵 지금 목록에 **실제로 쓰이는 용도만** 읽는다 — 신청이 하나도 없으면 판을 한 번도 안 읽는다.
+   *    🔴 용도를 가리는 일은 여기서 손으로 적지 않고 순수 함수 하나를 거친다(위 ① 주석).
+   */
+  const scopesInUse = [...new Set(requests.map((r) => approvalRouteScopeForWorkflowKind(r.workflowKind)))];
+  const [routesInForce, openApprovals, trailsByRequest, decisionActorsByRequest] = await Promise.all([
+    Promise.all(scopesInUse.map(async (scope) => [scope, isPartIssueApprovalRouteInForce(await getCurrentApprovalRoute(scope))] as const)),
     listOpenPartIssueStatusesByRequest(requests.map((r) => r.id)),
     readPartIssueTrailsByRequest(requests.map((r) => r.id)),
     readPartIssueRejectionActorsByRequest(requests.map((r) => r.id)),
   ]);
-  const approvalRequired = isPartIssueApprovalRouteInForce(route);
+  const inForceByScope = new Map<ApprovalRouteScope, boolean>(routesInForce);
+  /**
+   * 🔴 **줄마다 하나씩** — 「그 신청이 결재를 거쳐야 하는가」. 🔵 모양을 아래 `issueLocks` 와 맞춘다
+   *    (신청 id → 값). 🔵 쓰이지 않는 용도는 읽지 않았으므로 Map 에 없고, 그때는 거짓이다 —
+   *    목록에 있는 신청은 전부 위에서 제 용도가 읽혔으니 그 일이 생기지 않는다.
+   */
+  const approvalRequiredByRequest: Record<string, boolean> = {};
+  for (const r of requests) {
+    approvalRequiredByRequest[r.id] = inForceByScope.get(approvalRouteScopeForWorkflowKind(r.workflowKind)) ?? false;
+  }
   const issueLocks: Record<string, PartIssueLock> = {};
   for (const [requestId, statuses] of openApprovals) {
     const lock = partIssueLockFor(statuses);
@@ -107,7 +131,7 @@ export default async function RequestsPage({ searchParams }: { searchParams: Pro
       notices={notices}
       isAdmin={isAdmin}
       currentUserId={session.user.id}
-      approvalRequired={approvalRequired}
+      approvalRequired={approvalRequiredByRequest}
       issueLocks={issueLocks}
       issueTrails={issueTrails}
       decisionActors={decisionActors}

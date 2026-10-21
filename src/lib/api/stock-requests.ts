@@ -1,4 +1,5 @@
 import type { RequestStatus } from "@/db/schema/stock-requests";
+import { isWorkflowKind, type WorkflowKind } from "@/lib/approval/route";
 import { CHARGE_LABEL, CHARGE_TYPES, INTAKE_NUMBER_RE, REQUEST_STATUS_LABEL, isChargeType, type ChargeType, type EntryType } from "@/lib/stock/codes";
 import { MAX_LINES, MAX_QTY, type EntryInput } from "@/lib/stock/form";
 
@@ -49,6 +50,16 @@ export interface ApiStockRequestInput {
   lines: ApiRequestLineInput[];
   reason: string;
   note: string;
+  /**
+   * 그 수리 건의 **종류** — 어느 승인 절차를 붙일지가 여기서 갈린다 (2026-10-22).
+   *
+   * 🔴 **절차 이름이 아니라 종류다.** 짝 짓는 일은 이쪽이 한다
+   *    (`src/lib/approval/route.ts` 의 `approvalRouteScopeForWorkflowKind` 하나) — 나중에 짝을
+   *    바꿔도 저쪽 자료를 안 고치게 하려는 것이다.
+   * 🔴 **모르면 `null` 이다.** A/S 는 모를 때 칸을 아예 안 보내고(수리 건이 없을 수 있다), 모르는
+   *    글자가 와도 여기서 `null` 로 떨어진다(아래 파싱). 그때는 기존 「부품 불출」 절차로 간다.
+   */
+  workflowKind: WorkflowKind | null;
 }
 
 export type ParseApiStockRequestResult = { ok: true; value: ApiStockRequestInput } | { ok: false; message: string };
@@ -133,7 +144,21 @@ export function parseApiStockRequest(raw: unknown): ParseApiStockRequestResult {
     lines.push({ no: line.no, quantity: line.quantity, chargeType: line.chargeType });
   }
 
-  return { ok: true, value: { requestKey, intakeNumber, requester: { sub, name }, lines, reason: text(body.reason, 500), note: text(body.note, 1000) } };
+  /**
+   * 🔴 **수리 건의 종류는 「받은 것을 믿지 않는다」** (2026-10-22). 아는 셋이 아니면 **거절하지 않고
+   *    `null`(모름)으로 떨어뜨린다** — 그러면 그 신청은 기존 「부품 불출」 절차를 따라 평소대로
+   *    처리된다.
+   *
+   * 🔴 **위 `chargeType` 과 일부러 다르게 다룬다.** 저쪽은 안 보내면 **거절**이다(청구에 걸리는
+   *    값이라 한쪽으로 채워 주면 틀린 청구가 조용히 선다). 이쪽은 반대다: A/S 가 종류를 하나 더
+   *    만든 날 우리가 신청을 거절하면 **현장에서 부품을 못 받는다.** 떨어뜨렸을 때 잃는 것은
+   *    「그 건이 종류별 절차가 아니라 기존 절차를 탄다」 하나뿐이고, 그것은 사람이 화면에서 본다.
+   * 🔵 **「안 보냄」과 「모르는 글자」를 같은 자리로 보낸다** — 둘 다 「우리가 가릴 수 없다」는 뜻이고,
+   *    가를 수 있어도 할 수 있는 일이 다르지 않다.
+   */
+  const workflowKind = isWorkflowKind(body.workflowKind) ? body.workflowKind : null;
+
+  return { ok: true, value: { requestKey, intakeNumber, requester: { sub, name }, lines, reason: text(body.reason, 500), note: text(body.note, 1000), workflowKind } };
 }
 
 /** 부품 되짚기에 쓰는 한 줄 — 통로가 `parts` 에서 읽어 넘긴다. */
@@ -181,6 +206,10 @@ export function resolveApiRequestLines(lines: readonly ApiRequestLineInput[], fo
  *    적을 때도 기본값이 오늘이다.
  *  - `purpose` = **REPAIR(수리)**. 인수번호가 **필수**라 수리 건에 쓰는 반출이다.
  *  - `noRepairCase` = false. 「수리 건 없음」으로 들어오는 길은 두지 않았다 — 인수번호가 필수다.
+ *
+ * 🔴 **수리 건의 종류(`workflowKind`)는 여기에 담기지 않는다** (2026-10-22). 이 값은 「확인 때 원장에
+ *    쓰는 내용」이고 종류는 **원장과 아무 상관이 없다** — 신청 표의 **제 칸**으로 간다
+ *    (`stock_requests.workflow_kind`, 선례는 `source`·`external_key`·`requester_sub`).
  *
  * 🔴 **유상·무상은 여기서 정하지 않는다.** A/S 가 **줄마다** 보낸 값을 그대로 싣는다 (2026-10-15 담당자 결정).
  *    한 건 안에 `PAID` 와 `FREE` 가 섞여 들어와도 **줄마다 제 값**으로 간다. 안 보냈으면 이 함수에 닿기 전에

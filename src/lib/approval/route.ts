@@ -44,15 +44,17 @@
  * 🔴 **새 용도는 맨 끝에 적는다** — 표의 enum 은 `ALTER TYPE … ADD VALUE` 로 뒤에 붙고,
  * 이 파일의 시험이 순서까지 맞대어 본다.
  *
- * ── 🔴 뒤의 둘은 **그릇만** 있다 (2026-10-22) ───────────────────────────
- * 매쳐와 제너레이터에 **다른 결재 순서**를 지정할 수 있게 용도를 갈라 두었다. 하지만 **신청이
- * 올라올 때 어느 용도를 붙이는지는 아직 바뀌지 않았다** — `src/app/actions/stock.ts` 와
- * `src/lib/approval/part-issue.ts` 가 `"PART_ISSUE"` 를 글자 그대로 쓰고, 그래서 지금 올라가는
- * 모든 부품 불출은 여전히 첫째 용도를 따른다. 가려 붙이는 일은 다음 조각이다.
+ * ── 🔴 뒤의 둘에 **실제로 신청이 간다** (2026-10-22, 가려 붙이기) ────────
+ * 그릇만 있던 자리에 길이 뚫렸다. 신청마다 딸린 **수리 건의 종류**(`stock_requests.workflow_kind`)로
+ * 가려 붙이고, 그 짝표는 이 파일 아래 `approvalRouteScopeForWorkflowKind` 하나뿐이다. 읽는 자리
+ * 셋(결재 올리기 · [확인] 게이트 · 담당자 화면)이 전부 그것을 거친다 — 하나라도 글자로 박힌
+ * 용도를 읽으면 **결재가 조용히 우회된다**(`./request-scope.ts` 머리말에 그 구멍의 모양).
  *
- * 🔵 그동안 관리자는 **매쳐·제너레이터 절차를 미리 짜 둘 수 있다.** 짜 두어도 지금은 아무 건도
- * 그리로 가지 않으므로 동작이 달라지지 않는다 — 그 사실을 화면에 적는 곳이
- * `APPROVAL_ROUTE_EMPTY_NOTICES` 다.
+ * 🔴 **그런데 아래 이름표(`APPROVAL_ROUTE_SCOPE_LABELS`)와 빈 상태 안내
+ * (`APPROVAL_ROUTE_EMPTY_NOTICES`)의 말은 아직 옛말이다** — 매쳐·제너레이터 쪽이 「아직 이 절차로
+ * 오지 않습니다」라고 하는데 이제 온다. 🔵 그 글자를 고치는 것은 **쓰는 분이 정할 일**이라(그 문장을
+ * 못 박는 시험이 따로 있다) 이 조각에서 손대지 않았다. 고치는 조각이 오면
+ * `./part-issue.ts` 의 `NO_ROUTE` 문구도 함께 본다.
  */
 export const APPROVAL_ROUTE_SCOPES = ["PART_ISSUE", "PART_ISSUE_MATCHER", "PART_ISSUE_GENERATOR"] as const;
 export type ApprovalRouteScope = (typeof APPROVAL_ROUTE_SCOPES)[number];
@@ -124,6 +126,79 @@ export const APPROVAL_ROUTE_EMPTY_NOTICES: Record<ApprovalRouteScope, string> = 
  */
 export function isApprovalRouteScope(value: unknown): value is ApprovalRouteScope {
   return typeof value === "string" && (APPROVAL_ROUTE_SCOPES as readonly string[]).includes(value);
+}
+
+/**
+ * ============================================================================
+ * 🔴 수리 건의 **종류** → 그 신청이 따를 **절차** (2026-10-22)
+ * ============================================================================
+ * A/S 는 **종류만** 보낸다(`workflowKind`). 어느 절차를 붙일지는 **이쪽이 정한다** — 그래야
+ * 나중에 짝을 바꿔도 이미 쌓인 신청 자료를 한 줄도 고치지 않는다(저쪽이 절차 이름을 보내면
+ * 짝이 바뀌는 날 옛 줄이 통째로 거짓이 된다).
+ *
+ * 🔴 **짝이 적힌 곳은 아래 표 하나뿐이다.** 「이 종류면 저 절차」를 부르는 자리마다 손으로
+ * 적으면, 그중 하나만 안 고쳐지는 날이 온다 — 그때 생기는 결함은 **오류가 아니라 「결재 없이
+ * 그냥 나감」**이라 아무도 신고하지 않는다. 그래서 표를 내보내지 않고(직접 읽으면 그것이 곧
+ * 두 벌이다) **이 함수 하나로만** 쓴다.
+ *
+ * ── 쓰는 분이 정한 짝 (2026-10-22) ──────────────────────────────────────
+ *   매쳐            → 매쳐 부품 불출
+ *   제너레이터       → 제너레이터 부품 불출
+ *   🔴 토탈 컨트롤러 → **제너레이터와 같은 절차**. 따로 용도를 만들지 않는다 — 결재 받는 사람이
+ *      같기 때문이고, 용도를 늘리면 관리자가 **또 한 벌을 짜 둬야** 하는데 짜 두기 전까지
+ *      그 신청은 절차 없이 바로 나간다.
+ *   모름(`null`)    → 기존 「부품 불출」
+ *
+ * 🔴 **「모름」이 기존 절차로 가는 것이 이 조각의 안전장치다.** 칸이 비어 있는 **옛 신청**이
+ * 전부 여기로 오고, 수리 건이 없는 신청·재고 관리에서 직접 올린 신청도 여기로 온다. 다른
+ * 자리로 보내면 관리자가 짜 둔 적 없는 절차를 가리켜 **결재 없이 나가는 길**이 열린다.
+ * ============================================================================
+ */
+
+/**
+ * A/S 가 보내는 종류. 🔴 **절차 이름이 아니다**(위 머리말).
+ * 🔴 **값 목록이 적힌 곳은 둘이다** — 여기와 표의 enum(`src/db/schema/stock-requests.ts` 의
+ * `REQUEST_WORKFLOW_KINDS`). 도메인 층이 db 층을 가져오지 않는 관례 탓에 두 벌이 되고,
+ * `APPROVAL_ROUTE_SCOPES` 와 똑같이 시험이 둘을 맞대어 본다.
+ */
+export const WORKFLOW_KINDS = ["MATCHER", "GENERATOR", "TOTAL_CONTROLLER"] as const;
+export type WorkflowKind = (typeof WORKFLOW_KINDS)[number];
+
+/**
+ * 바깥이 보낸 종류가 **우리가 아는 값인가.**
+ *
+ * 🔴 **모르는 글자가 와도 터지지 않는다** — 거짓을 돌려줄 뿐이고, 부르는 쪽은 그것을 「모름」
+ * (`null`)으로 떨어뜨린다(`src/lib/api/stock-requests.ts`). A/S 가 종류를 하나 더 만드는 날
+ * 우리 쪽이 **신청 자체를 거절하면** 현장에서 부품을 못 받는다. 떨어뜨리면 그 신청은 기존
+ * 절차를 따라 **평소대로** 처리된다.
+ */
+export function isWorkflowKind(value: unknown): value is WorkflowKind {
+  return typeof value === "string" && (WORKFLOW_KINDS as readonly string[]).includes(value);
+}
+
+/**
+ * 🔴 **짝이 적힌 유일한 자리.** 내보내지 않는다 — 부르는 쪽이 표를 직접 읽기 시작하면 그것이
+ * 곧 두 벌이고, 「모름」을 어디로 보낼지(아래 함수)가 그때 빠진다.
+ *
+ * 🔴 **Record 로 둔다** — 종류를 하나 더하면 빠진 자리를 컴파일러가 바로 잡는다. 짝이 없는
+ * 종류가 조용히 「모름」으로 떨어져 기존 절차로 새어 나가는 일이 없다.
+ */
+const APPROVAL_ROUTE_SCOPE_BY_WORKFLOW_KIND: Record<WorkflowKind, ApprovalRouteScope> = {
+  MATCHER: "PART_ISSUE_MATCHER",
+  GENERATOR: "PART_ISSUE_GENERATOR",
+  // 🔴 제너레이터와 **같이 간다**(2026-10-22 쓰는 분 결정, 위 머리말). 오타가 아니다.
+  TOTAL_CONTROLLER: "PART_ISSUE_GENERATOR",
+};
+
+/**
+ * 그 신청이 따를 절차. 🔴 **「모름」(`null`)은 기존 「부품 불출」**이다(위 머리말).
+ *
+ * 🔵 **순수 함수다** — DB 도 세션도 보지 않는다. 그래서 세 자리(결재 올리기·[확인] 게이트·
+ * 화면)가 전부 이것을 거치고, `npm test` 가 네 갈래를 전부 돌려 본다.
+ */
+export function approvalRouteScopeForWorkflowKind(kind: WorkflowKind | null): ApprovalRouteScope {
+  if (kind === null) return "PART_ISSUE";
+  return APPROVAL_ROUTE_SCOPE_BY_WORKFLOW_KIND[kind];
 }
 
 /**

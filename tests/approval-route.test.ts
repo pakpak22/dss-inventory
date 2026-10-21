@@ -6,18 +6,22 @@ import {
   APPROVAL_ROUTE_EMPTY_NOTICES,
   APPROVAL_ROUTE_SCOPE_LABELS,
   APPROVAL_ROUTE_SCOPES,
+  approvalRouteScopeForWorkflowKind,
   findNextRouteStepToApprove,
   isApprovalRouteScope,
   isRouteStepSkippedForRequester,
   isSameRouteStepList,
+  isWorkflowKind,
   MAX_APPROVAL_ROUTE_STEPS,
   moveRouteStepDown,
   moveRouteStepUp,
   removeRouteStep,
   stepOrderFromIndex,
   validateApprovalRouteSteps,
+  WORKFLOW_KINDS,
 } from "../src/lib/approval/route";
 import { approvalRouteScopeEnum } from "../src/db/schema/approval-routes";
+import { REQUEST_WORKFLOW_KINDS, requestWorkflowKindEnum } from "../src/db/schema/stock-requests";
 
 /**
  * ============================================================================
@@ -577,39 +581,148 @@ describe("용도의 이름표 · 빈 절차 안내", () => {
 
 /**
  * ============================================================================
- * 🔴 이 조각은 **동작을 하나도 바꾸지 않는다** — 신청은 여전히 `PART_ISSUE` 로 간다
+ * 🔴 신청은 **그 수리 건의 종류로 용도를 가려** 간다 (2026-10-22)
  * ============================================================================
- * 2026-10-22 에 더한 용도 둘은 **그릇**이다. 어느 용도를 붙일지 가려내는 일은 다음 조각이고,
- * 그때까지 결재선을 읽는 자리 셋은 `"PART_ISSUE"` 를 글자 그대로 써야 한다.
+ * 바로 앞 조각까지 이 묶음은 「세 자리가 아직 `"PART_ISSUE"` 를 글자 그대로 쓴다」를 재고
+ * 있었다. 🔵 그 주석에 **「다음 조각은 이 시험을 깨면서 지나간다 — 지우지 말고 「무엇으로
+ * 가려내는가」를 재는 시험으로 고쳐 쓰라」**고 적어 두었고, 이것이 그 고쳐 쓴 판이다.
  *
- * 🔴 **소스 글자로 잰다.** 저 셋은 전부 `server-only` 사슬에 걸려 있어(DB·세션·망) 이 저장소의
- * 시험이 불러 볼 수 없다. 약한 울타리인 것은 맞지만, 용도를 늘리면서 **실수로 라우팅까지 갈아
- * 끼우는** 가장 위험한 변화는 이 자리에서 잡힌다(`tests/part-issue-gate.test.ts` 가 같은 방식을
- * 쓴다).
+ * 여기서 못 박는 것 셋:
+ *  1. **짝이 적힌 곳은 순수 함수 하나뿐이다** — 네 갈래(매쳐·제너레이터·토탈 컨트롤러·모름)와
+ *     🔴 **토탈 컨트롤러가 제너레이터와 같이 간다**는 결정(2026-10-22 쓰는 분).
+ *  2. **모르는 글자가 와도 터지지 않고 「모름」이 된다** — A/S 가 종류를 늘려도 신청이 막히면
+ *     현장에서 부품을 못 받는다.
+ *  3. 🔴 **세 자리가 모두 그 한 함수를 거친다** — 하나라도 빼먹으면 결재가 **조용히 우회된다**:
+ *     관리자가 매쳐 절차만 켜 두면, 올리는 자리는 매쳐 절차를 요구하는데 [확인] 게이트는
+ *     「부품 불출이 비었다」고 읽고 결재 없이 그 자리에서 부품을 내준다.
  *
- * 🔵 **다음 조각은 이 시험을 깨면서 지나간다.** 그때는 「무엇으로 가려내는가」를 재는 시험으로
- * 고쳐 쓴다 — 지우지 마라.
+ * 🔴 3번은 **소스 글자로 잰다.** 세 자리가 전부 `server-only` 사슬에 걸려 있어(DB·세션) 이
+ * 저장소의 시험이 불러 볼 수 없기 때문이다. 약한 울타리인 것은 맞지만, 재고가 결재 없이 나가는
+ * 길이라 **없는 것보다 훨씬 낫다**(`tests/part-issue-gate.test.ts` 가 같은 방식을 쓴다).
+ * 🔴 글자로 재는 시험은 **잘라 낸 토막이 비어 있지 않은 것까지** 확인한다 — 빈 토막으로 통과하는
+ * 시험은 아무것도 지키지 않으면서 초록색으로 남는다.
  * ============================================================================
  */
-describe("🔴 신청이 올라가는 용도는 아직 그대로다 (다음 조각에서 바뀐다)", () => {
+describe("🔴 종류 → 절차 (짝 짓는 함수 하나)", () => {
+  test("매쳐·제너레이터는 제 용도로 간다", () => {
+    assert.equal(approvalRouteScopeForWorkflowKind("MATCHER"), "PART_ISSUE_MATCHER");
+    assert.equal(approvalRouteScopeForWorkflowKind("GENERATOR"), "PART_ISSUE_GENERATOR");
+  });
+
+  test("🔴 토탈 컨트롤러는 **제너레이터와 같은 절차**로 간다 (2026-10-22 쓰는 분 결정)", () => {
+    // 오타가 아니라 결정이다 — 결재 받는 사람이 같고, 용도를 하나 더 만들면 관리자가 또 한 벌을
+    // 짜 둬야 하는데 짜 두기 전까지 그 신청은 절차 없이 바로 나간다.
+    assert.equal(approvalRouteScopeForWorkflowKind("TOTAL_CONTROLLER"), "PART_ISSUE_GENERATOR");
+    assert.equal(approvalRouteScopeForWorkflowKind("TOTAL_CONTROLLER"), approvalRouteScopeForWorkflowKind("GENERATOR"));
+  });
+
+  test("🔴 「모름」은 기존 「부품 불출」이다 — 칸이 비어 있는 옛 신청이 전부 여기로 온다", () => {
+    // 칸을 더하기 전에 쌓인 신청은 `workflow_kind` 가 NULL 이고, 재고 관리 화면에서 직접 올린
+    // 신청도·수리 건이 없는 신청도 그렇다. 다른 자리로 보내면 관리자가 짜 둔 적 없는 절차를
+    // 가리켜 **결재 없이 나가는 길**이 열린다.
+    assert.equal(approvalRouteScopeForWorkflowKind(null), "PART_ISSUE");
+  });
+
+  test("네 갈래가 전부 **쓸 수 있는 용도**로 떨어진다 — 빠진 자리가 없다", () => {
+    for (const kind of WORKFLOW_KINDS) {
+      const scope = approvalRouteScopeForWorkflowKind(kind);
+      assert.equal(isApprovalRouteScope(scope), true, `${kind} 가 쓸 수 없는 용도로 떨어진다: ${String(scope)}`);
+    }
+    assert.equal(isApprovalRouteScope(approvalRouteScopeForWorkflowKind(null)), true);
+  });
+
+  test("🔴 모르는 글자는 **터지지 않고** 「모름」이 된다 — A/S 가 종류를 늘려도 신청이 안 막힌다", () => {
+    for (const bad of ["", " ", "matcher", "MATCHER ", "TOTALCONTROLLER", "PART_ISSUE", "OH", 0, 1, true, null, undefined, {}, []]) {
+      assert.equal(isWorkflowKind(bad), false, `${JSON.stringify(bad)} 가 통과했다`);
+      // 통로가 하는 일 그대로: 모르면 떨어뜨리고 「모름」으로 간다.
+      assert.equal(approvalRouteScopeForWorkflowKind(isWorkflowKind(bad) ? bad : null), "PART_ISSUE");
+    }
+  });
+
+  test("아는 종류는 전부 통과한다", () => {
+    for (const kind of WORKFLOW_KINDS) {
+      assert.equal(isWorkflowKind(kind), true, `${kind} 가 막혔다`);
+    }
+  });
+
+  test("🔴 값 목록이 표의 enum 과 글자 그대로 같다 — 순서까지", () => {
+    // 용도(scope)와 같은 까닭이다: 도메인 층이 db 층을 가져오지 않아 두 벌이 되고, 갈라지면
+    // 화면은 받아 주는데 저장이 22P02 로 터지거나 그 반대가 된다. 순서까지 보는 것은 enum 값이
+    // ALTER TYPE … ADD VALUE 로 **뒤에만** 붙기 때문이다.
+    assert.deepEqual([...requestWorkflowKindEnum.enumValues], [...WORKFLOW_KINDS]);
+    assert.deepEqual([...REQUEST_WORKFLOW_KINDS], [...WORKFLOW_KINDS]);
+  });
+
+  test("지금 아는 종류는 셋이다 — 매쳐 · 제너레이터 · 토탈 컨트롤러", () => {
+    // 「종류를 말없이 늘리지 마라」는 울타리다(용도 쪽의 같은 시험과 짝). 늘리는 조각은 여기와
+    // 표의 enum, 그리고 위 짝표를 함께 고치게 된다.
+    assert.deepEqual([...WORKFLOW_KINDS], ["MATCHER", "GENERATOR", "TOTAL_CONTROLLER"]);
+  });
+});
+
+describe("🔴 세 자리가 모두 그 함수를 거친다 (소스로 잰다)", () => {
   const sourceOf = (relative: string): string => readFileSync(new URL(`../${relative}`, import.meta.url), "utf8");
 
-  const CALL_SITES: readonly (readonly [file: string, call: string])[] = [
-    // 바로 확인하는 길이 「결재를 거쳐야 하는가」를 묻는 자리.
-    ["src/app/actions/stock.ts", 'getCurrentApprovalRoute("PART_ISSUE")'],
-    // 결재건을 실제로 올리는 자리 — 여기서 읽은 판이 `route_id` 로 못 박힌다.
-    ["src/lib/approval/part-issue.ts", 'getCurrentApprovalRouteWithSubs("PART_ISSUE")'],
-    // 담당자 화면이 「지금 절차가 켜져 있나」를 보여 주는 자리.
-    ["src/app/(app)/requests/page.tsx", 'getCurrentApprovalRoute("PART_ISSUE")'],
+  /**
+   * 그 자리에서 **용도를 정하는 줄**을 잘라 낸다. 🔴 주석 줄은 세지 않는다 — 주석에 적힌 이름만
+   * 보고 통과하면 시험이 아무것도 지키지 않는다. 🔴 빈 토막이면 그 자리에서 터뜨린다.
+   */
+  function codeLineWith(source: string, needle: string, file: string): string {
+    const line = source.split("\n").find((l) => l.includes(needle) && !/^\s*(\*|\/\/|\/\*)/.test(l));
+    assert.ok(line !== undefined, `${file}: 코드에서 ${needle} 를 찾지 못했다(주석 말고)`);
+    assert.notEqual(line.trim(), "", `${file}: 잘라 낸 토막이 비어 있다 — 시험이 아무것도 재지 않았다`);
+    return line;
+  }
+
+  /**
+   * 🔴 **셋 다 글자로 박힌 용도를 쓰지 않는다.** 하나라도 `"PART_ISSUE"` 를 그대로 읽으면 종류별
+   * 결재가 그 자리에서 우회된다(머리말 3번).
+   */
+  const CALL_SITES: readonly (readonly [file: string, needle: string, also: string])[] = [
+    // ① 결재건을 실제로 올리는 자리 — 여기서 읽은 판이 `route_id` 로 못 박힌다.
+    ["src/lib/approval/part-issue.ts", "getApprovalRouteScopeForRequest(requestId)", "getCurrentApprovalRouteWithSubs(scope)"],
+    // ② 담당자가 [확인]을 바로 누르는 길의 문 — 여기가 ①과 갈리면 결재 없이 부품이 나간다.
+    ["src/app/actions/stock.ts", "getApprovalRouteScopeForRequest(id)", "isPartIssueApprovalRouteInForce("],
+    // ③ 화면 — 신청을 묶음으로 읽어 두었으므로 순수 함수를 **직접** 부른다(줄마다 DB 에 묻지 않으려고).
+    ["src/app/(app)/requests/page.tsx", "approvalRouteScopeForWorkflowKind(r.workflowKind)", "isPartIssueApprovalRouteInForce("],
   ];
 
-  for (const [file, call] of CALL_SITES) {
-    test(`${file} 는 여전히 ${call} 를 부른다`, () => {
+  for (const [file, needle, also] of CALL_SITES) {
+    test(`${file} 는 그 신청의 종류로 용도를 정한다`, () => {
       const source = sourceOf(file);
-      assert.ok(source.includes(call), `${file} 에서 ${call} 를 찾지 못했다`);
-      // 새 용도가 아직 이 길에 섞이지 않았다. 섞였다면 이 조각이 동작을 바꾼 것이다.
-      assert.ok(!source.includes("PART_ISSUE_MATCHER"), `${file} 에 매쳐 용도가 들어왔다`);
-      assert.ok(!source.includes("PART_ISSUE_GENERATOR"), `${file} 에 제너레이터 용도가 들어왔다`);
+      const line = codeLineWith(source, needle, file);
+      assert.ok(line.includes(needle));
+      assert.ok(source.includes(also), `${file}: ${also} 를 찾지 못했다 — 시험이 낡았거나 길이 바뀌었다`);
+      // 🔴 글자로 박힌 용도가 남아 있으면 그 자리는 종류를 보지 않는다.
+      assert.ok(!source.includes('("PART_ISSUE")'), `${file}: 아직 "PART_ISSUE" 를 글자 그대로 읽는다`);
+      // 🔴 짝을 손으로 적은 자리가 없다 — 짝표는 `src/lib/approval/route.ts` 하나뿐이다.
+      assert.ok(!source.includes('"PART_ISSUE_MATCHER"'), `${file}: 매쳐 용도를 손으로 적었다`);
+      assert.ok(!source.includes('"PART_ISSUE_GENERATOR"'), `${file}: 제너레이터 용도를 손으로 적었다`);
     });
   }
+
+  test("🔴 화면은 **줄마다** 다른 값을 받는다 — 화면 전체에 값 하나가 아니다", () => {
+    // 2026-10-22 이전에는 `approvalRequired` 가 불린 하나로 내려가 모든 줄에 똑같이 쓰였다. 신청이
+    // 종류별로 갈린 지금 그대로 두면, 매쳐 절차만 켠 날 **모든 줄**이 [불출 신청]로 바뀌거나
+    // **모든 줄**이 [확인] 그대로가 된다 — 둘 다 거짓말이다.
+    const page = sourceOf("src/app/(app)/requests/page.tsx");
+    const built = codeLineWith(page, "approvalRequiredByRequest[r.id] =", "src/app/(app)/requests/page.tsx");
+    assert.ok(built.includes("approvalRouteScopeForWorkflowKind(r.workflowKind)"), "줄마다 그 신청의 종류를 보지 않는다");
+    assert.ok(page.includes("approvalRequired={approvalRequiredByRequest}"), "화면에 줄별 값을 내려보내지 않는다");
+
+    const screen = sourceOf("src/components/stock/RequestManagerScreen.tsx");
+    // 🔵 본보기는 같은 화면의 `issueLocks` 다 — 신청 id → 값.
+    assert.ok(screen.includes("approvalRequired: Record<string, boolean>;"), "화면이 아직 불린 하나로 받는다");
+    assert.ok(screen.includes("approvalRequired={approvalRequired[r.id] ?? false}"), "줄에 그 줄의 값을 넘기지 않는다");
+  });
+
+  test("🔴 서버 두 자리가 보는 것은 **같은 함수**다 — 그 함수가 순수 짝표를 거친다", () => {
+    const scopeReader = sourceOf("src/lib/approval/request-scope.ts");
+    const body = codeLineWith(scopeReader, "approvalRouteScopeForWorkflowKind(", "src/lib/approval/request-scope.ts");
+    assert.ok(body.includes("approvalRouteScopeForWorkflowKind("), "짝표를 안 거치고 제 나름대로 가린다");
+    // 🔴 **없는 줄·빈 칸은 「모름」**이다 — 기본값을 지어내면 옛 신청이 종류별 절차를 탄다.
+    assert.ok(body.includes("?? null"), "빈 칸을 「모름」으로 떨어뜨리지 않는다");
+    assert.ok(scopeReader.includes("stockRequests.workflowKind"), "신청의 종류 칸을 읽지 않는다");
+    assert.ok(!scopeReader.includes('"PART_ISSUE_MATCHER"') && !scopeReader.includes('"PART_ISSUE_GENERATOR"'), "짝을 손으로 적었다");
+  });
 });

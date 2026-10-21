@@ -38,7 +38,10 @@ import {
   type PartIssueView,
 } from "./part-issue-rules";
 import { getCurrentApprovalRouteWithSubs } from "./queries";
-import { APPROVAL_ROUTE_EMPTY_NOTICES, findNextRouteStepToApprove } from "./route";
+// 🔴 「이 신청은 어느 절차를 타는가」는 저장소에 한 자리에서만 정해진다 — [확인] 게이트도 같은
+//    함수를 부른다(그 파일 머리말에 우회 구멍의 모양이 적혀 있다).
+import { getApprovalRouteScopeForRequest } from "./request-scope";
+import { APPROVAL_ROUTE_EMPTY_NOTICES, APPROVAL_ROUTE_SCOPE_LABELS, findNextRouteStepToApprove } from "./route";
 
 /**
  * ============================================================================
@@ -157,10 +160,26 @@ export async function requestPartIssueApproval(
   //    아래에서 `route_id` 에 **못 박아 적는다**(관리자가 절차를 바꿔도 이 건은 옛 판을 따라간다).
   //    🔴 건너뛰기 판정에 넘기는 것은 **포털 번호**다(`actor.sub`). `actor.id`(이 시스템의
   //    users.id)를 넘기면 결재선의 포털 번호와 영원히 안 맞아 **건너뛰기가 조용히 꺼진다.**
-  const route = await getCurrentApprovalRouteWithSubs("PART_ISSUE");
+  //
+  //    ── 🔴 **어느 용도의 판인지는 그 신청의 「수리 건 종류」가 정한다** (2026-10-22) ──
+  //    매쳐·제너레이터·토탈 컨트롤러·모름의 네 갈래가 각각 어느 절차로 가는지는 순수 함수 한 곳에
+  //    적혀 있고(`./route.ts`), 여기서는 **읽어서 쓰기만** 한다. 🔴 [확인] 게이트와 **같은 함수**를
+  //    거쳐야 한다 — 둘이 다른 용도를 보면 결재가 조용히 우회된다(`./request-scope.ts` 머리말).
+  //    🔵 트랜잭션 밖에서 읽어도 괜찮다: 그 칸은 신청을 만들 때 한 번 적히고 그 뒤로 **아무도 고치지
+  //       않는다**(고치는 길이 코드에 없다).
+  const scope = await getApprovalRouteScopeForRequest(requestId);
+  const route = await getCurrentApprovalRouteWithSubs(scope);
   const plan = planPartIssueApproval(route?.steps ?? [], actor.sub);
   if (!route || plan.kind === "NO_ROUTE") {
-    return { ok: false, code: "NO_ROUTE", message: `부품 불출 승인 절차가 없습니다. ${APPROVAL_ROUTE_EMPTY_NOTICES.PART_ISSUE}` };
+    /**
+     * 🔴 **그 용도의 이름으로 말한다** — 「부품 불출 절차가 없습니다」라고만 하면 매쳐 신청을 올린
+     *    사람이 멀쩡히 서 있는 「부품 불출」 절차를 보며 왜 안 되는지 알 수 없다.
+     * 🔴 **뒷문장은 `APPROVAL_ROUTE_EMPTY_NOTICES[scope]` 를 쓰지 않는다.** 매쳐·제너레이터 쪽 안내는
+     *    아직 「그 용도로 오는 신청이 아직 없다」고 말하는데, 이 조각으로 **그 말이 더는 참이 아니게
+     *    됐다.** 그 글자를 고치는 것은 끝난 조각(2026-10-22, 용도 그릇)의 자리라 여기서 손대지 않고,
+     *    대신 **지금 참인 문장**(첫째 용도의 것)을 쓴다. 그 안내문을 고치는 조각이 오면 이 줄도 함께 본다.
+     */
+    return { ok: false, code: "NO_ROUTE", message: `${APPROVAL_ROUTE_SCOPE_LABELS[scope]} 승인 절차가 없습니다. ${APPROVAL_ROUTE_EMPTY_NOTICES.PART_ISSUE}` };
   }
   // 🔴 결재선에 포털 번호가 없는 단계가 있다 — **만들지 않는다.** 만들면 아무도 결재할 수 없는
   //    건이 생기고, 그 건이 신청을 붙들어 담당자도 바로 확인하지 못한다(규칙 파일의 주석).
@@ -254,6 +273,11 @@ export async function requestPartIssueApproval(
           detail: {
             requestId,
             requestSummary: request.summary,
+            /**
+             * 🔵 **어느 용도의 판으로 올렸나** (2026-10-22). 판 번호(`routeVersion`)는 용도 안에서만
+             *    세므로, 용도가 셋이 된 뒤로는 번호만으로 어느 결재선이었는지 알 수 없다.
+             */
+            routeScope: scope,
             routeVersion: route.version,
             // 🔴 「누가 결재하게 돼 있었나」를 그때 그대로 남긴다. 나중에 결재선이 바뀌어도 이 줄은 참말이다.
             steps: plan.steps.map((s) => ({ stepOrder: s.stepOrder, approverUserId: s.approverUserId, approverName: s.approverName })),

@@ -367,7 +367,14 @@ function RequestItems({ lines }: { lines: readonly ManagerRequestLine[] }) {
  *    「본인이 낸, 아직 PENDING 인 것」만** 받는다(`src/lib/stock/requests.ts`). 여기를 고쳐 불러도 남의 신청은
  *    거둬지지 않는다. 화면 조건을 「막는 자리」로 읽지 않게 적어 둔다.
  *
- * @param approvalRequired 「부품 불출」 승인 절차가 **지금 쓰이고 있는가** (2026-10-15, 조각 11c).
+ * @param approvalRequired 그 신청이 **결재를 거쳐야 하는가** — 신청 id → 참/거짓 (2026-10-15 조각 11c,
+ *   2026-10-22 에 **줄마다**로 바뀜).
+ *   🔴 **화면 전체에 값 하나가 아니다.** 신청마다 딸린 수리 건의 종류(매쳐·제너레이터·토탈 컨트롤러·
+ *      모름)가 다르고 종류마다 다른 절차를 타므로, 매쳐 절차만 켜 두면 **매쳐 신청만** [불출 신청]이고
+ *      나머지 줄은 [확인] 그대로다. 하나로 뭉개면 둘 중 한쪽이 거짓말이 된다.
+ *   🔵 모양은 아래 `issueLocks` 와 같다(신청 id → 값). 🔵 목록에 있는 신청은 서버가 전부 채워 넣지만,
+ *      없는 열쇠는 **거짓**으로 읽는다 — 결재를 요구하는 쪽으로 기울지 않는다(빈 값에 기대어 단추를
+ *      잠그면, 서버가 못 채운 줄이 조용히 막힌다).
  * @param issueLocks 살아 있는 결재건이 붙들고 있는 신청 → 그 까닭. **잠긴 신청만 들어 있다.**
  * @param issueTrails 그 결재건의 **진행 그림**(2026-10-21, 조각 11f). 역시 **결재가 걸린 신청만** 들어 있다.
  *   🔵 `issueLocks` 와 **같은 묶음**에서 나온다(살아 있는 결재건) — 한쪽에만 있는 줄은 생기지 않는다.
@@ -394,7 +401,7 @@ export function RequestManagerScreen({
   notices: RequestNotice[];
   isAdmin: boolean;
   currentUserId: string;
-  approvalRequired: boolean;
+  approvalRequired: Record<string, boolean>;
   issueLocks: Record<string, PartIssueLock>;
   issueTrails: Record<string, IssueApprovalTrailView>;
   decisionActors: Record<string, RequestDecisionActor>;
@@ -424,6 +431,15 @@ export function RequestManagerScreen({
    *    빈 열이 남지 않는다.
    */
   const showActions = isAdmin || filtered.some(canCancelOf);
+  /**
+   * 머리말 한 줄에 쓰는 값 — **지금 보이는 목록에 결재를 타는 신청이 하나라도 있는가** (2026-10-22).
+   * 🔴 줄마다 다른 값을 머리말이 대신 말할 수는 없으므로, 머리말은 **「그런 신청이 섞여 있다」**는
+   *    사실만 알리고 **단추 이름의 진실은 줄에 있다.** 하나도 없으면 머리말도 지금까지와 한 글자도
+   *    다르지 않다.
+   * 🔵 `requests` 가 아니라 `filtered` 로 잰다 — 거르개로 안 보이게 된 신청을 두고 설명하면 사람은
+   *    화면에 없는 단추를 찾게 된다.
+   */
+  const someApprovalRequired = filtered.some((r) => approvalRequired[r.id] ?? false);
 
   return (
     <div className="flex flex-col gap-4">
@@ -452,10 +468,18 @@ export function RequestManagerScreen({
       {/* 🔵 안내도 갈린다 — 신청자에게 없는 단추의 쓰는 법을 적어 두면 거짓이 된다 (2026-10-15). */}
       {isAdmin ? (
         <p className="text-xs text-zinc-500">
-          올라온 반출 신청을 전부 봅니다(최신이 위). <b>[{partIssueConfirmLabel(approvalRequired)}]</b>에서 줄별로 이번에 내줄 수량을 정하고, 더 줄 것이 없으면 <b>[마감]</b>으로 닫습니다. 지금 처리하지
+          올라온 반출 신청을 전부 봅니다(최신이 위). <b>[{partIssueConfirmLabel(someApprovalRequired)}]</b>에서 줄별로 이번에 내줄 수량을 정하고, 더 줄 것이 없으면 <b>[마감]</b>으로 닫습니다. 지금 처리하지
           않을 것은 <b>[보류]</b>로 사유를 적어 멈춰 둡니다 — 보류한 신청은 목록에 그대로 남고 머리말의 「대기」 숫자에서만 빠집니다.
-          {/* 🔴 절차가 쓰이고 있으면 **그 자리에서 재고가 빠지지 않는다** — 단추 이름만 바뀌면 사람은 눌러 보고 나서야 안다. */}
-          {approvalRequired ? <> 지금은 부품 불출 승인 절차가 있어 <b>[불출 신청]</b>이 결재를 올리고, 결재가 끝난 뒤 「승인 요청건」 화면에서 실행합니다.</> : null}
+          {/* 🔴 절차가 쓰이고 있으면 **그 자리에서 재고가 빠지지 않는다** — 단추 이름만 바뀌면 사람은 눌러 보고 나서야 안다.
+              🔴 **「수리 건 종류에 따라」를 함께 말한다**(2026-10-22) — 절차는 신청마다 갈리므로, 같은 목록에서 어떤 줄은
+                 [불출 신청]이고 어떤 줄은 [확인]이다. 그 사실을 안 적으면 담당자는 단추가 들쭉날쭉한 것을 고장으로 읽는다. */}
+          {someApprovalRequired ? (
+            <>
+              {" "}
+              지금은 <b>수리 건 종류에 따라</b> 부품 불출 승인 절차가 걸립니다 — 절차가 있는 신청은 <b>[불출 신청]</b>이 결재를 올리고, 결재가 끝난 뒤 「승인 요청건」 화면에서 실행합니다. 절차가 없는
+              신청은 지금까지처럼 <b>[확인]</b>으로 그 자리에서 내줍니다.
+            </>
+          ) : null}
         </p>
       ) : (
         <p className="text-xs text-zinc-500">
@@ -570,7 +594,9 @@ export function RequestManagerScreen({
                               requestNote={r.note}
                               canDecide={isAdmin}
                               canCancel={canCancel}
-                              approvalRequired={approvalRequired}
+                              /* 🔴 **이 줄의 값**이다 (2026-10-22) — 같은 목록에서도 수리 건 종류에 따라 어떤 줄은
+                                 [불출 신청]이고 어떤 줄은 [확인]이다. 🔵 없는 열쇠는 거짓(= 지금까지 그대로). */
+                              approvalRequired={approvalRequired[r.id] ?? false}
                               issueLock={issueLock}
                             />
                           ) : issueLock ? (

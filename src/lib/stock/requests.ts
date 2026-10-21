@@ -6,7 +6,7 @@ import { parts } from "@/db/schema/parts";
 import { stockBalances } from "@/db/schema/stock-balances";
 import { stockTransactions } from "@/db/schema/stock";
 import { stockIssueApprovals, stockIssueApprovalSteps } from "@/db/schema/stock-issue-approvals";
-import { stockRequestIssues, stockRequests, type RequestSource, type RequestStatus } from "@/db/schema/stock-requests";
+import { stockRequestIssues, stockRequests, type RequestSource, type RequestStatus, type RequestWorkflowKind } from "@/db/schema/stock-requests";
 import { auditValues } from "@/lib/audit";
 import type { Owner } from "@/lib/parts/codes";
 import {
@@ -151,6 +151,16 @@ export interface PendingRequestRow {
    */
   source: RequestSource;
   /**
+   * 그 수리 건의 **종류** (2026-10-22). 🔴 **이 신청이 어느 승인 절차를 타는지가 여기서 갈린다** —
+   * 부품 요청 관리 화면이 **줄마다** 「결재를 거쳐야 하는가」를 가릴 때 쓴다
+   * (`src/app/(app)/requests/page.tsx` → `approvalRouteScopeForWorkflowKind`).
+   *
+   * 🔴 **`null` 이 「모름」**이고 그때는 기존 「부품 불출」 절차다 — 칸이 비어 있는 옛 신청이 전부 그렇다.
+   * 🔵 **바깥 통로로는 나가지 않는다** — `toApiRequestStatus` 가 칸을 하나씩 손으로 옮겨 적으므로
+   *    (`lib/api/stock-request-status.ts`) A/S 가 받는 모양은 그대로다. 애초에 저쪽이 보낸 값이다.
+   */
+  workflowKind: RequestWorkflowKind | null;
+  /**
    * 신청한 사람의 재고 관리 `users.id`. 🔴 **`null` 일 수 있다** — A/S 에서 올라왔고 포털 번호로 재고 관리의
    * 사람을 못 찾은 신청이다. 그때도 이름(`requestedByName`)은 있다.
    */
@@ -278,6 +288,17 @@ export interface RequestOrigin {
   externalKey?: string | null;
   /** 신청자의 포털 번호. `users` 에서 못 찾아도 적어 둔다 — 사람을 되짚을 유일한 열쇠다. */
   requesterSub?: string | null;
+  /**
+   * 그 수리 건의 **종류** (2026-10-22). 🔴 **어느 승인 절차를 붙일지가 여기서 갈린다** —
+   * 짝 짓는 규칙은 이 파일이 아니라 `src/lib/approval/route.ts` 한 곳에 있다.
+   *
+   * 🔴 **모르면 `null`** 이고, 그때는 기존 「부품 불출」 절차로 간다. 재고 관리 화면에서 직접 올린
+   *    신청은 아무것도 넘기지 않으므로 언제나 `null` 이다 — **지금까지 쌓인 신청과 한 글자도
+   *    달라지지 않는다**(`source` 의 기본값과 같은 관례).
+   * 🔵 **`payload` 가 아니라 제 칸으로 간다** — 그 칸은 「확인 때 원장에 쓰는 값」이고 종류는
+   *    원장과 상관이 없다(표 쪽 주석).
+   */
+  workflowKind?: RequestWorkflowKind | null;
   /** 감사 로그에 더 실을 것(바깥이 보낸 이름 등). 🔵 본 작업과 한 트랜잭션에 들어간다. */
   audit?: Record<string, unknown>;
 }
@@ -335,6 +356,9 @@ export async function createRequest(input: EntryInput, actor: Requester, origin:
           source: origin.source,
           externalKey,
           requesterSub: origin.requesterSub ?? null,
+          // 🔴 **「모름」은 `null`** 이다 — 화면에서 직접 올린 신청과 종류를 안 보낸 신청이 같은 자리로
+          //    간다(기존 「부품 불출」 절차). 기본값을 지어내지 않는다.
+          workflowKind: origin.workflowKind ?? null,
         })
         .returning({ id: stockRequests.id, status: stockRequests.status });
       await tx.insert(auditLogs).values(
@@ -344,7 +368,9 @@ export async function createRequest(input: EntryInput, actor: Requester, origin:
           actorName: actor.name,
           target: `requests:${row.id}`,
           // 🔴 **출처가 이력에 남는다.** 신청 표의 칸은 지금 값이고, 「어디서 들어왔나」를 영영 들고 있는 것은 여기다.
-          detail: { type: input.type, summary, source: origin.source, externalKey, ...(origin.audit ?? {}) },
+          // 🔵 **종류도 함께 남긴다**(2026-10-22) — 「왜 이 신청이 저 절차를 탔나」를 나중에 따질 때
+          //    근거가 되는 값이고, 감사 로그는 append-only 다.
+          detail: { type: input.type, summary, source: origin.source, externalKey, workflowKind: origin.workflowKind ?? null, ...(origin.audit ?? {}) },
         }),
       );
       return { id: row.id, status: row.status, created: true };
@@ -887,6 +913,8 @@ function toRow(r: typeof stockRequests.$inferSelect, names: ReadonlyMap<string, 
     // 🔴 **상태로 가른다** — 칸에 값이 남아 있어도 `ON_HOLD` 가 아니면 `null` 이다 (`PendingRequestRow.hold` 주석).
     hold: r.status === "ON_HOLD" ? { reason: r.holdReason, heldByName: r.heldByName ?? "", heldAt: r.heldAt?.toISOString() ?? "" } : null,
     source: r.source,
+    // 🔴 **그대로 싣는다** — 「모름」은 `null` 이고, 기본값으로 채우면 옛 신청이 종류별 절차를 타게 된다.
+    workflowKind: r.workflowKind,
     requestedBy: r.requestedBy,
     requestedByName: r.requestedByName,
     requestedAt: r.requestedAt.toISOString(),

@@ -12,10 +12,11 @@ import { check, index, integer, pgEnum, pgTable, text, timestamp, uniqueIndex, u
  * 어느 절차인지는 `scope` 칸 하나가 정한다. 지금 있는 값은 셋이다 — `'PART_ISSUE'`(부품 불출) ·
  * `'PART_ISSUE_MATCHER'`(매쳐 부품 불출) · `'PART_ISSUE_GENERATOR'`(제너레이터 부품 불출).
  *
- * 🔴 **뒤의 둘은 아직 아무도 쓰지 않는다**(2026-10-22). 매쳐·제너레이터에 **다른 결재 순서**를
- * 지정할 수 있게 그릇만 먼저 만든 것이고, 신청이 올라올 때 어느 쪽을 붙일지는 다음 조각이다 —
- * 지금은 모든 부품 불출 신청이 여전히 `'PART_ISSUE'` 로 간다(`src/app/actions/stock.ts` ·
- * `src/lib/approval/part-issue.ts` 가 그 값을 글자 그대로 쓴다).
+ * 🔴 **어느 값으로 갈지는 그 신청에 딸린 수리 건의 종류가 정한다**(2026-10-22, 가려 붙이기):
+ * 매쳐 → `'PART_ISSUE_MATCHER'`, 제너레이터와 **토탈 컨트롤러** → `'PART_ISSUE_GENERATOR'`,
+ * 종류를 모르는 신청(칸이 빈 옛 신청·화면에서 직접 올린 신청) → `'PART_ISSUE'`.
+ * 🔴 짝이 적힌 곳은 `src/lib/approval/route.ts` 의 `approvalRouteScopeForWorkflowKind` **하나**다 —
+ * 종류를 담은 칸은 `stock_requests.workflow_kind` 이고, 절차 이름을 저장하지 않는 까닭은 그 칸 주석에.
  *
  * 설계 결정(원본 2026-09-09, 사용자 승인):
  *  · 한 용도에 절차는 **하나**뿐이다. 고객사별·금액별 분기는 없다.

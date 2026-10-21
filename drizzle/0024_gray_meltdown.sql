@@ -1,0 +1,2 @@
+CREATE TYPE "public"."stock_request_workflow_kind" AS ENUM('MATCHER', 'GENERATOR', 'TOTAL_CONTROLLER');--> statement-breakpoint
+ALTER TABLE "stock_requests" ADD COLUMN "workflow_kind" "stock_request_workflow_kind";

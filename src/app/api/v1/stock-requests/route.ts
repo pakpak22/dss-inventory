@@ -69,6 +69,12 @@ export async function POST(request: NextRequest) {
       source: "AS",
       externalKey: value.requestKey,
       requesterSub: value.requester.sub,
+      /**
+       * 🔴 **수리 건의 종류는 `payload` 가 아니라 제 칸으로 간다** (2026-10-22) — 어느 승인 절차를
+       *    붙일지가 여기서 갈린다. 모르는 글자는 이미 `parseApiStockRequest` 에서 `null` 로
+       *    떨어졌고(「받은 것을 믿지 마라」), `null` 은 기존 「부품 불출」 절차다.
+       */
+      workflowKind: value.workflowKind,
       audit: { requesterSub: value.requester.sub, requesterName: value.requester.name, matchedUser: user ? user.name : null, intakeNumber: value.intakeNumber },
     });
 

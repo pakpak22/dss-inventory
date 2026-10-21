@@ -68,6 +68,30 @@ export const REQUEST_SOURCES = ["INVENTORY", "AS"] as const;
 export type RequestSource = (typeof REQUEST_SOURCES)[number];
 export const requestSourceEnum = pgEnum("stock_request_source", REQUEST_SOURCES);
 
+/**
+ * **그 신청이 딸린 수리 건의 종류** (2026-10-22, 종류별 승인 절차).
+ *
+ * 🔴 **절차 이름이 아니라 「종류」다.** A/S 는 자기가 아는 사실(매쳐인가·제너레이터인가·토탈
+ *    컨트롤러인가)만 보내고, 그 종류에 **어느 승인 절차를 붙일지는 재고 관리가 정한다**
+ *    (`src/lib/approval/route.ts` 의 `approvalRouteScopeForWorkflowKind` 한 곳). 그래서 나중에
+ *    짝을 바꿔도 **여기 쌓인 자료는 한 줄도 고치지 않는다** — 절차 이름을 저장했다면 짝이 바뀔
+ *    때마다 옛 줄이 통째로 거짓이 된다.
+ *
+ * 🔴 **`null` 이 「모름」이다.** A/S 가 칸을 아예 안 보내거나(수리 건이 없다), 재고 관리 화면에서
+ *    직접 올린 신청이거나, **모르는 글자가 와서 떨어뜨린** 경우다(`src/lib/api/stock-requests.ts`).
+ *    그때는 기존 「부품 불출」 절차로 간다 — 옛 신청(칸이 비어 있는 줄)이 가는 자리와 같다.
+ * 🔴 **`payload` 에 넣지 않았다.** 그 칸은 「검사를 통과한 EntryInput, 확인 때 이 값으로 원장을
+ *    쓴다」는 뜻이고(아래 칸 주석), 수리 건의 종류는 **원장과 아무 상관이 없다.** 선례는
+ *    `source`·`external_key`·`requester_sub` 셋이다 — 전부 payload 밖의 제 칸이다.
+ *
+ * 🔴 **값은 언제나 맨 뒤에 더한다**(이 저장소 규약, 위 `REQUEST_SOURCES` 주석과 같은 까닭).
+ * 🔵 불리언이나 글자가 아니라 enum 으로 둔다: 모르는 글자는 통로에서 이미 떨어져 `null` 이 되므로
+ *    (「받은 것을 믿지 마라」) 여기 들어오는 값은 아는 셋뿐이고, 그 사실을 DB 가 지켜 준다.
+ */
+export const REQUEST_WORKFLOW_KINDS = ["MATCHER", "GENERATOR", "TOTAL_CONTROLLER"] as const;
+export type RequestWorkflowKind = (typeof REQUEST_WORKFLOW_KINDS)[number];
+export const requestWorkflowKindEnum = pgEnum("stock_request_workflow_kind", REQUEST_WORKFLOW_KINDS);
+
 export const stockRequests = pgTable(
   "stock_requests",
   {
@@ -114,6 +138,13 @@ export const stockRequests = pgTable(
      * 🔵 화면에서 직접 올린 신청은 비어 있다. 거기서는 `requested_by` 가 곧 사람이라 번호를 또 적을 까닭이 없다.
      */
     requesterSub: text("requester_sub"),
+    /**
+     * 그 수리 건의 **종류** — 어느 승인 절차를 붙일지가 여기서 갈린다 (2026-10-22).
+     * 🔴 비어 있으면(`null`) 「모름」이고 기존 「부품 불출」 절차로 간다. 까닭과 네 갈래는 위
+     *    `REQUEST_WORKFLOW_KINDS` 주석에, 짝 짓는 규칙은 `src/lib/approval/route.ts` 한 곳에 있다.
+     * 🔵 기본값을 두지 않는다 — 「안 받았다」와 「받았는데 그 종류다」를 가를 수 있어야 한다.
+     */
+    workflowKind: requestWorkflowKindEnum("workflow_kind"),
     requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
     decidedBy: uuid("decided_by"),
     decidedByName: text("decided_by_name"),

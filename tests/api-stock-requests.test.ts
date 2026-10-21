@@ -5,7 +5,7 @@ import { checkBearerToken } from "../src/lib/api/token-gate";
 import { env } from "../src/lib/env";
 import { CANCELLABLE_REQUEST_SOURCES, CHARGE_LABEL, CHARGE_TYPES, REQUEST_SOURCE_LABEL, canCancelRequest } from "../src/lib/stock/codes";
 import { MAX_LINES, MAX_QTY } from "../src/lib/stock/form";
-import { REQUEST_SOURCES } from "../src/db/schema/stock-requests";
+import { REQUEST_SOURCES, REQUEST_WORKFLOW_KINDS } from "../src/db/schema/stock-requests";
 
 /**
  * A/S 가 부르는 **반출 신청 통로**의 울타리 (2026-10-15, `POST /api/v1/stock-requests`).
@@ -306,6 +306,55 @@ describe("신청에 담기는 내용 — 화면이 만드는 것과 같은 모�
     assert.ok(input.type === "USE");
     assert.equal(input.reason, "증폭기 교체");
     assert.equal(input.note, "오후에 가져갑니다");
+  });
+
+  it("🔴 **수리 건의 종류는 payload 에 담기지 않는다** (2026-10-22) — 신청 표의 제 칸으로 간다", () => {
+    // 이 값은 「확인 때 이 값으로 원장을 쓴다」는 칸이고, 종류는 원장과 아무 상관이 없다.
+    // 담기면 그 칸의 뜻이 깨지고, 나중에 짝을 바꿀 때 원장 쪽 자료까지 들춰야 한다.
+    const withKind = parseApiStockRequest({ ...BODY, workflowKind: "MATCHER" });
+    assert.ok(withKind.ok);
+    const built = buildApiUseRequest(withKind.value, [{ partId: "11111111-1111-4111-8111-111111111111", quantity: 2, chargeType: "PAID" }], "2026-10-22");
+    assert.ok(!("workflowKind" in built), "payload 에 종류가 섞여 들어갔다");
+    assert.ok(!JSON.stringify(built).includes("MATCHER"), "payload 어딘가에 종류가 적혔다");
+  });
+});
+
+/**
+ * 🔴 **수리 건의 종류 — 받은 것을 믿지 않는다** (2026-10-22).
+ *
+ * 🔵 위 유상·무상(`chargeType`)과 **일부러 다르게** 다룬다: 저쪽은 안 보내면 거절이고(청구에 걸리는
+ *    값), 이쪽은 모르면 **떨어뜨린다.** A/S 가 종류를 하나 더 만든 날 우리가 신청을 거절하면 현장에서
+ *    부품을 못 받기 때문이다. 떨어뜨렸을 때 잃는 것은 「그 건이 기존 절차를 탄다」 하나뿐이다.
+ */
+describe("🔴 수리 건의 종류 — 모르면 「모름」으로 떨어뜨린다 (2026-10-22)", () => {
+  const kindOf = (raw: unknown) => {
+    const r = parseApiStockRequest(raw);
+    assert.ok(r.ok, "종류 때문에 본문이 거절당했다 — 떨어뜨려야지 막으면 안 된다");
+    return r.value.workflowKind;
+  };
+
+  it("아는 종류 셋은 그대로 받는다", () => {
+    for (const kind of REQUEST_WORKFLOW_KINDS) {
+      assert.equal(kindOf({ ...BODY, workflowKind: kind }), kind);
+    }
+  });
+
+  it("🔴 칸이 아예 없으면 「모름」이다 — A/S 는 모를 때 안 보낸다(`null` 도 빈 글자도 아니다)", () => {
+    assert.equal(kindOf(BODY), null);
+    assert.equal(kindOf({ ...BODY, workflowKind: undefined }), null);
+  });
+
+  it("🔴 모르는 글자·다른 타입이 와도 **터지지 않고** 「모름」이 된다", () => {
+    for (const bad of ["", " ", "matcher", "MATCHER ", "TOTALCONTROLLER", "PART_ISSUE_MATCHER", 0, 1, true, null, {}, [], ["MATCHER"]]) {
+      assert.equal(kindOf({ ...BODY, workflowKind: bad }), null, `${JSON.stringify(bad)} 가 종류로 통과했다`);
+    }
+  });
+
+  it("종류가 틀려도 나머지 칸은 평소대로 들어온다 — 신청 자체가 막히지 않는다", () => {
+    const r = parseApiStockRequest({ ...BODY, workflowKind: "모르는값" });
+    assert.ok(r.ok);
+    assert.equal(r.value.requestKey, "AS-REQ-2026-0007");
+    assert.equal(r.value.lines.length, 2);
   });
 });
 

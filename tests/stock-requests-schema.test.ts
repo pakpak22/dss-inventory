@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { getTableConfig } from "drizzle-orm/pg-core";
-import { REQUEST_SOURCES, stockRequests } from "../src/db/schema/stock-requests";
+import { REQUEST_SOURCES, REQUEST_WORKFLOW_KINDS, stockRequests } from "../src/db/schema/stock-requests";
 
 /**
  * 반출 신청 표의 모양 — **A/S 가 쓰기 시작하면서 바뀐 자리** (2026-10-15).
@@ -25,6 +25,32 @@ describe("출처 칸 — 어디서 올라왔나", () => {
 
   it("🔴 값은 언제나 맨 뒤에 더한다 — 가운데 끼우면 마이그레이션이 enum 타입을 다시 만든다", () => {
     assert.deepEqual([...REQUEST_SOURCES], ["INVENTORY", "AS"]);
+  });
+});
+
+describe("수리 건의 종류 칸 — 어느 승인 절차를 탈지가 여기서 갈린다 (2026-10-22)", () => {
+  it("workflow_kind 는 stock_request_workflow_kind enum 이고 **비어 있을 수 있다**", () => {
+    const col = columnOf("workflow_kind");
+    assert.ok(col, "workflow_kind 칸이 없다");
+    assert.equal(col.getSQLType(), "stock_request_workflow_kind");
+    assert.equal(col.notNull, false, "A/S 가 모르면 칸을 안 보내고, 화면에서 직접 올린 신청에는 종류가 없다");
+  });
+
+  it("🔴 기본값을 두지 않는다 — 「모름」이 `null` 이어야 옛 신청이 기존 절차로 간다", () => {
+    // 기본값을 지어 넣으면 칸이 비어 있던 옛 신청과 종류를 안 보낸 신청이 **종류별 절차**를 타게
+    // 되고, 관리자가 짜 둔 적 없는 절차를 가리켜 결재 없이 나가는 길이 열린다.
+    assert.equal(columnOf("workflow_kind")?.default, undefined);
+  });
+
+  it("🔴 값은 언제나 맨 뒤에 더한다 — 가운데 끼우면 마이그레이션이 enum 타입을 다시 만든다", () => {
+    assert.deepEqual([...REQUEST_WORKFLOW_KINDS], ["MATCHER", "GENERATOR", "TOTAL_CONTROLLER"]);
+  });
+
+  it("🔴 payload 는 그대로다 — 종류는 **원장과 상관이 없어** 그 칸에 섞지 않았다", () => {
+    const payload = columnOf("payload");
+    assert.ok(payload, "payload 칸이 없다");
+    assert.equal(payload.getSQLType(), "jsonb");
+    assert.equal(payload.notNull, true);
   });
 });
 
