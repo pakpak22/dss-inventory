@@ -34,8 +34,21 @@ import { entryTypeEnum, stockEntries } from "./stock";
  *    🔴 다만 머리말 배지·알림 종의 **숫자에서는 뺀다**(`src/lib/stock/codes.ts` 의 `ACTIONABLE_REQUEST_STATUSES`) —
  *       일부러 멈춰 둔 것을 매일 재촉하지 않으려는 것이다.
  *    🔴 여기도 **맨 뒤**다(위와 같은 까닭). 선례: `drizzle/0010_concerned_lucky_pierre.sql` 의 `PARTIAL`.
+ *
+ * 🔵 `IN_APPROVAL` = **불출 결재가 돌고 있음** (2026-10-21, 조각 11e).
+ *    담당자가 [불출 신청]으로 결재건(`stock_issue_approvals`)을 올린 순간부터, 그 결재가 실행·반려되거나
+ *    올린 사람이 거둘 때까지의 자리다. 🔴 **그 전에는 이 사실을 적을 칸이 없어 신청이 `PENDING` 그대로였다** —
+ *    그래서 ① 결재가 도는 중에 담당자가 반려·보류할 수 있었고 신청자가 취소할 수 있었다(그러면 결재건은
+ *    살아남아 결재자에게 계속 떴다 — **이미 반려된 요청을 결재하게 된다**) ② 배지·대기 목록·알림이 그 줄을
+ *    「지금 할 일」로 세어, 담당자는 눌러 봐야 「결재 대기라 지금 할 게 없다」를 알았다.
+ *    🔵 **자동 승인(결재자가 전부 신청자 본인)도 이 자리다** — 결재건은 곧바로 `APPROVED` 가 되지만 재고는
+ *       아직 안 나갔고, 나가는 것은 「승인 요청건」의 [실행]이다(`src/lib/approval/part-issue-rules.ts` 의
+ *       `requestStatusAfterPartIssue`).
+ *    🔴 **들고 나는 길 넷이 전부 막혀 있어야 한다** — 하나라도 빠지면 요청이 이 자리에 **갇힌다**(어느 단추도
+ *       받지 않는 상태이기 때문이다). 그 넷이 적힌 곳은 위 순수 함수 하나다.
+ *    🔴 여기도 **맨 뒤**다(위와 같은 까닭).
  */
-export const REQUEST_STATUSES = ["PENDING", "CONFIRMING", "CONFIRMED", "REJECTED", "CANCELLED", "PARTIAL", "ON_HOLD"] as const;
+export const REQUEST_STATUSES = ["PENDING", "CONFIRMING", "CONFIRMED", "REJECTED", "CANCELLED", "PARTIAL", "ON_HOLD", "IN_APPROVAL"] as const;
 export type RequestStatus = (typeof REQUEST_STATUSES)[number];
 export const requestStatusEnum = pgEnum("stock_request_status", REQUEST_STATUSES);
 

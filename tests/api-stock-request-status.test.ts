@@ -241,7 +241,7 @@ describe("🔴 마감 — 상태가 아니라 세어서 가린다 (2026-10-15)",
   });
 
   it("아직 안 끝난 신청은 어느 것도 마감이 아니다", () => {
-    for (const status of ["PENDING", "CONFIRMING", "PARTIAL", "ON_HOLD", "REJECTED", "CANCELLED"] as const) {
+    for (const status of ["PENDING", "CONFIRMING", "PARTIAL", "ON_HOLD", "REJECTED", "CANCELLED", "IN_APPROVAL"] as const) {
       const q = toApiRequestStatus("AS-1", source({ status, lines: [{ ...LINE, quantity: 8, issued: 5 }] }));
       assert.equal(q.closed, false, status);
       assert.equal(q.status.label, REQUEST_STATUS_LABEL[status], status);

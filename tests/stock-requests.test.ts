@@ -67,8 +67,8 @@ describe("반출 신청을 세는 쪽 — 어느 상태를 대기로 보나 (202
     assert.ok(!(DECIDED_REQUEST_STATUSES as readonly string[]).includes("PARTIAL"));
   });
 
-  it("처리 중(CONFIRMING)도 대기, 확인·반려·취소는 결정된 것", () => {
-    assert.deepEqual([...PENDING_REQUEST_STATUSES].sort(), ["CONFIRMING", "ON_HOLD", "PARTIAL", "PENDING"]);
+  it("처리 중(CONFIRMING)·결재 중(IN_APPROVAL)도 대기, 확인·반려·취소는 결정된 것", () => {
+    assert.deepEqual([...PENDING_REQUEST_STATUSES].sort(), ["CONFIRMING", "IN_APPROVAL", "ON_HOLD", "PARTIAL", "PENDING"]);
     assert.deepEqual([...DECIDED_REQUEST_STATUSES].sort(), ["CANCELLED", "CONFIRMED", "REJECTED"]);
   });
 
@@ -98,7 +98,8 @@ describe("보류(ON_HOLD) — 어느 묶음에 드나 (2026-10-15, 조각 10a)",
 
   it("손댈 수 있는 묶음은 대기 묶음의 부분집합이다 — 세지 않는 것을 재촉할 수는 없다", () => {
     for (const s of ACTIONABLE_REQUEST_STATUSES) assert.ok((PENDING_REQUEST_STATUSES as readonly string[]).includes(s), s);
-    assert.ok(ACTIONABLE_REQUEST_STATUSES.length < PENDING_REQUEST_STATUSES.length, "보류 하나만큼 좁다");
+    // 🔵 빠진 둘 = 보류(2026-10-15) · 결재 중(2026-10-21). 둘 다 **담당자가 지금 할 수 있는 일이 없는** 자리다.
+    assert.ok(ACTIONABLE_REQUEST_STATUSES.length < PENDING_REQUEST_STATUSES.length, "보류와 결재 중 둘만큼 좁다");
   });
 
   it("🔴 보류 중에는 집을 수 없다 — 확인·반려·마감이 저절로 막히는 자리다", () => {
@@ -179,17 +180,17 @@ describe("마감된 신청 가리기 — isClosedRequest (2026-10-14, 조각 4d)
  *    않다**는 것까지 지킨다 — 빈 글자는 컴파일을 통과하고 화면에서만 사라진다.
  */
 describe("신청 상태의 글자와 색 (2026-10-15, 조각 10b)", () => {
-  it("일곱 상태를 빠짐없이 덮고 글자가 비어 있지 않다", () => {
+  it("여덟 상태를 빠짐없이 덮고 글자가 비어 있지 않다", () => {
     assert.deepEqual(Object.keys(REQUEST_STATUS_LABEL).sort(), [...REQUEST_STATUSES].sort());
     for (const s of REQUEST_STATUSES) assert.ok(REQUEST_STATUS_LABEL[s].trim().length > 0, s);
   });
 
-  it("거르개가 도는 차례도 일곱 상태를 빠짐없이 덮는다 (글자 표에서 뽑으므로 저절로 따라온다)", () => {
+  it("거르개가 도는 차례도 여덟 상태를 빠짐없이 덮는다 (글자 표에서 뽑으므로 저절로 따라온다)", () => {
     assert.deepEqual([...REQUEST_STATUS_ORDER].sort(), [...REQUEST_STATUSES].sort());
     assert.equal(new Set(REQUEST_STATUS_ORDER).size, REQUEST_STATUS_ORDER.length);
   });
 
-  it("배지 색표도 일곱 상태를 빠짐없이 덮는다", () => {
+  it("배지 색표도 여덟 상태를 빠짐없이 덮는다", () => {
     assert.deepEqual(Object.keys(REQUEST_STATUS_BADGE).sort(), [...REQUEST_STATUSES].sort());
     for (const s of REQUEST_STATUSES) assert.ok(REQUEST_STATUS_BADGE[s].trim().length > 0, s);
   });

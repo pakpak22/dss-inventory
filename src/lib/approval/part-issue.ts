@@ -8,10 +8,10 @@ import { stockIssueApprovalSteps, stockIssueApprovals } from "@/db/schema/stock-
 import { stockRequests } from "@/db/schema/stock-requests";
 import { auditValues } from "@/lib/audit";
 import { DECIDED_ISSUE_APPROVAL_STATUSES, type DecidedIssueApprovalStatus } from "@/lib/notifications/bell-items";
-import { isClaimableRequest } from "@/lib/stock/codes";
+import { CLAIMABLE_REQUEST_STATUSES, isClaimableRequest } from "@/lib/stock/codes";
 import type { IssueQuantity } from "@/lib/stock/issue";
 import type { Actor } from "@/lib/stock/ledger";
-import { confirmRequest } from "@/lib/stock/requests";
+import { confirmRequest, issuedTotalForRequest } from "@/lib/stock/requests";
 import { users } from "@/db/schema/users";
 import {
   checkCanCancelPartIssue,
@@ -23,6 +23,7 @@ import {
   PART_ISSUE_ROUTE_MISSING_SUB_MESSAGE,
   planPartIssueApproval,
   readIssueQuantities,
+  requestStatusAfterPartIssue,
   type PartIssueDetail,
   type PartIssueStatus,
   type PartIssueStepView,
@@ -45,8 +46,15 @@ import { APPROVAL_ROUTE_EMPTY_NOTICES, findNextRouteStepToApprove } from "./rout
  * ── 🔴 원장으로 가는 길을 새로 만들지 않는다 ────────────────────────────
  * 실행은 **기존 `confirmRequest(requestId, admin, { quantities, note })` 를 그대로 부른다.**
  * 수량 검사·잔량 갱신·회차 줄·감사 로그는 이미 검증돼 있고, 그것을 여기로 베껴 오면 두 위험이
- * 한 곳에서 만난다. 그래서 `src/lib/stock/ledger.ts` · `issue.ts` · `requests.ts` 는 이 조각에서
- * **한 글자도 바뀌지 않았다.**
+ * 한 곳에서 만난다. 그래서 `src/lib/stock/ledger.ts` · `issue.ts` 는 이 조각에서 **한 글자도 바뀌지 않았다.**
+ * 🔵 `requests.ts` 는 2026-10-21(조각 11e)에 **집을 수 있는 묶음을 부르는 쪽이 건네도록** 바뀌었다 —
+ *    원장 쪽 규칙은 그대로이고, 바뀐 것은 「어느 상태에서 집는가」 하나다(`ConfirmPath`).
+ *
+ * ── 🔴 **결재가 움직이면 반출 신청의 자리도 따라 움직인다** (2026-10-21, 조각 11e) ─
+ * 올리면 `IN_APPROVAL`, 거두면 담당자 손으로, 반려되면 `REJECTED`, 실행되면 `confirmRequest` 가 정한다.
+ * 🔴 **네 길이 적힌 곳은 `./part-issue-rules.ts` 의 `requestStatusAfterPartIssue` 하나**이고, 이 파일은
+ * 그것을 **부르기만** 한다 — 이 저장소에는 DB 시험이 없어, 여기 직접 적은 글자는 아무도 돌려 보지 못한다.
+ * 🔴 하나라도 빠뜨리면 신청이 `IN_APPROVAL` 에 **갇힌다**(그 자리는 다섯 단추를 전부 거절한다).
  *
  * ── 🔴 안전장치: 「부품 불출」 판이 없으면 이 기능은 없는 것과 같다 ──────
  * 현재 판이 없거나 단계가 0개면 `NO_ROUTE` 를 돌려주고 결재건을 **만들지 않는다.** 부르는
@@ -161,8 +169,40 @@ export async function requestPartIssueApproval(
         .from(stockRequests)
         .where(eq(stockRequests.id, requestId));
       if (!request) return { ok: false, code: "REQUEST_NOT_OPEN", message: "없는 신청입니다." };
+      /**
+       * 🔴 **「이미 결재 중」은 따로 말한다** (2026-10-21, 조각 11e). 신청이 `IN_APPROVAL` 이면 그 신청에
+       *    살아 있는 결재건이 이미 있다는 뜻이고, 그것은 아래 부분 유니크 색인이 23505 로 잡던 바로 그
+       *    경우다 — 상태가 생기면서 **색인에 닿기 전에** 여기서 걸리므로, 걸리는 자리가 옮겨 갔다고 말까지
+       *    흐려지면 안 된다. 🔵 색인 쪽 `catch` 는 그대로 둔다: 이 조각 전에 올라간 결재건은 신청이 아직
+       *    `PENDING` 이라 여기를 통과하고 거기서 잡힌다.
+       */
+      if (request.status === "IN_APPROVAL") {
+        return { ok: false, code: "ALREADY_OPEN", message: "이 신청에는 이미 진행 중인 결재건이 있습니다. 화면을 새로 고치고 다시 보십시오." };
+      }
       if (!isClaimableRequest(request.status)) {
         return { ok: false, code: "REQUEST_NOT_OPEN", message: "결재를 올릴 수 없는 신청입니다. 대기 중이거나 일부만 내준 신청만 올릴 수 있습니다." };
+      }
+
+      /**
+       * 3-1. 🔴 **신청을 「결재 중」으로 집는다** (2026-10-21, 조각 11e). 여기가 이 조각의 전부다 —
+       *      그 전에는 결재건만 서고 신청은 `PENDING` 그대로라, 결재가 도는 중에 반려·보류·취소가 되고
+       *      배지·알림이 그 줄을 「지금 할 일」로 셌다(`src/db/schema/stock-requests.ts` 의 `IN_APPROVAL` 주석).
+       *
+       * 🔴 **위 읽기가 아니라 이 조건부 UPDATE 가 울타리다.** 읽고 나서 집기 전 사이에 다른 담당자가
+       *    [확인]으로 집었을 수 있다(`FOR UPDATE` 를 걸지 않았다 — 거는 대신 이 저장소가 늘 쓰는
+       *    「상태를 WHERE 에 걸어 집는」 모양을 따른다). 0행이면 그 사이에 바뀐 것이다.
+       * 🔴 **쓰는 일보다 먼저 한다.** 트랜잭션 콜백에서 그냥 `return` 하면 **커밋되므로**
+       *    (`decidePartIssueApproval` 의 2번 주석), 거절할 수 있는 마지막 자리가 아직 아무것도 안 쓴 여기다.
+       * 🔵 아래에서 결재건 끼워 넣기가 23505(이미 살아 있는 결재건)로 터지면 트랜잭션째 되돌아가므로
+       *    신청도 제자리로 돌아온다 — 잡는 곳은 이 트랜잭션 **밖**이다.
+       */
+      const [claimed] = await tx
+        .update(stockRequests)
+        .set({ status: requestStatusAfterPartIssue("ISSUE_REQUESTED", 0) })
+        .where(and(eq(stockRequests.id, requestId), inArray(stockRequests.status, [...CLAIMABLE_REQUEST_STATUSES])))
+        .returning({ id: stockRequests.id });
+      if (!claimed) {
+        return { ok: false, code: "REQUEST_NOT_OPEN", message: "방금 다른 담당자가 이 신청을 처리했습니다. 화면을 새로 고치고 다시 보십시오." };
       }
 
       // 4. 🔴 남는 단계가 0개면 곧바로 APPROVED — 결재할 사람이 없으니 기다릴 것이 없다
@@ -212,6 +252,12 @@ export async function requestPartIssueApproval(
             autoApproved,
             reason,
             quantities,
+            /**
+             * 🔴 **신청이 어느 자리로 갔는지도 남긴다** (2026-10-21). 자동 승인이면 결재건은 곧바로
+             *    `APPROVED` 인데 신청은 `IN_APPROVAL` 이라, 나중에 이력만 보면 「승인됐는데 왜 안 나갔지」가
+             *    된다 — 아직 [실행] 전이라는 사실이 이 한 칸에 적힌다.
+             */
+            requestStatus: requestStatusAfterPartIssue("ISSUE_REQUESTED", 0),
           },
         }),
       );
@@ -322,10 +368,34 @@ export async function decidePartIssueApproval(
     if (!step) return { ok: false, message: "지금 결재할 차례가 아닙니다. 화면을 새로 고치고 다시 보십시오." };
 
     let nextStatus: PartIssueStatus = "PENDING_APPROVAL";
+    /**
+     * 🔵 반려로 **신청까지** 닫혔나 (2026-10-21, 조각 11e). 아래에서 감사 로그에 적는다.
+     * 🔴 `false` 는 결함이 아니라 **이 조각이 나가기 전에 올라간 결재건**이다 — 그때는 신청이 `IN_APPROVAL` 로
+     *    가지 않아 아직 `PENDING` 이고, 그 건의 반려는 예전처럼 결재건만 닫는다. 그래서 던지지 않는다.
+     */
+    let requestRejected = false;
 
     if (decision === "REJECTED") {
       await tx.update(stockIssueApprovals).set({ status: "REJECTED" }).where(eq(stockIssueApprovals.id, approvalId));
       nextStatus = "REJECTED";
+      /**
+       * 🔴 **반려되면 부품 요청도 끝이다** (2026-10-21 쓰는 분 결정) — `PENDING` 으로 되돌리지 않는다.
+       *    되돌리면 반려된 요청이 대기 목록에 되살아나 담당자가 그대로 내주게 되고, 반려한 결재자의 뜻이
+       *    사라진다. 다시 필요하면 **새로 신청한다.** 까닭과 다른 세 길은 `./part-issue-rules.ts` 의
+       *    `requestStatusAfterPartIssue` 하나에 적혀 있다.
+       * 🔴 **반려 사유를 신청의 결정 사유 칸에 복사한다.** 신청자가 보는 화면도 A/S 통로도 결재건이 아니라
+       *    **신청**을 읽으므로(`toApiRequestStatus` 의 `decision`), 복사하지 않으면 「왜 반려됐는지」가 어디에도
+       *    안 보인다. 🔵 결정한 사람·시각도 함께 적는다 — 그래야 신청자의 알림 종에 걸린다
+       *    (`listRejectedRequestsFor` 가 `decided_at` 으로 거른다).
+       * 🔵 **같은 트랜잭션 안**이다. 결재건만 닫히고 신청이 `IN_APPROVAL` 에 남으면 **아무도 손댈 수 없는
+       *    신청**이 된다(그 상태는 다섯 단추를 전부 거절한다).
+       */
+      const [rejectedRequest] = await tx
+        .update(stockRequests)
+        .set({ status: requestStatusAfterPartIssue("APPROVAL_REJECTED", 0), decidedBy: actor.id, decidedByName: actor.name, decidedAt: now, decisionNote: note })
+        .where(and(eq(stockRequests.id, head.requestId), eq(stockRequests.status, "IN_APPROVAL")))
+        .returning({ id: stockRequests.id });
+      requestRejected = rejectedRequest !== undefined;
     } else {
       // 🔴 요청자는 **사슬을 시작한 사람**이다 — 방금 결재한 사람이 아니다. 건너뛰기 규칙이
       //    사슬 내내 같은 사람을 봐야 한다(`findNextRouteStepToApprove` 주석).
@@ -352,7 +422,8 @@ export async function decidePartIssueApproval(
         actorId: actor.id,
         actorName: actor.name,
         target: auditTarget(approvalId),
-        detail: { requestId: head.requestId, stepOrder: step.stepOrder, status: nextStatus, note },
+        // 🔵 `requestRejected` 는 **신청까지 닫혔나**다 — 승인 줄에는 뜻이 없어 싣지 않는다(위 주석).
+        detail: { requestId: head.requestId, stepOrder: step.stepOrder, status: nextStatus, note, ...(decision === "REJECTED" ? { requestRejected } : {}) },
       }),
     );
 
@@ -396,8 +467,15 @@ export async function executePartIssueApproval(approvalId: string, admin: Actor,
   const quantities = readIssueQuantities(head.quantities);
   if (!quantities) return { ok: false, message: "결재건에 적힌 수량을 읽을 수 없습니다. 담당자에게 알려 주십시오." };
 
-  // 🔴 원장으로 가는 길은 이것 하나다. 새로 만들지 않는다.
-  const result = await confirmRequest(head.requestId, admin, { quantities, note });
+  /**
+   * 🔴 원장으로 가는 길은 이것 하나다. 새로 만들지 않는다.
+   *
+   * 🔴 **`via: "APPROVAL_EXECUTION"` 이 빠지면 결재를 다 받고도 부품이 안 나간다** (2026-10-21, 조각 11e).
+   *    올릴 때 신청이 `IN_APPROVAL` 로 갔는데, 사람이 누르는 [확인] 쪽 묶음(`CLAIMABLE_REQUEST_STATUSES`)에는
+   *    그 상태가 **일부러 빠져 있기** 때문이다 — 까닭은 `src/lib/stock/codes.ts` 의
+   *    `EXECUTABLE_REQUEST_STATUSES` 주석. 그래서 그 매개변수에 기본값을 두지 않았다(tsc 가 잡는다).
+   */
+  const result = await confirmRequest(head.requestId, admin, { quantities, note, via: "APPROVAL_EXECUTION" });
   if (!result.ok) return { ok: false, message: result.message };
 
   const now = new Date();
@@ -442,10 +520,18 @@ export async function executePartIssueApproval(approvalId: string, admin: Actor,
  * 🔵 열려 있던 단계 줄은 `REQUESTED` 로 **그대로 남긴다.** 거기에 `REJECTED` 를 적으면 「그
  * 사람이 반려했다」는 거짓이 되기 때문이다. 대신 아래 「내가 결재할 건」 조회가 결재건의 상태도
  * 함께 보므로 거둔 건은 아무의 목록에도 뜨지 않는다.
+ *
+ * ── 🔴 **신청을 담당자 손으로 돌려놓는다** (2026-10-21, 조각 11e) ────────
+ * 거두기는 `IN_APPROVAL` 에서 나오는 **유일한 되돌리는 길**이다. 여기를 빠뜨리면 그 신청은 확인·
+ * 반려·마감·보류·취소를 전부 거절하는 자리에 **갇힌다.** 🔴 그래서 결재건 닫기와 신청 되돌리기를
+ * **한 트랜잭션**에 묶는다 — 앞만 되고 뒤가 실패하면 되돌릴 사람이 아무도 없다.
+ * 🔵 돌아갈 자리를 `PENDING` 으로 **고정하지 않는다**: 결재는 일부 나간 신청(`PARTIAL`)에서도 올릴 수
+ *    있어, 그대로 `PENDING` 으로 돌리면 이미 나간 회차가 없던 일이 된다. 규칙은 보류 풀기와 같은
+ *    한 함수에 있다(`requestStatusAfterPartIssue` → `reopenedRequestStatus`).
  */
 export async function cancelPartIssueApproval(approvalId: string, actor: Actor): Promise<{ ok: true } | { ok: false; message: string }> {
   const [head] = await db()
-    .select({ status: stockIssueApprovals.status, requestedBy: stockIssueApprovals.requestedBy })
+    .select({ status: stockIssueApprovals.status, requestedBy: stockIssueApprovals.requestedBy, requestId: stockIssueApprovals.requestId })
     .from(stockIssueApprovals)
     .where(eq(stockIssueApprovals.id, approvalId));
   if (!head) return { ok: false, message: "없는 결재건입니다." };
@@ -453,19 +539,48 @@ export async function cancelPartIssueApproval(approvalId: string, actor: Actor):
   const gate = checkCanCancelPartIssue(head.status, head.requestedBy, actor.id);
   if (!gate.ok) return { ok: false, message: gate.message };
 
-  // 🔴 판정을 한 번 더 WHERE 에 건다 — 위에서 읽은 뒤 누가 결재했을 수 있다(이 저장소의
-  //    `rejectRequest` · `holdRequest` 와 같은 모양).
-  const [row] = await db()
-    .update(stockIssueApprovals)
-    .set({ status: "CANCELLED" })
-    .where(and(eq(stockIssueApprovals.id, approvalId), eq(stockIssueApprovals.status, "PENDING_APPROVAL"), eq(stockIssueApprovals.requestedBy, actor.id)))
-    .returning({ requestId: stockIssueApprovals.requestId });
-  if (!row) return { ok: false, message: "거둘 수 없는 결재건입니다. 이미 결재가 진행됐거나 본인 건이 아닙니다." };
+  /**
+   * 🔵 **이미 나간 수량을 트랜잭션 밖에서 읽어도 된다** — 결재건이 `PENDING_APPROVAL` 인 동안 신청은
+   *    `IN_APPROVAL` 이고, 그 상태는 어느 길로도 집히지 않아(실행은 결재건이 `APPROVED` 일 때만 열린다)
+   *    그 사이 불출이 일어날 수 없다. 보류 풀기가 같은 까닭으로 같은 일을 한다(`issuedTotalForRequest`).
+   */
+  const issuedTotal = await issuedTotalForRequest(head.requestId);
+  const reopenedStatus = requestStatusAfterPartIssue("APPROVAL_CANCELLED", issuedTotal);
 
-  await db()
-    .insert(auditLogs)
-    .values(auditValues({ action: "STOCK_ISSUE_APPROVAL_CANCELLED", actorId: actor.id, actorName: actor.name, target: auditTarget(approvalId), detail: { requestId: row.requestId } }));
-  return { ok: true };
+  return db().transaction(async (tx): Promise<{ ok: true } | { ok: false; message: string }> => {
+    // 🔴 판정을 한 번 더 WHERE 에 건다 — 위에서 읽은 뒤 누가 결재했을 수 있다(이 저장소의
+    //    `rejectRequest` · `holdRequest` 와 같은 모양).
+    //    🔵 0행이면 **아직 아무것도 안 썼다** — 그때만 `return` 해도 빈 트랜잭션이 커밋될 뿐이다.
+    const [row] = await tx
+      .update(stockIssueApprovals)
+      .set({ status: "CANCELLED" })
+      .where(and(eq(stockIssueApprovals.id, approvalId), eq(stockIssueApprovals.status, "PENDING_APPROVAL"), eq(stockIssueApprovals.requestedBy, actor.id)))
+      .returning({ requestId: stockIssueApprovals.requestId });
+    if (!row) return { ok: false, message: "거둘 수 없는 결재건입니다. 이미 결재가 진행됐거나 본인 건이 아닙니다." };
+
+    /**
+     * 🔴 **0행이어도 던지지 않는다** — 이 조각이 나가기 전에 올라간 결재건은 신청이 `IN_APPROVAL` 로
+     *    가지 않아 아직 `PENDING`(또는 `PARTIAL`)이다. 그 건을 거두는 것은 예전처럼 결재건만 닫으면 되고,
+     *    신청은 이미 담당자 손에 있으므로 갇히지 않는다. 그 사실을 감사 로그에 적어 둔다.
+     */
+    const [reopened] = await tx
+      .update(stockRequests)
+      .set({ status: reopenedStatus })
+      .where(and(eq(stockRequests.id, row.requestId), eq(stockRequests.status, "IN_APPROVAL")))
+      .returning({ id: stockRequests.id });
+
+    await tx.insert(auditLogs).values(
+      auditValues({
+        action: "STOCK_ISSUE_APPROVAL_CANCELLED",
+        actorId: actor.id,
+        actorName: actor.name,
+        target: auditTarget(approvalId),
+        // 🔵 「어느 자리로 돌려놨나」를 남긴다 — 나중에 「왜 PARTIAL 이지?」를 따질 수 있게(이미 나간 수량도 함께).
+        detail: { requestId: row.requestId, requestStatus: reopened ? reopenedStatus : null, issued: issuedTotal },
+      }),
+    );
+    return { ok: true };
+  });
 }
 
 /* ------------------------------------------------------------------ */

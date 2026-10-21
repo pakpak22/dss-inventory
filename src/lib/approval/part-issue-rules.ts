@@ -1,4 +1,5 @@
-import type { EntryType } from "@/lib/stock/codes";
+import type { RequestStatus } from "@/db/schema/stock-requests";
+import { reopenedRequestStatus, type EntryType } from "@/lib/stock/codes";
 import type { IssueQuantity } from "@/lib/stock/issue";
 import { findNextRouteStepToApprove, type RouteStepAssignment } from "./route";
 
@@ -96,6 +97,61 @@ export const OPEN_PART_ISSUE_STATUSES = ["PENDING_APPROVAL", "APPROVED"] as cons
 
 export function isOpenPartIssueStatus(status: PartIssueStatus): boolean {
   return (OPEN_PART_ISSUE_STATUSES as readonly PartIssueStatus[]).includes(status);
+}
+
+/* ------------------------------------------------------------------ */
+/* 결재가 움직일 때 **부품 요청**이 따라가는 자리 (2026-10-21, 조각 11e)  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 결재건이 움직여 **반출 신청(`stock_requests`)의 자리를 바꾸는** 네 순간 중 **셋**.
+ *
+ * 🔴 **네 번째(실행)는 여기 없다.** 실행은 `confirmRequest` 가 「다 나갔나」를 세어 `CONFIRMED` 나
+ *    `PARTIAL` 을 정하는데, 그 셈에는 이번에 나간 수량과 이미 나간 수량이 필요해 상태 하나로 답할 수 없다.
+ *    그 규칙은 그 함수 하나가 쥐고 있고(`src/lib/stock/requests.ts`), 여기서 다시 적으면 두 벌이 된다.
+ *    🔵 그래서 이 묶음의 이름은 「결재가 **신청의 자리를 직접 적는** 순간들」이다.
+ */
+export type PartIssueRequestExit =
+  /** [불출 신청] — 결재건이 섰다. 🔴 **자동 승인(`AUTO_APPROVED`)도 이것이다** (아래 함수 주석). */
+  | "ISSUE_REQUESTED"
+  /** 올린 사람이 [거두기] — 결재건이 `CANCELLED`. 신청은 담당자 손으로 **돌아온다**. */
+  | "APPROVAL_CANCELLED"
+  /** 결재자가 [반려] — 결재건이 `REJECTED`. 신청도 **끝난다**. */
+  | "APPROVAL_REJECTED";
+
+/**
+ * 그 순간 **신청이 가야 할 자리**.
+ *
+ * 🔴 **규칙을 여기 한 곳에 둔 까닭**: 이 저장소에는 DB 시험이 없어(이 파일 머리말), 서버 함수의 `UPDATE …
+ * SET status` 에 직접 적은 글자는 **아무도 돌려 보지 못한 채** 운영으로 나간다. 들고 나는 길 중 하나라도
+ * 빠지면 신청이 `IN_APPROVAL` 에 **갇힌다** — 그 자리는 확인·반려·마감·보류·취소를 **전부** 거절하는
+ * 상태라, 갇히면 담당자도 신청자도 손쓸 길이 없고 부품은 영영 안 나간다.
+ * 🔵 `tests/part-issue-request-status.test.ts` 가 이 함수로 네 길을 전부 못 박는다.
+ *
+ * - `ISSUE_REQUESTED` → **`IN_APPROVAL`.** 🔴 **자동 승인도 똑같다.** 결재선이 전부 신청자 본인이면 결재건은
+ *   그 자리에서 `APPROVED` 가 되지만(`planPartIssueApproval` 의 `AUTO_APPROVED`) **재고는 아직 안 나갔다** —
+ *   나가는 것은 「승인 요청건」의 [실행]이다. 그때 신청을 `PENDING` 으로 두면 담당자가 [확인]으로 한 번 더
+ *   내주고 [실행]으로 또 한 번 내준다. 갈래가 둘이라 **빠뜨리기 쉬운 자리**라서 글자로 못 박는다.
+ * - `APPROVAL_CANCELLED` → **`PENDING` 또는 `PARTIAL`.** 🔴 `PENDING` 으로 고정하지 않는다 — 결재는 **일부
+ *   나간 신청에서도 올릴 수 있어**(`isClaimableRequest` = PENDING·PARTIAL) 거둘 때 그대로 `PENDING` 으로
+ *   돌리면 **이미 나간 회차가 없던 일이 된다.** 보류 풀기와 **같은 함수**로 센다(`reopenedRequestStatus`).
+ * - `APPROVAL_REJECTED` → **`REJECTED`.** 🔵 2026-10-21 쓰는 분 결정: 「결재가 반려되면 부품 요청도 끝이다.
+ *   다시 필요하면 새로 신청한다.」 `PENDING` 으로 되돌리지 **않는다** — 되돌리면 반려된 요청이 대기 목록에
+ *   되살아나 담당자가 그대로 내주게 되고, 반려한 결재자의 뜻이 사라진다.
+ *   🔴 반려 사유는 신청의 **결정 사유 칸**(`decision_note`)에 복사한다 — 신청자가 보는 화면과 A/S 통로는
+ *   결재건이 아니라 신청을 읽으므로, 복사하지 않으면 「왜 반려됐는지」가 어디에도 안 보인다.
+ *
+ * @param issuedTotal 그 신청에서 **이미 나간 수량의 합**. 🔵 `APPROVAL_CANCELLED` 에서만 쓰인다.
+ */
+export function requestStatusAfterPartIssue(exit: PartIssueRequestExit, issuedTotal: number): RequestStatus {
+  switch (exit) {
+    case "ISSUE_REQUESTED":
+      return "IN_APPROVAL";
+    case "APPROVAL_REJECTED":
+      return "REJECTED";
+    case "APPROVAL_CANCELLED":
+      return reopenedRequestStatus(issuedTotal);
+  }
 }
 
 /* ------------------------------------------------------------------ */

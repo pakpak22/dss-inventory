@@ -98,7 +98,7 @@ describe("🔴 거둘 수 있는 조건 셋 — 하나라도 어긋나면 각각
   });
 
   it("③ 아직 대기일 것 — 나갔거나 집혔거나 결정된 신청은 409 이고, **지금 상태를 글자로** 말해 준다", () => {
-    for (const status of ["CONFIRMING", "PARTIAL", "CONFIRMED", "REJECTED", "ON_HOLD"] as const satisfies readonly RequestStatus[]) {
+    for (const status of ["CONFIRMING", "PARTIAL", "CONFIRMED", "REJECTED", "ON_HOLD", "IN_APPROVAL"] as const satisfies readonly RequestStatus[]) {
       const d = denied(subject({ status }));
       assert.equal(d.status, 409, status);
       assert.equal(d.error, "conflict", status);

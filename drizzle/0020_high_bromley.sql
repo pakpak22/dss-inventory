@@ -1,0 +1,1 @@
+ALTER TYPE "public"."stock_request_status" ADD VALUE 'IN_APPROVAL';

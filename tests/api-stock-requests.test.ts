@@ -420,7 +420,7 @@ describe("🔴 바깥 신청은 재고 관리에서 취소되지 않는다 (2026
 
   it("남의 신청·대기가 아닌 신청은 못 거둔다 (전부터의 규칙)", () => {
     assert.equal(canCancelRequest({ source: "INVENTORY", status: "PENDING", requestedBy: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" }, ME), false);
-    for (const status of ["PARTIAL", "CONFIRMING", "ON_HOLD", "CONFIRMED", "REJECTED", "CANCELLED"] as const) {
+    for (const status of ["PARTIAL", "CONFIRMING", "ON_HOLD", "CONFIRMED", "REJECTED", "CANCELLED", "IN_APPROVAL"] as const) {
       assert.equal(canCancelRequest({ source: "INVENTORY", status, requestedBy: ME }, ME), false, status);
     }
   });

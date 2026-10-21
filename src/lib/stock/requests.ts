@@ -13,8 +13,11 @@ import {
   CANCELLABLE_REQUEST_SOURCES,
   CLAIMABLE_REQUEST_STATUSES,
   ENTRY_TYPE_LABEL,
+  EXECUTABLE_REQUEST_STATUSES,
   EXTERNALLY_CANCELLABLE_REQUEST_SOURCES,
+  REJECTABLE_REQUEST_STATUSES,
   isClosedRequest,
+  reopenedRequestStatus,
   type EntryType,
 } from "./codes";
 import type { EntryInput } from "./form";
@@ -47,6 +50,16 @@ import { LedgerAbort, ledgerErrorMessage, recordEntryIn, type Actor, type EntryA
  *     대신 그때 나가는 **문구**만 고쳤다(아래 `failureMessage`) — 「이미 처리된 신청」은 보류에는 거짓말이다.
  *   - 🔴 신청한 사람의 취소(`cancelRequest`)도 같은 까닭으로 막힌다(PENDING 만 받는다). 보류된 신청을 접으려면
  *     담당자가 먼저 풀어야 한다.
+ *
+ * 🔵 **결재 중 — 불출 결재가 돌고 있음 (2026-10-21, 조각 11e)**
+ *   - 담당자가 [불출 신청]으로 결재를 올리면 신청이 `IN_APPROVAL` 로 간다(`src/lib/approval/part-issue.ts`).
+ *   - 🔴 **그때도 확인·반려·마감·보류·취소가 전부 막힌다 — 보류와 똑같이 「저절로」다.** 다섯 함수 모두 상태를
+ *     WHERE 에 걸고 `IN_APPROVAL` 을 받는 곳이 하나도 없다. 막는 판정을 새로 더하지 않았다.
+ *     🔴 **그 전에는 막히지 않았고, 그것이 결함이었다**: 결재가 도는 중에 담당자가 반려하면 결재건은
+ *     `PENDING_APPROVAL` 로 살아남아 결재자에게 계속 떠서 **이미 반려된 요청을 결재하게 됐다.**
+ *   - 🔴 **다만 실행(`confirmRequest` via `APPROVAL_EXECUTION`)은 집어야 한다** — 안 그러면 결재를 다 받고도
+ *     부품이 안 나간다. 그 하나만 묶음을 넓혀 가른다(`ConfirmPath`).
+ *   - 🔵 되돌리는 길은 **결재건을 거두는 것**이고, 그러면 신청은 `reopenedRequestStatus` 가 고르는 자리로 돌아온다.
  */
 export interface RequestLineView {
   partId: string;
@@ -332,6 +345,19 @@ export type ConfirmResult =
     }
   | { ok: false; message: string };
 
+/**
+ * **어느 길로 들어온 확인인가** (2026-10-21, 조각 11e). 🔴 집을 수 있는 신청 상태가 달라진다.
+ *
+ *  · `MANUAL`             — 사람이 부품 요청 관리에서 [확인]을 눌렀다(`confirmRequestAction`).
+ *  · `APPROVAL_EXECUTION` — 결재를 다 받은 건을 「승인 요청건」에서 [실행]했다(`executePartIssueApproval`).
+ *
+ * 🔴 **선택이 아니라 필수다.** 안 적으면 조용히 한쪽으로 기울고, 기운 쪽에 따라 **결재가 통째로 새거나
+ *    (MANUAL 이 `IN_APPROVAL` 을 집으면) 결재를 다 받고도 부품이 안 나간다**(실행이 못 집으면). 두 길 다
+ *    눈에 안 띄는 결함이라, 기본값을 두지 않고 **부르는 자리마다 적게** 해 tsc 가 빠진 곳을 잡게 한다
+ *    (`CONFIRMATION_TYPES` 에서 역할 매개변수를 지운 것과 같은 수법 — `./codes.ts`).
+ */
+export type ConfirmPath = "MANUAL" | "APPROVAL_EXECUTION";
+
 export interface ConfirmOptions {
   /**
    * 줄별 「이번에 줄 수량」. 🔵 비우면 **남은 수량 전부** — 화면(조각 4d)이 생기기 전까지의 기존 동작 그대로다.
@@ -340,6 +366,8 @@ export interface ConfirmOptions {
   quantities?: readonly IssueQuantity[];
   /** 「2개는 다음 주에」처럼 담당자가 그 회차에 남기는 말 */
   note?: string;
+  /** 🔴 위 `ConfirmPath` — 기본값이 없다. */
+  via: ConfirmPath;
 }
 
 /**
@@ -348,10 +376,15 @@ export interface ConfirmOptions {
  * 🔴 한 번에 `inArray` 로 집지 않고 상태마다 한 번씩 시도하는 까닭: `.returning()` 은 **바뀐 뒤**(CONFIRMING) 값을 주므로
  *    실패했을 때 어디로 되돌려야 하는지(PENDING 인지 PARTIAL 인지)를 알 수 없다. 되돌릴 자리를 알아야 한다.
  *    첫 번째 시도가 거의 언제나 맞는다(PENDING).
+ *
+ * 🔴 **집을 수 있는 묶음을 부르는 쪽이 건넨다** (2026-10-21, 조각 11e). 사람이 누르는 [확인]과 결재 실행이
+ *    같은 `confirmRequest` 를 부르는데 집어도 되는 상태가 다르기 때문이다 — 까닭은 `./codes` 의
+ *    `EXECUTABLE_REQUEST_STATUSES` 주석. 🔵 되돌릴 자리(`previousStatus`)는 **집기 전 그 상태 그대로**라,
+ *    실행이 재고 부족으로 막히면 신청은 `IN_APPROVAL` 로 돌아간다(결재건은 `APPROVED` 로 남아 다시 누를 수 있다).
  */
-async function claimRequest(id: string): Promise<{ row: typeof stockRequests.$inferSelect; previousStatus: RequestStatus } | null> {
+async function claimRequest(id: string, claimable: readonly RequestStatus[]): Promise<{ row: typeof stockRequests.$inferSelect; previousStatus: RequestStatus } | null> {
   // 🔵 집을 수 있는 상태의 한 벌은 `./codes` 에 있다 — 화면의 [확인] 단추도 **같은 것**을 본다(조각 4d).
-  for (const previousStatus of CLAIMABLE_REQUEST_STATUSES) {
+  for (const previousStatus of claimable) {
     const [row] = await db()
       .update(stockRequests)
       .set({ status: "CONFIRMING" })
@@ -372,6 +405,20 @@ async function claimRequest(id: string): Promise<{ row: typeof stockRequests.$in
  */
 async function issuedQuantities(requestId: string): Promise<Map<string, number>> {
   return (await issuedQuantitiesOf([requestId])).get(requestId) ?? new Map();
+}
+
+/**
+ * 그 신청에서 **이미 나간 수량의 합**. 🔵 「다시 열면 어느 자리로 가나」를 가리는 두 곳이 쓴다 —
+ * 보류 풀기(아래)와 불출 결재 거두기(`src/lib/approval/part-issue.ts`).
+ *
+ * 🔴 **트랜잭션 밖에서 읽어도 된다** — 두 자리 모두 신청이 `ON_HOLD` 거나 `IN_APPROVAL` 이고, 그 두 상태는
+ *    어느 쪽도 집히지 않아(`CLAIMABLE_REQUEST_STATUSES`) 그 사이 불출이 일어날 수 없다. 🔵 실행하는 길은
+ *    `IN_APPROVAL` 을 집지만 결재건이 `APPROVED` 일 때만 열리고, 거두기는 `PENDING_APPROVAL` 일 때만 열린다.
+ */
+export async function issuedTotalForRequest(requestId: string): Promise<number> {
+  let total = 0;
+  for (const q of (await issuedQuantities(requestId)).values()) total += q;
+  return total;
 }
 
 /**
@@ -414,6 +461,15 @@ function isIssueConflict(e: unknown): boolean {
 const ON_HOLD_MESSAGE = "보류 중인 신청입니다. 먼저 보류를 풀어야 합니다.";
 
 /**
+ * 결재가 돌고 있어 막혔을 때의 문구 (2026-10-21, 조각 11e).
+ *
+ * 🔴 **「이미 처리된 신청입니다」는 결재 중에는 거짓말이다** — 처리되지도, 없지도 않다. 보류 때 같은 까닭으로
+ *    문구를 가른 선례 그대로다(아래 `failureMessage`). **무엇을 하면 되는지까지** 말한다: 이 상태에서 할 수
+ *    있는 일은 결재를 기다리거나 올린 사람이 결재건을 거두는 것 둘뿐이다.
+ */
+const IN_APPROVAL_MESSAGE = "불출 결재가 돌고 있는 신청입니다. 「승인 요청건」 화면에서 결재가 끝난 뒤 [실행]으로 내줍니다 — 되돌리려면 결재를 올린 분이 먼저 거둬야 합니다.";
+
+/**
  * **막힌 뒤에만** 부르는 문구 고르개 (2026-10-15, 조각 10a).
  *
  * 확인·반려·마감은 상태를 WHERE 에 걸어 `ON_HOLD` 를 받지 않는다 — 그래서 보류 중인 신청에 눌러도 막히는데,
@@ -425,12 +481,15 @@ const ON_HOLD_MESSAGE = "보류 중인 신청입니다. 먼저 보류를 풀어�
  */
 async function failureMessage(id: string, fallback: string): Promise<string> {
   const [r] = await db().select({ status: stockRequests.status }).from(stockRequests).where(eq(stockRequests.id, id));
-  return r?.status === "ON_HOLD" ? ON_HOLD_MESSAGE : fallback;
+  if (r?.status === "ON_HOLD") return ON_HOLD_MESSAGE;
+  if (r?.status === "IN_APPROVAL") return IN_APPROVAL_MESSAGE;
+  return fallback;
 }
 
-export async function confirmRequest(id: string, admin: Actor, opts: ConfirmOptions = {}): Promise<ConfirmResult> {
+export async function confirmRequest(id: string, admin: Actor, opts: ConfirmOptions): Promise<ConfirmResult> {
   // 1. 집기 — 한 사람만. 일부만 나간 것(PARTIAL)은 다시 집어 다음 회차를 낸다. 보류 중이면 집히지 않는다(ON_HOLD 는 집는 묶음에 없다).
-  const claimed = await claimRequest(id);
+  //    🔴 **결재 중(IN_APPROVAL)은 실행하는 길에서만 집힌다** — 사람이 누르는 [확인]은 못 집는다(`ConfirmPath`).
+  const claimed = await claimRequest(id, opts.via === "APPROVAL_EXECUTION" ? EXECUTABLE_REQUEST_STATUSES : CLAIMABLE_REQUEST_STATUSES);
   if (!claimed) return { ok: false, message: await failureMessage(id, "이미 처리된 신청이거나 없는 신청입니다.") };
   const { row: request, previousStatus } = claimed;
   const restore = () => db().update(stockRequests).set({ status: previousStatus }).where(eq(stockRequests.id, id));
@@ -516,12 +575,20 @@ export async function confirmRequest(id: string, admin: Actor, opts: ConfirmOpti
   return { ok: true, result: written.result, issueNo: written.issueNo, issuing: plan.issuing, remaining: plan.remaining, done };
 }
 
+/**
+ * 반려 — 「하나도 안 준다」.
+ *
+ * 🔴 **아직 아무것도 안 나간 신청만** 받는다. 묶음이 `./codes` 의 `REJECTABLE_REQUEST_STATUSES` 로 나가 있는
+ *    까닭은 거기 주석에 있다 — 값은 처음부터의 `PENDING` 그대로이고, 바뀐 것은 **시험이 볼 수 있게** 된 것뿐이다.
+ * 🔵 그래서 **결재 중(`IN_APPROVAL`)인 신청은 저절로 막힌다** (2026-10-21). 막는 판정을 따로 더하지 않았다 —
+ *    보류가 저절로 막히는 자리와 **같은 한 줄**이다(이 파일 머리말). 막힌 뒤 나가는 말만 `failureMessage` 가 가린다.
+ */
 export async function rejectRequest(id: string, note: string, admin: Actor): Promise<{ ok: boolean; message?: string }> {
   const now = new Date();
   const [row] = await db()
     .update(stockRequests)
     .set({ status: "REJECTED", decidedBy: admin.id, decidedByName: admin.name, decidedAt: now, decisionNote: note })
-    .where(and(eq(stockRequests.id, id), eq(stockRequests.status, "PENDING")))
+    .where(and(eq(stockRequests.id, id), inArray(stockRequests.status, [...REJECTABLE_REQUEST_STATUSES])))
     .returning({ summary: stockRequests.summary, requestedByName: stockRequests.requestedByName });
   if (!row) return { ok: false, message: await failureMessage(id, "이미 처리된 신청이거나 없는 신청입니다.") };
   await db()
@@ -611,10 +678,9 @@ export async function holdRequest(id: string, reason: string, admin: Actor): Pro
  * 🔵 **사유를 받지 않는다.** 보류는 왜 멈추는지가 남아야 하지만, 푸는 것은 「다시 진행한다」는 뜻뿐이라 적을 것이 없다.
  */
 export async function releaseRequestHold(id: string, admin: Actor): Promise<{ ok: boolean; message?: string }> {
-  const issued = await issuedQuantities(id);
-  let out = 0;
-  for (const q of issued.values()) out += q;
-  const next: RequestStatus = out > 0 ? "PARTIAL" : "PENDING";
+  const out = await issuedTotalForRequest(id);
+  // 🔵 돌아갈 자리를 고르는 규칙은 `./codes` 의 `reopenedRequestStatus` 하나다 — 불출 결재 거두기도 **같은 것**을 쓴다.
+  const next: RequestStatus = reopenedRequestStatus(out);
 
   const [row] = await db()
     .update(stockRequests)

@@ -4,7 +4,14 @@ import Link from "next/link";
 import { useState } from "react";
 import { RequestActions, type RequestActionLine, type RequestActionStatus } from "./RequestActions";
 import type { RequestSource, RequestStatus } from "@/db/schema/stock-requests";
-import { partIssueConfirmLabel, type PartIssueLock } from "@/lib/approval/part-issue-gate";
+import {
+  PART_ISSUE_APPROVALS_LINK_LABEL,
+  PART_ISSUE_APPROVALS_PATH,
+  PART_ISSUE_LOCK_LABELS,
+  PART_ISSUE_LOCK_TITLES,
+  partIssueConfirmLabel,
+  type PartIssueLock,
+} from "@/lib/approval/part-issue-gate";
 import { OWNER_LABEL, formatQuantity, type Owner } from "@/lib/parts/codes";
 import { ENTRY_TYPE_LABEL, REQUEST_SOURCE_LABEL, REQUEST_STATUS_LABEL, REQUEST_STATUS_ORDER, canCancelRequest, isClaimableRequest, requestStatusBadge, requestStatusLabel, type EntryType } from "@/lib/stock/codes";
 import { partDetailHref, requestItemDetails, type RequestItemPart } from "@/lib/stock/request-item-detail";
@@ -111,10 +118,35 @@ function fullAt(iso: string): string {
  *
  * 🔴 「대기로 세는 상태」와 「지금 손댈 수 있는 상태」는 다른 묶음이다(codes.ts). 처리 중(CONFIRMING)에 그리면
  *    눌러도 집기에서 거절당하고, 보류는 [보류 해제] 하나만 그린다 — 그 가르기는 `RequestActions` 안에 있다.
+ * 🔵 결재 중(`IN_APPROVAL`)도 `null` 이다 — 그 자리에서 할 수 있는 일이 하나도 없다. 대신 **갈 곳은 말해 준다**
+ *    (아래 `IssueLockNotice`): 단추를 지우면서 길까지 지우면 막다른 길이 된다.
  */
 function actionStatusOf(status: RequestStatus): RequestActionStatus | null {
   if (isClaimableRequest(status)) return status;
   return status === "ON_HOLD" ? "ON_HOLD" : null;
+}
+
+/**
+ * 단추를 그릴 수 없는 줄에 세우는 **길 안내** (2026-10-21, 조각 11e).
+ *
+ * 🔴 **그 전에는 `RequestActions` 안의 잠긴 [확인] 자리가 이 말을 했다.** 결재를 올려도 신청이 `PENDING` 이라
+ *    단추 묶음이 그려졌고, 거기서 「승인 대기 중」·「실행 대기 중」과 「승인 요청건」 링크가 나왔다. 이제
+ *    신청이 `IN_APPROVAL` 로 가면 단추 묶음 자체가 안 그려지므로, **그 말을 잃지 않으려고 여기 옮겨 세운다.**
+ * 🔴 둘을 **다른 말로** 보여 주는 까닭은 `part-issue-gate.ts` 의 `PART_ISSUE_LOCK_LABELS` 주석 그대로다 —
+ *    「승인 대기」는 결재자를 기다리는 것이고, 「실행 대기」는 **담당자 자신이** 누르면 되는 것이다.
+ * 🔵 판정은 서버가 내려보낸 값(`issueLock`)뿐이다. 화면이 다시 세지 않는다.
+ */
+function IssueLockNotice({ lock }: { lock: PartIssueLock }) {
+  return (
+    <span className="flex flex-wrap items-center gap-1.5 no-print">
+      <span className="text-xs text-zinc-500" title={PART_ISSUE_LOCK_TITLES[lock]}>
+        {PART_ISSUE_LOCK_LABELS[lock]}
+      </span>
+      <Link href={PART_ISSUE_APPROVALS_PATH} className="text-xs text-zinc-600 underline hover:text-zinc-900">
+        {PART_ISSUE_APPROVALS_LINK_LABEL}
+      </Link>
+    </span>
+  );
 }
 
 /** 「무엇에 쓰려는 신청인가」 — 🔵 기록 내역 화면이 그리는 방식과 **같게** 한다. */
@@ -399,6 +431,9 @@ export function RequestManagerScreen({
                               approvalRequired={approvalRequired}
                               issueLock={issueLocks[r.id] ?? null}
                             />
+                          ) : issueLocks[r.id] ? (
+                            /* 🔵 결재가 그 신청을 붙들고 있으면 단추는 없어도 **갈 곳은 말해 준다**(위 `IssueLockNotice`). */
+                            <IssueLockNotice lock={issueLocks[r.id]} />
                           ) : isAdmin ? (
                             <span className="text-xs text-zinc-400">처리할 것 없음</span>
                           ) : null}

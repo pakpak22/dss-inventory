@@ -174,7 +174,13 @@ export async function confirmRequestAction(_prev: RequestActionState, formData: 
     .slice(0, 500);
   let r;
   try {
-    r = await confirmRequest(id, { id: session.user.id, name: session.user.name }, { quantities: parsed.quantities ?? undefined, note });
+    /**
+     * 🔴 **`via: "MANUAL"` 이 이 길을 가른다** (2026-10-21, 조각 11e). 결재가 돌고 있는 신청
+     * (`IN_APPROVAL`)은 이 길로 **집히지 않는다** — 집히게 두면 관리자가 결재선을 끄는 순간
+     * 위의 문이 열려, 결재를 받던 부품이 여기서 한 번 나가고 나중에 [실행]으로 또 한 번 나간다.
+     * 🔵 실행하는 길만 묶음이 넓다(`src/lib/stock/codes.ts` 의 `EXECUTABLE_REQUEST_STATUSES`).
+     */
+    r = await confirmRequest(id, { id: session.user.id, name: session.user.name }, { quantities: parsed.quantities ?? undefined, note, via: "MANUAL" });
   } catch (e) {
     console.error("[stock] 확인 실패:", e instanceof Error ? e.message : e);
     return { error: "확인하지 못했습니다. 잠시 뒤 다시 시도하십시오." };

@@ -55,10 +55,14 @@ export const ADMIN_ONLY_TYPES: ReadonlySet<EntryType> = new Set<EntryType>(["ADJ
  * 🔴 두 묶음이 `REQUEST_STATUSES` 를 **빠짐없이, 겹치지 않게** 덮는다. 상태를 더하고 여기를 안 고치면 그 상태의
  *    신청이 어느 목록에도 안 걸린다 — 원장은 안 깨지므로 아무 오류 없이 조용히 사라진다. 그 덮기는
  *    `tests/stock-requests.test.ts` 가 지킨다.
+ * 🔵 **`IN_APPROVAL`(불출 결재가 돌고 있음)도 대기다** (2026-10-21, 조각 11e). `PARTIAL`·`ON_HOLD` 와 **같은
+ *    논리**다 — 결재가 끝나면 다시 담당자 손으로 돌아오는 **중간** 자리이지 끝난 것이 아니고, 결정 묶음에
+ *    넣으면 「결재 중」인 신청이 부품 요청 관리 목록의 「처리 중인 것」에서 사라져 아무도 안 본다.
+ *    🔴 다만 **재촉하는 숫자**(머리말 배지·알림 종)에서는 뺀다 — 아래 `ACTIONABLE_REQUEST_STATUSES`.
  * 🔵 서버 전용이 아닌 이 파일에 둔다 — 세는 질의(`src/lib/stock/requests.ts`, server-only)와 시험이 **같은 한 벌**을 본다.
  *    「대기」를 가르는 글자가 적힌 곳은 여기 하나뿐이어야 머리말 배지와 알림 종이 어긋나지 않는다.
  */
-export const PENDING_REQUEST_STATUSES = ["PENDING", "CONFIRMING", "PARTIAL", "ON_HOLD"] as const satisfies readonly RequestStatus[];
+export const PENDING_REQUEST_STATUSES = ["PENDING", "CONFIRMING", "PARTIAL", "ON_HOLD", "IN_APPROVAL"] as const satisfies readonly RequestStatus[];
 
 /** 더 볼 일이 없는 것 — 신청한 사람에게 결과로만 보인다. 🔴 `PARTIAL`·`ON_HOLD` 는 여기 **없다**(위 주석). */
 export const DECIDED_REQUEST_STATUSES = ["CONFIRMED", "REJECTED", "CANCELLED"] as const satisfies readonly RequestStatus[];
@@ -70,6 +74,11 @@ export const DECIDED_REQUEST_STATUSES = ["CONFIRMED", "REJECTED", "CANCELLED"] a
  *    **일부러 멈춰 둔** 것을 「대기 N」으로 세면 매일 재촉하는 숫자가 되어, 보류를 걸어 둔 뜻이 사라진다.
  *    대기 **목록**에는 그대로 보인다(위 주석) — 안 보이면 잊히기 때문이다. 「목록에 보인다」와
  *    「숫자로 재촉한다」는 뜻이 다르다. 그래서 묶음을 또 하나 둔다.
+ * 🔴 **`IN_APPROVAL`(결재 중)도 뺀다** (2026-10-21, 조각 11e). 보류와 **같은 까닭**이고, 이쪽이 더 분명하다 —
+ *    결재가 도는 동안 담당자가 그 신청에 할 수 있는 일이 **하나도 없다**(확인·반려·마감·보류가 전부 막힌다).
+ *    그런데도 「대기 N」에 세면 담당자는 매일 그 숫자를 보고 화면을 열었다가 **누를 단추가 없다**는 것을
+ *    확인하고 닫게 된다. 그 신청이 다시 일감이 되는 것은 결재가 끝나 「승인 요청건」에 [실행]이 서는 순간이고,
+ *    그 숫자는 결재 쪽 종(`summarizePartIssueApprovalsToDecide`·실행 대기 목록)이 따로 세고 있다.
  * 🔴 **배지(`countPendingRequests`)와 종(`summarizePendingRequests`)이 반드시 이 한 묶음을 같이 본다.**
  *    둘이 갈리면 「배지에는 있는데 종에는 없는」 신청이 생긴다(`src/lib/stock/requests.ts` 의 두 함수 주석).
  */
@@ -84,6 +93,14 @@ export const ACTIONABLE_REQUEST_STATUSES = ["PENDING", "CONFIRMING", "PARTIAL"] 
  * 🔴 **화면과 서버가 이 한 벌을 같이 본다**(`src/lib/stock/requests.ts` 의 `claimRequest`,
  *    `src/app/(app)/entries/page.tsx` 의 단추 그리기). 조각 4c 까지는 화면이 `status === "PENDING"` 만 보고 그려서
  *    일부 나간 신청이 대기 목록에 **보이는데 누를 수 없었다** — 「보이는데 못 누르는 줄」이 생기는 자리다.
+ *
+ * 🔴 **`IN_APPROVAL`(결재 중)은 여기 넣지 않는다** (2026-10-21, 조각 11e). 넣으면 사람이 누르는 [확인]이
+ *    **결재가 도는 중인 신청에서 그대로 재고를 뺀다.** 지금 그 길에 달린 문은 「절차가 쓰이고 있는가」
+ *    하나뿐이라(`confirmRequestAction` → `isPartIssueApprovalRouteInForce`), 관리자가 결재선을 끄는 순간
+ *    살아 있는 결재건이 있는 신청에도 문이 열린다 — 그러면 결재를 받던 부품이 한 번, 나중에 [실행]으로 또
+ *    한 번 나간다. **상태를 여기서 빼 두면 그 틈이 상태 자체로 막힌다.**
+ *    🔵 그래서 **결재를 다 받은 건을 실행하는 길은 묶음이 다르다** — 아래 `EXECUTABLE_REQUEST_STATUSES`.
+ * 🔵 이 묶음은 **[보류]가 걸리는 묶음이기도 하다**(`holdRequest`) — 그래서 결재 중인 신청은 보류도 저절로 막힌다.
  */
 export const CLAIMABLE_REQUEST_STATUSES = ["PENDING", "PARTIAL"] as const satisfies readonly RequestStatus[];
 export type ClaimableRequestStatus = (typeof CLAIMABLE_REQUEST_STATUSES)[number];
@@ -91,6 +108,52 @@ export type ClaimableRequestStatus = (typeof CLAIMABLE_REQUEST_STATUSES)[number]
 /** 🔵 좁히는 검사다 — 화면이 단추 묶음에 넘기는 상태가 **둘 중 하나임을 타입이 보증**한다(그래서 거기서 「반려냐 마감이냐」를 가를 수 있다). */
 export function isClaimableRequest(status: RequestStatus): status is ClaimableRequestStatus {
   return (CLAIMABLE_REQUEST_STATUSES as readonly RequestStatus[]).includes(status);
+}
+
+/**
+ * **결재를 다 받은 건을 실행할 때** 집을 수 있는 상태 (2026-10-21, 조각 11e).
+ *
+ * 🔴 **위 `CLAIMABLE_REQUEST_STATUSES` 보다 넓다.** 결재를 올리면 신청이 `IN_APPROVAL` 로 가는데,
+ *    실행은 `confirmRequest` 를 거쳐 원장을 쓰므로 그 상태를 **집을 수 있어야 한다.** 여기를 안 넓히면
+ *    **결재를 다 받고도 [실행]이 「이미 처리된 신청」으로 거절당한다.**
+ * 🔴 **그런데 `PENDING`·`PARTIAL` 도 그대로 들어 있다.** 이 조각이 나가기 **전에** 올라간 결재건은 신청이
+ *    아직 `PENDING`(또는 `PARTIAL`)인 채로 살아 있다 — `IN_APPROVAL` 하나만 집게 하면 **그 건들이 결재를
+ *    다 받고도 영영 실행되지 않는다.** 넓혀 두어도 새는 곳이 없다: 이 묶음을 쓰는 길은 결재건이 `APPROVED`
+ *    일 때만 열리고(`checkCanExecutePartIssue`), 한 신청에 살아 있는 결재건은 하나뿐이다(부분 유니크 색인).
+ * 🔵 **두 묶음을 가르는 자리는 `confirmRequest` 의 매개변수 하나**다(`ConfirmOptions.via`) — 사람이 누르는
+ *    [확인]과 결재 실행이 **같은 함수**를 부르기 때문이다. 문을 그 함수 안에 달면 실행까지 막힌다는 것은
+ *    `src/lib/approval/part-issue-gate.ts` 머리말에 적힌 그대로이고, 여기서는 **막는 대신 묶음을 가른다.**
+ * 🔵 **차례에 뜻이 있다.** `claimRequest` 는 되돌릴 자리를 알아야 해서 상태마다 한 번씩 집어 보는데
+ *    (그 함수 주석), 실행하는 길에서 거의 언제나 맞는 것은 `IN_APPROVAL` 이라 **맨 앞**에 둔다.
+ */
+export const EXECUTABLE_REQUEST_STATUSES = ["IN_APPROVAL", ...CLAIMABLE_REQUEST_STATUSES] as const satisfies readonly RequestStatus[];
+
+/**
+ * **[반려]가 받는 상태** — 아직 아무것도 안 나간 것뿐이다 (2026-10-14 부터의 규칙을 2026-10-21 에 묶음으로 뽑았다).
+ *
+ * 🔵 값은 `rejectRequest` 가 처음부터 WHERE 에 걸던 `PENDING` 그대로다. **동작이 바뀐 것이 아니라**,
+ *    「결재 중(`IN_APPROVAL`)인 신청은 반려되지 않는다」를 시험이 돌려 볼 수 있게 글자로 꺼낸 것이다
+ *    (이 저장소에는 DB 시험이 없다 — `src/lib/approval/part-issue-rules.ts` 머리말).
+ * 🔴 **마감(`closeRequest`)은 `PARTIAL` 만 받는다** — 반려는 「하나도 안 준다」, 마감은 「준 것은 두고 나머지만
+ *    접는다」라 묶음이 겹치지 않는다(아래 `isClosedRequest` 주석).
+ */
+export const REJECTABLE_REQUEST_STATUSES = ["PENDING"] as const satisfies readonly RequestStatus[];
+
+export function isRejectableRequest(status: RequestStatus): boolean {
+  return (REJECTABLE_REQUEST_STATUSES as readonly RequestStatus[]).includes(status);
+}
+
+/**
+ * **다시 열릴 때 돌아갈 자리** — 이미 나간 것이 있으면 `PARTIAL`, 하나도 없으면 `PENDING`.
+ *
+ * 🔴 **돌아갈 상태를 칸에 적어 두지 않고 센다.** 적어 두면 그 사이 사정이 달라졌을 때 옛 상태로 되돌아가
+ *    실제와 어긋난다 — 나간 수량에서 다시 구하는 편이 언제나 맞다(A/S 쪽 `statusAfterHoldRelease` 의 까닭 그대로).
+ * 🔵 **쓰는 자리가 둘이다**: 보류 풀기(`releaseRequestHold`)와 불출 결재 거두기
+ *    (`cancelPartIssueApproval` → `requestStatusAfterPartIssue`). 둘 다 「담당자 손으로 돌려놓는다」는 같은 일이라
+ *    규칙도 하나여야 한다 — 손으로 두 벌 적으면 한쪽만 `PARTIAL` 을 잊는 날이 온다.
+ */
+export function reopenedRequestStatus(issuedTotal: number): RequestStatus {
+  return issuedTotal > 0 ? "PARTIAL" : "PENDING";
 }
 
 /**
@@ -137,6 +200,11 @@ export const EXTERNALLY_CANCELLABLE_REQUEST_SOURCES = ["AS"] as const satisfies 
  *    거기도 **같은 세 조건**을 건다. 여기를 지워도 쓰기는 안 뚫린다.
  * 🔴 `requestedBy` 가 `null` 이면(= A/S 에서 왔고 재고 관리에 없는 사람) 누구와도 같지 않다 — 지어낸 기본값을
  *    넣지 않는다. SQL 쪽도 `NULL = <내 id>` 가 참이 되지 않아 **저절로** 같은 답을 낸다.
+ * 🔵 **결재 중(`IN_APPROVAL`)인 신청도 저절로 막힌다** (2026-10-21) — 아래 한 줄이 `PENDING` 만 받기 때문이다.
+ *    신청자가 거두면 결재건은 살아남아 결재자에게 계속 뜨므로(**이미 취소된 요청을 결재하게 된다**) 막는 것이 맞고,
+ *    막는 자리를 새로 더하지 않는다. 거두고 싶으면 결재를 올린 담당자가 먼저 결재건을 거둬야 한다(그러면
+ *    신청이 `PENDING` 으로 돌아와 이 단추가 다시 선다). A/S 쪽 [요청 취소]도 같은 자리에서 저절로 잠긴다
+ *    (저쪽 `CANCELLABLE_STATUS_CODE = "PENDING"`, 그리고 `cancelExternalRequest` 의 WHERE).
  */
 export function canCancelRequest(request: { source: RequestSource; status: RequestStatus; requestedBy: string | null }, actorUserId: string): boolean {
   if (!(CANCELLABLE_REQUEST_SOURCES as readonly RequestSource[]).includes(request.source)) return false;
@@ -169,9 +237,14 @@ export function isClosedRequest(status: RequestStatus, lines: readonly { quantit
  * 🔵 글자는 **기록 내역의 「확인 대기」 구역이 쓰던 것 그대로**다(「처리 중」·「일부 나감」·「반려」·「취소」).
  *    그 구역은 2026-10-15 에 걷어냈지만 글자는 옮겨 왔다 — 쓰는 분이 이미 그 말로 부르고 있어서,
  *    화면이 옮겨 갔다고 낱말까지 바꾸면 같은 것이 다른 것으로 읽힌다. 표는 **한 곳에** 둔다.
+ * 🔵 **「결재 중」은 결재건 쪽 글자와 같다**(`PART_ISSUE_STATUS_LABELS.PENDING_APPROVAL`). 신청 줄과 결재건 줄이
+ *    같은 순간을 다른 말로 부르면, 두 화면을 오가는 담당자가 서로 다른 일인 줄 안다.
+ * 🔵 차례에 뜻을 둔다 — 거르개가 이 표의 **적힌 차례**로 돈다(아래 `REQUEST_STATUS_ORDER`). 그래서
+ *    「결재 중」을 스키마의 맨 뒤가 아니라 일이 흘러가는 자리(대기 다음)에 적는다.
  */
 export const REQUEST_STATUS_LABEL: Record<RequestStatus, string> = {
   PENDING: "대기",
+  IN_APPROVAL: "결재 중",
   CONFIRMING: "처리 중",
   PARTIAL: "일부 나감",
   CONFIRMED: "확인됨",
@@ -199,9 +272,14 @@ export const REQUEST_STATUS_ORDER: readonly RequestStatus[] = Object.keys(REQUES
  * 🔵 글자 표와 마찬가지로 **이 표를 보는 자리는 한 곳**이다(부품 요청 관리) — 2026-10-15 에 기록 내역의
  *    「확인 대기」 구역을 걷어내면서 그렇게 됐다. 그래도 색을 화면 파일에 흩지 않는다: 글자와 색은 짝이고,
  *    짝이 갈리면 「마감인데 초록」 같은 줄이 생긴다(아래 `requestStatusBadge`).
+ * 🔴 **「결재 중」도 대기와 다른 색이다**(남색 ↔ 주황, 2026-10-21). 보류와 같은 까닭이다 — 결재가 도는 동안
+ *    담당자가 그 신청에 할 수 있는 일이 하나도 없는데(확인·반려·마감·보류가 전부 막힌다) 대기와 같은 주황이면
+ *    지금 처리해야 할 것으로 보고 눌러 보게 된다. 🔵 **보류(보라)와도 가른다**: 보류는 「사람이 일부러 멈춰 둔
+ *    것」이고 결재 중은 「남이 들고 있어 나아가는 중」이라, 담당자가 해야 할 일(풀기 ↔ 기다리기)이 다르다.
  */
 export const REQUEST_STATUS_BADGE: Record<RequestStatus, string> = {
   PENDING: "bg-amber-100 text-amber-800",
+  IN_APPROVAL: "bg-indigo-100 text-indigo-800",
   CONFIRMING: "bg-zinc-200 text-zinc-700",
   PARTIAL: "bg-blue-100 text-blue-800",
   CONFIRMED: "bg-green-100 text-green-800",
