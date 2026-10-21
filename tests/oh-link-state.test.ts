@@ -34,6 +34,7 @@ function option(fields: Partial<OhPartLinkOption> & { id: string; no: number; na
     customerName: "",
     drawingNo: "",
     kyosanPartNo: "",
+    quotePrice: null,
     ...fields,
   };
 }

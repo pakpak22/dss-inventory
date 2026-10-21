@@ -80,6 +80,15 @@ import type { OhTemplateView } from "@/lib/oh/view";
  * 그대로 보내면 **멀쩡히 정해져 있던 단가가 지워진다.** 그래서 보낼 줄을 두 갈래로 가린다:
  * 이미 저장돼 있던 부품(값을 안다) + 사람이 그 칸에 손댄 부품. 나머지는 **아예 보내지 않는다**
  * — 액션이 「보내지 않으면 건드리지 않는다」를 보장한다(`src/lib/oh/input.ts` 머리말).
+ *
+ * ── 🔴 O/H 단가가 비어 있으면 견적가를 회색으로 비쳐 준다 (2026-10-22, 쓰는 분 결정) ──
+ * 칸이 비어 있고 그 줄에 재고 연결이 있으면(`link.part`), 그 부품의 `quotePrice`(견적가)를
+ * **placeholder 로만** 보여 준다 — 입력값이 아니다. [견적가 …원 적용] 을 누르면 `changePrice` 로
+ * **그 칸에 실제로 값을 넣는다**(사람이 친 것과 똑같은 길). 🔴 **누르지 않으면 아무 일도 안
+ * 일어난다** — `prices`·`touchedPrices` 상태가 그대로이므로 저장은 이 조각 전과 똑같이 움직인다
+ * (`save()` 의 `priceEntries` 는 여전히 `knownPrices`·`touchedPrices` 만 본다). placeholder 는
+ * **값이 아니라 글자**라서 `priceRaw`·`prices` 에 닿지 않는다 — 저장되는 뜻을 바꾸지 않는 길이
+ * 바로 이것이다.
  * ============================================================================
  */
 
@@ -740,6 +749,10 @@ function TemplateEditor({
           const priceCheck = parseOhPriceValue(priceRaw);
           const priceServerError = row.partId === null ? undefined : fieldErrors[`${OH_PRICE_FIELD_ERROR_PREFIX}${row.partId}`];
           const priceUnknown = row.partId !== null && !knownPrices.has(row.partId) && !touchedPrices.has(row.partId);
+          // 🔴 견적가는 **이어진 부품이 있을 때만** 안다(`link.part`) — 자유 입력 줄·지워진 부품
+          //    연결(MISSING)은 가리킬 부품이 없어 `null` 이다(파일 머리말).
+          const quotePrice = "part" in link ? link.part.quotePrice : null;
+          const quoteHint = quotePrice === null ? null : `견적가 ${quotePrice.toLocaleString("ko-KR")}원`;
 
           return (
             <div key={row.key} className={ITEM_GRID}>
@@ -905,17 +918,43 @@ function TemplateEditor({
                   }}
                   inputMode="numeric"
                   disabled={busy || row.partId === null}
-                  placeholder={row.partId === null ? "재고 연결 필요" : priceUnknown ? "저장 뒤 표시" : "미정"}
+                  placeholder={
+                    row.partId === null
+                      ? "재고 연결 필요"
+                      : quoteHint
+                        ? `${priceUnknown ? "저장 뒤 표시" : "미정"} · ${quoteHint}`
+                        : priceUnknown
+                          ? "저장 뒤 표시"
+                          : "미정"
+                  }
                   title={
                     row.partId === null
                       ? "재고와 이어야 O/H 단가를 정할 수 있습니다."
-                      : priceUnknown
-                        ? "이 부품에 이미 정해 둔 O/H 단가가 있을 수 있습니다. 비워 두면 그대로 두고, 값을 적으면 그 값으로 정합니다."
-                        : "비워 두면 정하지 않음입니다. 0 은 무상이라는 뜻입니다."
+                      : (priceUnknown
+                          ? "이 부품에 이미 정해 둔 O/H 단가가 있을 수 있습니다. 비워 두면 그대로 두고, 값을 적으면 그 값으로 정합니다."
+                          : "비워 두면 정하지 않음입니다. 0 은 무상이라는 뜻입니다.") +
+                        (quoteHint ? ` 비워 두는 동안 이 부품의 ${quoteHint}를 회색으로 보여 드립니다 — 값이 아니라 안내이고, 아래 단추를 눌러야 칸에 들어갑니다.` : "")
                   }
                   aria-label={`${index + 1}번째 부품 O/H 단가`}
                   className={INPUT}
                 />
+                {/* 🔴 견적가를 placeholder 로만 비추는 것과 별개로, **누르면 채우는** 몸짓이 따로
+                    있어야 한다(파일 머리말) — placeholder 는 글자일 뿐이라 탭으로도 입력되지 않는다.
+                    값이 생기면(사람이 치거나 이 단추를 눌러서) 더 보여 줄 까닭이 없어 사라진다. */}
+                {quotePrice !== null && priceRaw === "" && row.partId !== null && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (row.partId === null) return;
+                      changePrice(row.partId, String(quotePrice));
+                    }}
+                    disabled={busy}
+                    aria-label={`${index + 1}번째 부품 O/H 단가에 견적가 ${quotePrice.toLocaleString("ko-KR")}원 적용`}
+                    className="mt-1 text-[11px] text-zinc-500 underline underline-offset-2 hover:text-zinc-900 disabled:opacity-50"
+                  >
+                    {quoteHint} 적용
+                  </button>
+                )}
                 {/* 화면에서 미리 재 본다. 최종 판정은 서버가 같은 함수로 다시 한다. */}
                 {row.partId !== null && !priceCheck.ok && <p className={FIELD_ERROR}>{priceCheck.message}</p>}
                 {priceServerError && <p className={FIELD_ERROR}>{priceServerError}</p>}

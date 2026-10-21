@@ -52,8 +52,13 @@ import { isExactNormalizedMatch } from "./name-match";
  * `name2`(품명2)와 `no` 가 함께 오는 까닭: 이 저장소의 `parts` 에는 **품명 유니크 제약이
  * 없다**(같은 이름을 따로 세는 부품이 실제로 16묶음 있다). 같은 이름이 둘 나왔을 때 사람이
  * 어느 재고인지 고르려면 단서가 있어야 하고, 이 시스템에서 사람이 부품을 가리키는 말은 **No.** 다.
+ *
+ * 🔵 **`quotePrice` 는 찾는 칸이 아니다**(`PartQueryFields` 에 없다) — O/H 템플릿 화면이 O/H
+ * 단가 칸을 비워 둔 줄에 **견적가를 회색 placeholder 로 비쳐 주는 데만** 쓴다(2026-10-22).
+ * 🔴 **`null` 은 「견적가를 정하지 않았다」이지 0 이 아니다** — O/H 단가와 같은 잣대다
+ * (`src/lib/api/parts.ts` 의 `ApiPart.overhaulQuotePrice` 머리말).
  */
-export type OhPartLinkOption = PartQueryFields & { id: string };
+export type OhPartLinkOption = PartQueryFields & { id: string; quotePrice: number | null };
 
 export type OhPartLinkState =
   /** 자유 입력 줄인데 품명이 비었다. 저장할 때 걸러지는 줄이라 아직 아무것도 아니다. */

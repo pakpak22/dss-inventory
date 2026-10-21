@@ -143,6 +143,11 @@ export async function listOhTemplates(): Promise<OhTemplateView[]> {
  * `name2`(품명2)와 `no` 를 함께 주는 까닭: 이 저장소의 `parts` 에는 **품명 유니크 제약이
  * 없다**(같은 이름을 따로 세는 부품이 실제로 16묶음 있다). 같은 이름이 둘 나왔을 때 사람이 어느
  * 재고인지 고르려면 단서가 하나는 있어야 한다.
+ *
+ * 🔵 **`quotePrice` 도 함께 준다**(2026-10-22) — 찾는 칸은 아니지만, O/H 단가를 비워 둔 줄에
+ * 화면이 그 부품의 **견적가를 회색 placeholder 로** 비쳐 주는 데 쓴다. 새 조회를 열지 않고 이미
+ * 부품을 읽는 이 자리에 칸만 더한다. `null` 은 「견적가를 정하지 않았다」이고 0 과 다르다 — 그대로
+ * 나른다(`?? 0` 금지, `src/lib/api/parts.ts` 머리말과 같은 잣대).
  */
 export async function listOhPartOptions(): Promise<OhPartLinkOption[]> {
   return db()
@@ -154,6 +159,7 @@ export async function listOhPartOptions(): Promise<OhPartLinkOption[]> {
       customerName: parts.customerName,
       drawingNo: parts.drawingNo,
       kyosanPartNo: parts.kyosanPartNo,
+      quotePrice: parts.quotePrice,
     })
     .from(parts)
     .where(eq(parts.isDeleted, false))
