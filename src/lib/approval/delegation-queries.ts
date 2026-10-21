@@ -1,8 +1,10 @@
 import "server-only";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, desc, eq, gt, isNull } from "drizzle-orm";
 import { db } from "@/db/client";
 import { approvalDelegations } from "@/db/schema/approval-delegations";
-import { actingApproverSubs, type ActingApproverSubs } from "./delegation";
+import { actingApproverSubs, isActiveDelegation, type ActingApproverSubs } from "./delegation";
+import { seoulDateText, seoulEndDateText } from "./delegation-input";
+import { canRevokeDelegation, delegationState, type DelegationRowView } from "./delegation-screen";
 
 /**
  * ============================================================================
@@ -67,4 +69,135 @@ export async function actingApproverSubsFor(
   //    부르는 쪽에 떠넘기지 않는 것이 그 함수의 약속이고, 여기서 빼면 그 약속에 기대는 다른
   //    부르는 쪽이 생겼을 때 조용히 갈린다.
   return actingApproverSubs(rows, actorSub, now);
+}
+
+/* ------------------------------------------------------------------ */
+/* 화면에 보여 줄 줄들 (2026-10-21, 조각 3)                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 「내가 맡긴 것」 한 번에 읽을 줄 수의 상한.
+ *
+ * 🔴 **이 표는 지워지지 않는다**(되돌리기도 깃발이다 — 표 쪽 머리말). 해가 지나면 끝난 줄이
+ * 쌓이고, 상한이 없으면 화면이 수백 줄을 그린다. 🔵 사람이 보는 것은 사실상 맨 위 몇 줄이다.
+ */
+const DELEGATION_LIST_LIMIT = 50;
+
+/**
+ * 표 한 줄에서 화면 줄로. 🔴 **번호 두 칸(`…_sub`)이 여기서 끝난다** — 화면이 받는 모양에는
+ * 번호를 담을 칸이 없다(`./delegation-screen.ts` 머리말).
+ *
+ * 🔵 그래서 부르는 쪽이 번호 둘을 **그대로** 넘긴다. 판정 함수(`delegationState` → 그 안의
+ *    `isActiveDelegation`)가 받는 모양이 위임 한 줄 전체이고, 빈 글자 같은 가짜 값을 끼워 맞춰
+ *    넘기면 **빈 글자가 열쇠로 쓰이는 길**이 한 줄 생긴다 — 다음 사람이 그것을 따라 한다.
+ */
+function toRowView(
+  row: {
+    id: string;
+    delegatorSub: string;
+    delegateSub: string;
+    counterpartName: string;
+    startsAt: Date;
+    endsAt: Date;
+    revokedAt: Date | null;
+    revokedByName: string | null;
+    reason: string;
+  },
+  now: Date,
+  /**
+   * 🔴 **내가 맡긴 줄인가.** 거짓이면 `canRevoke` 는 상태와 무관하게 거짓이다 — **되돌리기는
+   * 맡긴 사람만** 할 수 있고(조건절의 `delegator_sub = 내 번호`), 받은 사람에게 참으로 실어
+   * 보내면 다음 사람이 그 칸을 보고 **눌러도 거절당하는 단추**를 그린다.
+   */
+  mine: boolean,
+): DelegationRowView {
+  const state = delegationState(row, now);
+  return {
+    id: row.id,
+    counterpartName: row.counterpartName,
+    startDate: seoulDateText(row.startsAt),
+    // 🔴 사람이 적었던 종료일로 되돌려 적는다 — `ends_at` 을 그대로 그리면 **하루 뒤**가 보인다.
+    endDate: seoulEndDateText(row.endsAt),
+    reason: row.reason,
+    state,
+    revokedByName: row.revokedByName,
+    canRevoke: mine && canRevokeDelegation(state),
+  };
+}
+
+/**
+ * **내가 맡긴 것** — 되돌린 줄과 끝난 줄까지 **전부** 보여 준다.
+ *
+ * 🔴 지난 줄을 감추지 않는 까닭: 위임은 「이 기간에 그 건을 누가 대신 눌렀나」를 나중에 설명하기
+ * 위한 기록이다(표 쪽 머리말). 살아 있는 것만 보이면 「분명 맡겼는데 흔적이 없다」가 된다.
+ *
+ * 🔴 **이 조회에는 색인이 없다.** 표의 색인은 받는 쪽(`delegate_sub`)으로 깔려 있다(그쪽이 모든
+ * 화면에 딸려 오는 알림 종의 길이라서다). 이 조회는 `/approvals` 를 열 때 한 번뿐이고 한 사람이
+ * 맡기는 줄이 몇 줄이라 지금은 그대로 둔다 — 늘어나면 `(delegator_sub, starts_at)` 색인을 더해야
+ * 하고, 그것은 스키마 변경이라 이 조각의 일이 아니다.
+ */
+export async function listDelegationsIMade(delegatorSub: string, now: Date = new Date()): Promise<DelegationRowView[]> {
+  const rows = await db()
+    .select({
+      id: approvalDelegations.id,
+      delegatorSub: approvalDelegations.delegatorSub,
+      delegateSub: approvalDelegations.delegateSub,
+      counterpartName: approvalDelegations.delegateName,
+      startsAt: approvalDelegations.startsAt,
+      endsAt: approvalDelegations.endsAt,
+      revokedAt: approvalDelegations.revokedAt,
+      revokedByName: approvalDelegations.revokedByName,
+      reason: approvalDelegations.reason,
+    })
+    .from(approvalDelegations)
+    .where(eq(approvalDelegations.delegatorSub, delegatorSub))
+    // 최근에 시작하는 것이 위로. 🔵 차례에 뜻을 더 붙이지 않는다 — 상태는 배지가 말한다.
+    .orderBy(desc(approvalDelegations.startsAt))
+    .limit(DELEGATION_LIST_LIMIT);
+
+  return rows.map((row) => toRowView(row, now, true));
+}
+
+/**
+ * **내가 지금 대신하고 있는 것**(읽기 전용).
+ *
+ * 🔴 **이것이 없으면 대리인은 「왜 이 건이 내 결재 목록에 떴는지」를 알 수 없다.** 결재건 카드에는
+ * 결재선의 **원래 사람** 이름이 적혀 있어, 자기 이름이 없는 건이 자기 목록에 뜬다 — 까닭이 적힌
+ * 곳이 이 묶음뿐이다.
+ *
+ * 🔵 조건절은 위 `actingApproverSubsFor` 와 **같은 모양**이다(색인 차례도 같다). 그쪽은 번호만,
+ *    이쪽은 사람이 읽을 이름과 기간까지 읽는다 — 결재 판정에 이름을 끌어들이지 않으려고 나눠 둔다.
+ */
+export async function listDelegationsIActFor(delegateSub: string, now: Date = new Date()): Promise<DelegationRowView[]> {
+  const rows = await db()
+    .select({
+      id: approvalDelegations.id,
+      delegatorSub: approvalDelegations.delegatorSub,
+      delegateSub: approvalDelegations.delegateSub,
+      counterpartName: approvalDelegations.delegatorName,
+      startsAt: approvalDelegations.startsAt,
+      endsAt: approvalDelegations.endsAt,
+      revokedAt: approvalDelegations.revokedAt,
+      revokedByName: approvalDelegations.revokedByName,
+      reason: approvalDelegations.reason,
+    })
+    .from(approvalDelegations)
+    .where(
+      and(
+        eq(approvalDelegations.delegateSub, delegateSub),
+        isNull(approvalDelegations.revokedAt),
+        gt(approvalDelegations.endsAt, now),
+      ),
+    )
+    .orderBy(desc(approvalDelegations.startsAt))
+    .limit(DELEGATION_LIST_LIMIT);
+
+  /**
+   * 🔴 **아직 시작하지 않은 줄은 여기서 뺀다.** 위 WHERE 는 색인에 맞춰 `starts_at` 을 보지
+   *    않으므로(그쪽 주석), 미리 적어 둔 위임이 섞여 들어온다. 「지금 대신하고 있는 것」이라고
+   *    적어 놓고 아직 시작도 안 한 줄을 보이면, 대리인은 **지금 누를 수 있다고 믿는다.**
+   * 🔵 거르는 자는 결재 판정이 쓰는 그 함수다 — 여기 조건을 손으로 적으면 반열린 구간이 두 벌이 된다.
+   */
+  // 🔵 맡긴 사람이 아니므로 `canRevoke` 는 거짓이다 — 되돌리기는 맡긴 사람만 할 수 있다(toRowView 주석).
+  return rows.filter((row) => isActiveDelegation(row, now)).map((row) => toRowView(row, now, false));
 }

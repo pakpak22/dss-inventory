@@ -1,6 +1,8 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { SettingsNav } from "@/components/settings/SettingsNav";
+// 기간 글자는 위임 화면과 **같은 함수**로 만든다 — 두 곳이 따로 적으면 하루짜리 위임이 한쪽에서만 다르게 보인다.
+import { formatDelegationPeriod } from "@/lib/approval/delegation-screen";
 import { AUDIT_ACTIONS, AUDIT_ACTION_LABEL, PART_FIELD_LABEL, describeTarget, isAuditAction } from "@/lib/audit-labels";
 import { requireRole } from "@/lib/auth/session";
 import { formatFileSize } from "@/lib/file-size";
@@ -159,6 +161,25 @@ function linesOf(row: AuditRow, entryNos: Map<string, string>): Line[] {
       { text: `${prev} → ${String(d.version ?? "")}번째 판` },
       { field: "승인 단계", before: names(d.previousSteps), after: names(d.steps) },
     ];
+  }
+  /**
+   * 결재권 위임 (2026-10-21, 조각 3) — 🔴 **이 줄만 읽고도 「누가 누구에게 언제까지 맡겼나」가
+   * 보여야 한다.** 표의 줄은 지워지지 않지만 그것을 보는 화면은 본인 것뿐이라, 나중에 「이 건은 왜
+   * 본인이 아닌 사람이 눌렀나」를 제3자가 되짚는 자리가 이력이다.
+   *
+   * 🔵 기간은 **사람이 적었던 날짜 그대로** 적는다 — `endsAt`(다음 날 0시)을 그리면 「26일까지
+   *    맡겼네」로 읽힌다(실제로 적은 것은 25일까지다). 그래서 쓰는 쪽이 날짜 두 칸을 함께 남긴다.
+   */
+  if (row.action === "APPROVAL_DELEGATION_CREATED") {
+    const lines: Line[] = [
+      { text: `${String(d.delegateName ?? "")} 님에게 ${formatDelegationPeriod(String(d.startDate ?? ""), String(d.endDate ?? ""))} 동안 내 결재권을 맡김` },
+    ];
+    // 사유는 선택이다 — 비면 줄을 그리지 않는다(「없음」을 지어내지 않는다).
+    if (d.reason) lines.push({ text: `사유: ${String(d.reason)}` });
+    return lines;
+  }
+  if (row.action === "APPROVAL_DELEGATION_REVOKED") {
+    return [{ text: `${String(d.delegateName ?? "")} 님에게 맡긴 위임(${String(d.endDate ?? "")}까지)을 되돌림` }];
   }
   if (row.action === "WORKBOOK_IMPORT") {
     const legacy = (d.legacy ?? {}) as Record<string, unknown>;

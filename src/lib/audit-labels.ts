@@ -45,6 +45,11 @@ export const AUDIT_ACTION_LABEL: Record<AuditAction, string> = {
   WORKBOOK_RESUMED: "현황판 엑셀 다시 쓰기 시작",
   WORKBOOK_EXCEL_APPLIED: "엑셀 기준 적용(수기입 파일 → 원장)",
   APPROVAL_ROUTE_SAVED: "승인 절차 변경",
+  // 🔴 「승인 절차 변경」과 **다른 일이다** (2026-10-21, 조각 3). 결재선은 그대로 두고 **누를 수 있는
+  // 사람만 늘린다** — 둘이 같은 글자로 보이면 「결재선은 안 바뀌었는데 왜 저 사람이 눌렀지」의 답이
+  // 이력에서 사라진다.
+  APPROVAL_DELEGATION_CREATED: "결재권 위임",
+  APPROVAL_DELEGATION_REVOKED: "결재권 위임 되돌림",
   OH_TEMPLATE_SAVED: "O/H 템플릿 저장",
   OH_TEMPLATE_DELETED: "O/H 템플릿 삭제",
   OH_TEMPLATE_MODEL_LINKED: "O/H 템플릿 모델 연결",
@@ -96,6 +101,9 @@ export function describeTarget(target: string | null): string {
   // 글자는 **템플릿 이름**이다. 🔵 그 전에 쌓인 줄에는 코드("oh_templates:301")가 남아 있는데,
   // 감사 로그는 append-only 라 고쳐 넣지 않는다 — 둘 다 그대로 보여 준다.
   if (kind === "oh_templates") return `O/H 템플릿 ${rest ?? ""}`.trim();
+  // "approval_delegations:<uuid>" → "결재권 위임". uuid 는 사람에게 뜻이 없어 붙이지 않는다
+  // (위 issue_approvals 와 같은 까닭) — 누구에게 맡겼는지는 상세(detail)의 이름이 말해 준다.
+  if (kind === "approval_delegations") return "결재권 위임";
   // "approval_routes:PART_ISSUE" → "승인 절차 · 부품 불출". 용도 이름표가 적힌 곳은 approval/route.ts 하나다.
   if (kind === "approval_routes") {
     const label = isApprovalRouteScope(rest) ? APPROVAL_ROUTE_SCOPE_LABELS[rest] : rest;
