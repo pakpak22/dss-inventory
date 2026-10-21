@@ -9,7 +9,13 @@ import { check, index, integer, pgEnum, pgTable, text, timestamp, uniqueIndex, u
  * 원본 모양 그대로 옮겨 온다(2026-10-15, 조각 ③a. 원본은
  * `RF_Service_System/vendor/dss-core/src/schema/shipment-approval-routes.ts`).
  *
- * 어느 절차인지는 `scope` 칸 하나가 정한다. 지금은 `'PART_ISSUE'`(부품 불출) 하나뿐이다.
+ * 어느 절차인지는 `scope` 칸 하나가 정한다. 지금 있는 값은 셋이다 — `'PART_ISSUE'`(부품 불출) ·
+ * `'PART_ISSUE_MATCHER'`(매쳐 부품 불출) · `'PART_ISSUE_GENERATOR'`(제너레이터 부품 불출).
+ *
+ * 🔴 **뒤의 둘은 아직 아무도 쓰지 않는다**(2026-10-22). 매쳐·제너레이터에 **다른 결재 순서**를
+ * 지정할 수 있게 그릇만 먼저 만든 것이고, 신청이 올라올 때 어느 쪽을 붙일지는 다음 조각이다 —
+ * 지금은 모든 부품 불출 신청이 여전히 `'PART_ISSUE'` 로 간다(`src/app/actions/stock.ts` ·
+ * `src/lib/approval/part-issue.ts` 가 그 값을 글자 그대로 쓴다).
  *
  * 설계 결정(원본 2026-09-09, 사용자 승인):
  *  · 한 용도에 절차는 **하나**뿐이다. 고객사별·금액별 분기는 없다.
@@ -63,8 +69,16 @@ import { check, index, integer, pgEnum, pgTable, text, timestamp, uniqueIndex, u
  * 붙으므로, 가운데에 끼워 넣으면 코드의 차례와 DB 의 차례가 어긋나 다음 `db:generate` 가
  * 있지도 않은 차이를 감지한다. (`stock_request_status` 에 `PARTIAL` 을 맨 뒤에 붙인 것과
  * 같은 까닭이다.) 차례 자체에 뜻은 없다.
+ *
+ * 🔴 **`'PART_ISSUE'` 를 빼지 마라.** 지금 올라가 있는 결재건이 그 값을 가리키고 있고,
+ * `stock_issue_approvals.route_id` → `approval_routes` 가 `RESTRICT` 라 지우면 아예 막힌다.
+ * 2026-10-22 에 더한 값 둘은 **맨 끝에** 붙였다 — 그래야 옛 값의 차례가 흔들리지 않는다.
  */
-export const approvalRouteScopeEnum = pgEnum("approval_route_scope", ["PART_ISSUE"]);
+export const approvalRouteScopeEnum = pgEnum("approval_route_scope", [
+  "PART_ISSUE",
+  "PART_ISSUE_MATCHER",
+  "PART_ISSUE_GENERATOR",
+]);
 
 /**
  * 절차 한 판. **한 번 쓰면 바뀌지 않는다**(append-only).

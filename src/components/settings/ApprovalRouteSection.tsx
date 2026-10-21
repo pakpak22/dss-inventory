@@ -39,8 +39,10 @@ import type { ApprovalRouteView } from "@/lib/approval/view";
  * 쉬운 부분을 시험이 붙는 자리로 내려 두었다.
  *
  * ── 🔴 용도(scope)마다 판이 따로 쌓인다 ─────────────────────────────────
- * 지금은 「부품 불출」 하나지만 고르개를 없애지 않는다 — 판 번호도 「현재 절차」도 용도 안에서
- * 정해지므로, 용도가 늘면 한쪽을 고쳐도 다른 쪽은 흔들리지 않아야 한다.
+ * 판 번호도 「현재 절차」도 용도 안에서 정해지므로, 한쪽을 고쳐도 다른 쪽은 흔들리지 않는다.
+ * 2026-10-22 에 용도가 셋이 되었다 — 부품 불출 · 매쳐 부품 불출 · 제너레이터 부품 불출.
+ * 🔵 **뒤의 둘은 아직 아무 신청도 받지 않는다**(그릇만 만든 조각이다). 미리 짜 두어도 동작이
+ * 달라지지 않고, 그 사실은 빈 상태 안내문(`APPROVAL_ROUTE_EMPTY_NOTICES`)이 말해 준다.
  *
  * 🔴 **그래서 편집 중이던 목록도 용도별로 갈라 둔다**(`draftByScope`). 목록을 하나만 두고
  * 용도만 갈아 끼우면, 한 절차를 짜다가 용도를 바꾸고 [저장] 을 누른 순간 **그 사람들이 다른
@@ -85,7 +87,12 @@ const ICON_BUTTON_CLASS =
  */
 export type ApprovalRoutesByScope = Record<ApprovalRouteScope, ApprovalRouteView | null>;
 
-/** 화면을 처음 열었을 때 보이는 용도. 지금은 하나뿐이다. */
+/**
+ * 화면을 처음 열었을 때 보이는 용도.
+ *
+ * 🔴 **지금 실제로 돌고 있는 절차**를 연다. 매쳐·제너레이터는 그릇만 있어 아직 아무 신청도
+ * 받지 않으므로, 그쪽을 먼저 보여 주면 관리자는 멀쩡히 도는 절차 대신 빈 화면을 보게 된다.
+ */
 const DEFAULT_SCOPE: ApprovalRouteScope = "PART_ISSUE";
 
 export function ApprovalRouteSection({

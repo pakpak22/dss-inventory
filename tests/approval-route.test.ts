@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
 
 import {
@@ -477,8 +478,20 @@ describe("용도(scope)", () => {
     assert.deepEqual([...approvalRouteScopeEnum.enumValues], [...APPROVAL_ROUTE_SCOPES]);
   });
 
-  test("지금 쓰는 용도는 부품 불출 하나다", () => {
-    assert.deepEqual([...APPROVAL_ROUTE_SCOPES], ["PART_ISSUE"]);
+  test("지금 쓰는 용도는 셋이다 — 부품 불출 · 매쳐 · 제너레이터", () => {
+    // 2026-10-22 에 매쳐·제너레이터를 더하면서 「하나다」가 깨졌다. 통과하던 시험이 깨지는 것이
+    // 맞는 변화라 지우지 않고 **세어 둔 수를 고쳤다** — 이 줄이 「용도를 말없이 늘리지 마라」는
+    // 울타리이기 때문이다. 용도를 더하는 조각은 여기와 표의 enum 을 함께 고치게 된다.
+    assert.deepEqual([...APPROVAL_ROUTE_SCOPES], ["PART_ISSUE", "PART_ISSUE_MATCHER", "PART_ISSUE_GENERATOR"]);
+  });
+
+  test("🔴 기존 「부품 불출」이 그대로 맨 앞에 있다 — 지우면 올라가 있는 결재건이 막힌다", () => {
+    // `stock_issue_approvals.route_id` → `approval_routes` 가 RESTRICT 다. 값을 빼면 그 값을
+    // 가리키는 판이 있는 한 DB 가 거절하고, 빼는 마이그레이션 자체가 돌지 않는다.
+    // 🔴 **맨 앞**인 것까지 본다 — enum 값은 ALTER TYPE … ADD VALUE 로 뒤에만 붙으므로, 옛 값이
+    // 첫 자리를 떠났다면 누군가 목록을 다시 쓴 것이고 그 순간 코드와 DB 의 차례가 어긋난다.
+    assert.equal(APPROVAL_ROUTE_SCOPES[0], "PART_ISSUE");
+    assert.equal(approvalRouteScopeEnum.enumValues[0], "PART_ISSUE");
   });
 
   test("목록에 있는 값만 통과한다", () => {
@@ -535,4 +548,68 @@ describe("용도의 이름표 · 빈 절차 안내", () => {
   test("부품 불출의 안내는 원본 문장 그대로다", () => {
     assert.equal(APPROVAL_ROUTE_EMPTY_NOTICES.PART_ISSUE, "지금은 재고 담당자가 그 자리에서 바로 불출합니다.");
   });
+
+  test("🔴 글자는 「매쳐」다 — 「매처」·「메쳐」가 아니다", () => {
+    // 2026-10-22 사용자 결정: A/S 쪽 글자로 통일한다(A/S 가 68개 파일에서 「매쳐」를 쓴다).
+    // 🔴 오타는 **오류를 내지 않는다** — 화면에 그대로 나가고 아무도 신고하지 않으므로 여기서
+    // 글자 자체를 못 박는다.
+    assert.equal(APPROVAL_ROUTE_SCOPE_LABELS.PART_ISSUE_MATCHER, "매쳐 부품 불출");
+    assert.equal(APPROVAL_ROUTE_SCOPE_LABELS.PART_ISSUE_GENERATOR, "제너레이터 부품 불출");
+
+    const shown = [...Object.values(APPROVAL_ROUTE_SCOPE_LABELS), ...Object.values(APPROVAL_ROUTE_EMPTY_NOTICES)];
+    for (const text of shown) {
+      for (const wrong of ["매처", "메쳐", "메처", "제네레이터"]) {
+        assert.ok(!text.includes(wrong), `「${wrong}」가 섞였다: ${text}`);
+      }
+    }
+  });
+
+  test("🔴 매쳐·제너레이터 안내는 「담당자가 바로 불출한다」를 베끼지 않는다", () => {
+    // 저 둘은 절차가 비어서 담당자가 바로 처리하는 것이 아니라, **아직 그 용도로 오는 신청이
+    // 없다.** 첫째 용도의 문장을 베껴 붙이면 관리자는 단계를 넣어 두고 걸리기를 기다리게 된다.
+    for (const scope of ["PART_ISSUE_MATCHER", "PART_ISSUE_GENERATOR"] as const) {
+      const notice = APPROVAL_ROUTE_EMPTY_NOTICES[scope];
+      assert.ok(notice.includes("아직 이 절차로 오지 않습니다"), `${scope}: ${notice}`);
+      assert.notEqual(notice, APPROVAL_ROUTE_EMPTY_NOTICES.PART_ISSUE);
+    }
+  });
+});
+
+/**
+ * ============================================================================
+ * 🔴 이 조각은 **동작을 하나도 바꾸지 않는다** — 신청은 여전히 `PART_ISSUE` 로 간다
+ * ============================================================================
+ * 2026-10-22 에 더한 용도 둘은 **그릇**이다. 어느 용도를 붙일지 가려내는 일은 다음 조각이고,
+ * 그때까지 결재선을 읽는 자리 셋은 `"PART_ISSUE"` 를 글자 그대로 써야 한다.
+ *
+ * 🔴 **소스 글자로 잰다.** 저 셋은 전부 `server-only` 사슬에 걸려 있어(DB·세션·망) 이 저장소의
+ * 시험이 불러 볼 수 없다. 약한 울타리인 것은 맞지만, 용도를 늘리면서 **실수로 라우팅까지 갈아
+ * 끼우는** 가장 위험한 변화는 이 자리에서 잡힌다(`tests/part-issue-gate.test.ts` 가 같은 방식을
+ * 쓴다).
+ *
+ * 🔵 **다음 조각은 이 시험을 깨면서 지나간다.** 그때는 「무엇으로 가려내는가」를 재는 시험으로
+ * 고쳐 쓴다 — 지우지 마라.
+ * ============================================================================
+ */
+describe("🔴 신청이 올라가는 용도는 아직 그대로다 (다음 조각에서 바뀐다)", () => {
+  const sourceOf = (relative: string): string => readFileSync(new URL(`../${relative}`, import.meta.url), "utf8");
+
+  const CALL_SITES: readonly (readonly [file: string, call: string])[] = [
+    // 바로 확인하는 길이 「결재를 거쳐야 하는가」를 묻는 자리.
+    ["src/app/actions/stock.ts", 'getCurrentApprovalRoute("PART_ISSUE")'],
+    // 결재건을 실제로 올리는 자리 — 여기서 읽은 판이 `route_id` 로 못 박힌다.
+    ["src/lib/approval/part-issue.ts", 'getCurrentApprovalRouteWithSubs("PART_ISSUE")'],
+    // 담당자 화면이 「지금 절차가 켜져 있나」를 보여 주는 자리.
+    ["src/app/(app)/requests/page.tsx", 'getCurrentApprovalRoute("PART_ISSUE")'],
+  ];
+
+  for (const [file, call] of CALL_SITES) {
+    test(`${file} 는 여전히 ${call} 를 부른다`, () => {
+      const source = sourceOf(file);
+      assert.ok(source.includes(call), `${file} 에서 ${call} 를 찾지 못했다`);
+      // 새 용도가 아직 이 길에 섞이지 않았다. 섞였다면 이 조각이 동작을 바꾼 것이다.
+      assert.ok(!source.includes("PART_ISSUE_MATCHER"), `${file} 에 매쳐 용도가 들어왔다`);
+      assert.ok(!source.includes("PART_ISSUE_GENERATOR"), `${file} 에 제너레이터 용도가 들어왔다`);
+    });
+  }
 });
