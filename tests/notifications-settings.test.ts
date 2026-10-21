@@ -23,14 +23,22 @@ describe("내주는 표", () => {
 
   it("역할은 이 시스템의 셋이고, 전부 잠겨 있다(저장할 표가 없다)", () => {
     const { roles } = inventoryNotificationSettings();
+    // 🔴 2026-10-22: 포털 표의 차례는 ROLES(스키마 정의·역할 바꿔 보기 고르개) 그대로가
+    //    아니다 — 권한이 강한 쪽이 앞에 오도록 여기서만 다시 줄 세운다.
     assert.deepEqual(
       roles.map((r) => r.code),
-      [...ROLES],
+      ["ADMIN", "STAFF", "VIEWER"],
     );
+    assert.deepEqual(roles.map((r) => r.code).sort(), [...ROLES].sort(), "집합은 그대로다 — 추가·삭제가 없다");
     for (const role of roles) {
       assert.equal(role.editable, false, role.code);
       assert.ok(role.label.includes(role.code), role.label);
     }
+  });
+
+  it("🔴 2026-10-22: 관리자가 역할 열의 맨 앞이다 — 글자(label)가 아니라 코드로 잰다", () => {
+    const { roles } = inventoryNotificationSettings();
+    assert.equal(roles[0]?.code, "ADMIN", "관리자가 첫 칸이 아니다");
   });
 
   it("🔴 「누가 받는가」는 종의 규칙 그대로다 — 대기는 ADMIN 만, 반려는 기록 권한 이상", () => {

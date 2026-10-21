@@ -110,6 +110,23 @@ const DESCRIPTIONS: Record<NotificationKind, string> = {
 };
 
 /**
+ * 포털 표의 역할 **열 차례**(2026-10-22, 쓰는 분 요구 ⑧ — 관리자를 앞에).
+ *
+ * 🔴 `ROLES`(db/schema/users.ts) 를 그대로 쓰지 않는다 — 그 차례는 `DevRoleSwitch`
+ * 의 「역할 바꿔 보기」 고르개와 postgres `role` enum 정의 차례이기도 하다. 거기를
+ * 바꾸면 고르개 순서가 같이 바뀌고 enum 정의도 건드리게 된다. 그래서 **포털에 낼
+ * 때만** 이 차례로 다시 줄 세운다 — `ROLES` 자체는 손대지 않는다.
+ */
+const SETTINGS_ROLE_ORDER: readonly Role[] = ["ADMIN", "STAFF", "VIEWER"];
+
+/** `ROLES` 를 위 표시 차례로 정렬한 사본. 집합은 그대로, 차례만 바뀐다. */
+function rolesForSettings(): readonly Role[] {
+  return [...ROLES].sort(
+    (a, b) => SETTINGS_ROLE_ORDER.indexOf(a) - SETTINGS_ROLE_ORDER.indexOf(b),
+  );
+}
+
+/**
  * 한 종류의 역할 칸들. 🔴 **종류마다 새로 만든다** — 한 객체를 두 줄이 나눠 쓰면
  * 언젠가 한쪽을 고친 것이 다른 쪽까지 바꾼다(지금은 JSON 으로 나가 티가 안 난다).
  */
@@ -129,7 +146,7 @@ function roleCells(kind: NotificationKind): Record<string, PortalSettingsRoleCel
  * 알림 종류가 늘면 이 표가 저절로 따라간다.
  */
 export function inventoryNotificationSettings(): PortalNotificationSettings {
-  const roles: PortalSettingsRole[] = ROLES.map((code) => ({
+  const roles: PortalSettingsRole[] = rolesForSettings().map((code) => ({
     code,
     label: `${ROLE_LABEL[code]} · ${code}`,
     // 🔴 저장할 표가 없다 — 이 시스템에서는 아무 칸도 바꿀 수 없다(위 머리말).
