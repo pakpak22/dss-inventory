@@ -20,6 +20,7 @@ import {
   checkCanCancelPartIssue,
   checkCanDecidePartIssue,
   checkCanExecutePartIssue,
+  checkCanRejectExecutionPartIssue,
   checkIssueQuantities,
   checkRejectReason,
   OPEN_PART_ISSUE_STATUSES,
@@ -547,6 +548,116 @@ export async function executePartIssueApproval(approvalId: string, admin: Actor,
 }
 
 /* ------------------------------------------------------------------ */
+/* 3-2. 실행 대기에서 반려 — 담당자가 멈춘다 (2026-10-21)                 */
+/* ------------------------------------------------------------------ */
+
+export type RejectExecutionPartIssueResult = { ok: true } | { ok: false; message: string };
+
+/**
+ * **결재가 다 끝나 [실행]만 남은 건을 담당자가 막는다.**
+ *
+ * ── 🔴 왜 이 길이 필요한가 ──────────────────────────────────────────────
+ * 2026-10-21 에 「결재 중」을 만들면서 결재가 도는 동안 담당자의 [반려]·[보류]·[신청 취소]를
+ * 닫았다. 그 결과 결재가 다 끝나면 **아무도 그 건을 멈출 수 없었다** — 재고가 모자라도, 신청이
+ * 잘못됐다는 것을 뒤늦게 알아도 할 수 있는 일은 「실행하지 않고 두기」뿐이라 그 건은 「실행할
+ * 건」 목록에 영원히 떠 있었다. 이 함수가 그 빚을 갚는다.
+ *
+ * ── 🔴 **한 트랜잭션 안에서 둘을 함께 닫는다** ──────────────────────────
+ * 결재건(`EXECUTION_REJECTED`)과 반출 신청(`REJECTED`)이다. 앞만 되고 뒤가 실패하면 결재건은
+ * 닫혔는데 신청이 `IN_APPROVAL` 에 남아 **아무도 손댈 수 없는 신청**이 된다 — 그 자리는 확인·
+ * 반려·마감·보류·취소를 전부 거절하고, 결재건이 닫혀서 [실행]조차 없다. 완전한 교착이다.
+ * 🔵 `executePartIssueApproval` 이 트랜잭션을 못 쓰는 것은 `confirmRequest` 가 **자기 트랜잭션을
+ *    스스로 열기** 때문이다(그 함수의 주석). 이쪽은 원장에 한 글자도 쓰지 않아 그 제약이 없다.
+ *
+ * ── 🔴 판정·사유 규칙을 **새로 적지 않는다** ────────────────────────────
+ * 「이 상태에서 되는가」는 `checkCanRejectExecutionPartIssue`(= 실행과 같은 자리, `APPROVED`
+ * 하나), 「사유가 있는가」는 **결재 중 반려와 같은** `checkRejectReason` 이다. 사유 규칙이 두
+ * 벌이 되면 한쪽만 느슨해지는 날이 오고, 그날 DB 의 CHECK 가 사람에게는 「알 수 없는 실패」로
+ * 보인다.
+ * 🔵 **누가** 누를 수 있는지는 여기서 보지 않는다 — 서버 액션의 `requireRole("ADMIN", …)` 이
+ *    쥔다([실행]과 같은 울타리). `executePartIssueApproval` 이 `Actor` 만 받는 것과 같은 모양이다.
+ *
+ * @param reason 🔴 **필수다.** 신청자에게 「왜」가 가는 유일한 길이고, 표의 CHECK
+ *   (`stock_issue_approvals_execution_rejection_metadata`)가 최종 방어선이다.
+ */
+export async function rejectExecutionPartIssueApproval(approvalId: string, admin: Actor, reason: string): Promise<RejectExecutionPartIssueResult> {
+  // 🔴 **결재 중 반려와 같은 함수**다. 두 벌로 적지 않는다(머리말).
+  const reasonGate = checkRejectReason(reason);
+  if (!reasonGate.ok) return { ok: false, message: reasonGate.message };
+
+  return db().transaction(async (tx): Promise<RejectExecutionPartIssueResult> => {
+    /** 🔴 결재건 칸 넷과 신청의 결정 시각이 **같은 순간**이어야 한다 — 갈리면 이력에서 둘이 다른 사건으로 보인다. */
+    const now = new Date();
+
+    // 🔴 결재건 행을 먼저 잠근다 — 실행과 반려가 엇갈려 **재고가 나간 건이 반려로 덮이는** 일을 막는다
+    //    (`decidePartIssueApproval` 과 같은 모양). 트랜잭션이 끝나면 저절로 풀린다.
+    const [head] = await tx
+      .select({ status: stockIssueApprovals.status, requestId: stockIssueApprovals.requestId })
+      .from(stockIssueApprovals)
+      .where(eq(stockIssueApprovals.id, approvalId))
+      .for("update");
+    if (!head) return { ok: false, message: "없는 결재건입니다." };
+
+    const gate = checkCanRejectExecutionPartIssue(head.status);
+    if (!gate.ok) return { ok: false, message: gate.message };
+
+    /**
+     * 🔴 **조건부 UPDATE 가 울타리다.** 위 읽기와 이 쓰기 사이에 다른 관리자가 [실행]을 눌렀을 수
+     *    있다 — 그때 0행이 되어 「방금 다른 분이 처리했습니다」로 돌아간다(이 저장소가 `rejectRequest`·
+     *    `holdRequest` 에서 늘 쓰는 모양). 두 사람이 동시에 눌러도 한 번만 된다.
+     * 🔴 **칸 넷을 함께 채운다.** 표의 CHECK 가 「상태와 칸 넷은 한 쌍」을 지키므로 하나라도 빠지면
+     *    여기서 터진다 — 그 CHECK 가 최종 방어선이고, 사유가 빈 글자인 것도 거기서 막힌다.
+     */
+    const [row] = await tx
+      .update(stockIssueApprovals)
+      .set({
+        status: "EXECUTION_REJECTED",
+        executionRejectedBy: admin.id,
+        executionRejectedByName: admin.name,
+        executionRejectedAt: now,
+        executionRejectedReason: reason,
+      })
+      .where(and(eq(stockIssueApprovals.id, approvalId), eq(stockIssueApprovals.status, "APPROVED")))
+      .returning({ requestId: stockIssueApprovals.requestId });
+    if (!row) {
+      return { ok: false, message: "방금 다른 담당자가 이 결재건을 처리했습니다. 화면을 새로 고치고 다시 보십시오." };
+    }
+
+    /**
+     * 🔴 **반출 신청도 함께 닫는다.** 가는 자리는 `requestStatusAfterPartIssue` 하나가 정한다 —
+     *    이 저장소에는 DB 시험이 없어 여기 직접 적은 글자는 아무도 돌려 보지 못한다(파일 머리말).
+     * 🔴 **사유를 신청의 `decision_note` 에 복사한다.** 신청자가 보는 화면도 A/S 통로도 결재건이
+     *    아니라 **신청**을 읽으므로(`toApiRequestStatus` 의 `decision`), 복사하지 않으면 「왜
+     *    막혔는지」가 **어디에도 안 보인다.** 결정한 사람·시각도 함께 적는다 — 그래야 신청자의
+     *    알림 종에 걸린다(`listRejectedRequestsFor` 가 `decided_at` 으로 거른다).
+     * 🔴 **0행이어도 던지지 않는다** — 이 조각이 나가기 전에 올라간 결재건은 신청이 아직
+     *    `PENDING`(또는 `PARTIAL`)이다. 그 건은 신청이 이미 담당자 손에 있어 갇히지 않는다.
+     *    `decidePartIssueApproval` 의 반려가 같은 까닭으로 같은 일을 한다. 그 사실을 이력에 적는다.
+     */
+    const [rejectedRequest] = await tx
+      .update(stockRequests)
+      .set({ status: requestStatusAfterPartIssue("EXECUTION_REJECTED", 0), decidedBy: admin.id, decidedByName: admin.name, decidedAt: now, decisionNote: reason })
+      .where(and(eq(stockRequests.id, row.requestId), eq(stockRequests.status, "IN_APPROVAL")))
+      .returning({ id: stockRequests.id });
+
+    await tx.insert(auditLogs).values(
+      auditValues({
+        // 🔴 결재 중 반려(`…_REJECTED`)와 **다른 행위 이름**이다 — 까닭은 `src/lib/audit.ts`.
+        action: "STOCK_ISSUE_APPROVAL_EXECUTION_REJECTED",
+        actorId: admin.id,
+        actorName: admin.name,
+        target: auditTarget(approvalId),
+        // 🔵 **사유를 이력에도 남긴다** — 결재건 칸은 고쳐질 수 있지만 감사 로그는 append-only 다
+        //    (보류 사유를 이력에 싣는 것과 같은 까닭, `src/lib/audit.ts` 의 `STOCK_REQUEST_HELD`).
+        detail: { requestId: row.requestId, reason, requestRejected: rejectedRequest !== undefined },
+      }),
+    );
+
+    return { ok: true };
+  });
+}
+
+/* ------------------------------------------------------------------ */
 /* 4. 거두기                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -897,9 +1008,12 @@ export interface DecidedPartIssueApprovalRow {
   status: DecidedIssueApprovalStatus;
   summary: string;
   requestedAt: Date;
-  /** 🔴 반려 줄에만 값이 있다(반려한 결재자). 승인 줄은 `null`. */
+  /**
+   * 🔴 막힌 줄에만 값이 있다. 승인 줄은 `null`.
+   * 🔵 `REJECTED` 면 반려한 **결재자**(단계 줄), `EXECUTION_REJECTED` 면 막은 **담당자**(결재건 쪽 칸).
+   */
   decidedByName: string | null;
-  /** 🔴 반려 줄에만 값이 있다. 승인 줄은 `null`. */
+  /** 🔴 막힌 줄에만 값이 있다. 승인 줄은 `null`. 🔵 상태마다 적힌 표가 다르다(바로 위 칸과 같은 까닭). */
   decidedAt: Date | null;
 }
 
@@ -915,6 +1029,13 @@ export interface DecidedPartIssueApprovalRow {
  *   **단계 줄**(`stock_issue_approval_steps.decided_at`)에 적힌다. 그래서 반려된 단계를
  *   `leftJoin` 한다. 한 결재건에 `REJECTED` 단계는 많아야 하나다 — 반려되는 순간 결재건이
  *   닫혀(`decidePartIssueApproval`) 다음 단계가 열리지 않기 때문이다. 그래서 줄이 불어나지 않는다.
+ * - 🔴 **그런데 실행 대기 반려는 단계 줄에 없다** (2026-10-21). 그 건은 단계가 **전부 승인으로
+ *   닫힌** 뒤에 막힌 것이라 `REJECTED` 단계가 **하나도 없고**, 사유·사람·시각이 결재건 쪽 칸
+ *   (`execution_rejected_*`)에 적힌다(그 까닭은 표의 머리말). 그래서 `leftJoin` 은 그 줄에서
+ *   **언제나 비어 오고**, 그 칸들을 함께 읽어 **읽는 쪽에서 합친다.** 🔴 합치지 않으면 7일 선
+ *   조건이 `null` 과 견주어 **그 줄이 통째로 질의에서 빠진다** — 종이 조용해지는 자리다.
+ *   🔵 SQL 의 `coalesce` 로 합치지 않고 **TS 에서** 합치는 까닭: 드라이버가 `coalesce` 결과의
+ *   타입을 무엇으로 줄지는 약속이 없는데, 두 칸을 그대로 고르면 drizzle 이 `Date` 로 못 박아 준다.
  * - 🔵 **승인 줄은 `leftJoin` 이 비어 온다**(반려된 단계가 없으므로). 차례를 `requested_at` 으로
  *   두는 것이 그래서 자연스럽고, 「언제 올린 건인가」가 종에 적을 수 있는 유일한 시각이다
  *   (`DecidedIssueApprovalSource.requestedAt` 주석).
@@ -937,6 +1058,9 @@ export async function listDecidedPartIssueApprovalsFor(requesterUserId: string, 
       requestedAt: stockIssueApprovals.requestedAt,
       decidedByName: rejectedStep.approverName,
       decidedAt: rejectedStep.decidedAt,
+      // 🔴 실행 대기 반려는 **여기**에 적힌다(위 머리말). 아래에서 위 둘과 합쳐 한 칸으로 싣는다.
+      executionRejectedByName: stockIssueApprovals.executionRejectedByName,
+      executionRejectedAt: stockIssueApprovals.executionRejectedAt,
       total: sql<number>`count(*) over ()`.mapWith(Number),
     })
     .from(stockIssueApprovals)
@@ -950,13 +1074,21 @@ export async function listDecidedPartIssueApprovalsFor(requesterUserId: string, 
         //    유일한 자리이고, 조립이 같은 목록으로 한 번 더 거른다. 「실행되면 종에서 사라진다」가
         //    이 한 줄에 걸려 있다 — `EXECUTED` 가 거기 없기 때문이다.
         inArray(stockIssueApprovals.status, [...DECIDED_ISSUE_APPROVAL_STATUSES]),
-        // 🔴 7일 선은 **반려에만** 걸린다. 승인에 걸면 오래 묵은 건이 조용히 사라진다.
-        or(eq(stockIssueApprovals.status, "APPROVED"), gte(rejectedStep.decidedAt, rejectedSince)),
+        // 🔴 7일 선은 **막힌 것에만** 걸린다. 승인에 걸면 오래 묵은 건이 조용히 사라진다.
+        // 🔴 **갈래가 셋째까지 있어야 한다** (2026-10-21): 실행 대기 반려는 단계 줄이 비어 있어
+        //    가운데 조건으로는 **영원히 걸리지 않는다** — 빠뜨리면 종이 조용해진다(위 머리말).
+        //    🔵 `execution_rejected_at` 은 그 상태에서만 채워지는 칸이라(표의 CHECK) 다른 상태를
+        //    끌어들이지 않는다.
+        or(
+          eq(stockIssueApprovals.status, "APPROVED"),
+          gte(rejectedStep.decidedAt, rejectedSince),
+          gte(stockIssueApprovals.executionRejectedAt, rejectedSince),
+        ),
       ),
     )
     // 🔵 **최신이 위** — 「내가 올린 것이 어떻게 됐나」를 보는 자리다(③과 같은 까닭).
-    //    반려는 결정 시각, 승인은 올린 시각으로 줄을 세운다.
-    .orderBy(desc(sql`coalesce(${rejectedStep.decidedAt}, ${stockIssueApprovals.requestedAt})`), desc(stockIssueApprovals.id))
+    //    막힌 것은 결정 시각, 승인은 올린 시각으로 줄을 세운다.
+    .orderBy(desc(sql`coalesce(${rejectedStep.decidedAt}, ${stockIssueApprovals.executionRejectedAt}, ${stockIssueApprovals.requestedAt})`), desc(stockIssueApprovals.id))
     .limit(limit);
 
   if (rows.length === 0) return { rows: [], total: 0 };
@@ -967,8 +1099,14 @@ export async function listDecidedPartIssueApprovalsFor(requesterUserId: string, 
       status: r.status as DecidedIssueApprovalStatus,
       summary: r.summary,
       requestedAt: r.requestedAt,
-      decidedByName: r.decidedByName,
-      decidedAt: r.decidedAt,
+      /**
+       * 🔴 **두 자리를 한 칸으로 합친다** — 결재 중 반려는 단계 줄, 실행 대기 반려는 결재건 쪽
+       *    칸이다(위 머리말). 한 결재건에 둘이 함께 있을 수는 없다: 실행 대기 반려는 단계가
+       *    **전부 승인으로 닫힌 뒤**에만 일어나고, 단계가 반려되면 결재건은 그 자리에서
+       *    `REJECTED` 로 닫혀 `APPROVED` 까지 가지 못한다. 그래서 `??` 로 충분하다.
+       */
+      decidedByName: r.decidedByName ?? r.executionRejectedByName,
+      decidedAt: r.decidedAt ?? r.executionRejectedAt,
     })),
     total: rows[0].total,
   };

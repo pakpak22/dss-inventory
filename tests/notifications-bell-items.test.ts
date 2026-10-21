@@ -77,6 +77,24 @@ function rejectedIssue(over: Partial<DecidedIssueApprovalSource> = {}): DecidedI
   };
 }
 
+/**
+ * **실행 대기에서 막힌** 내 결재건 한 줄 (2026-10-21).
+ *
+ * 🔴 결정 시각이 **단계 줄이 아니라 결재건 쪽 칸**(`execution_rejected_at`)에서 온다. 질의가 둘을
+ * 합쳐 같은 칸으로 실어 주므로(`listDecidedPartIssueApprovalsFor`) 조립이 받는 모양은 반려와 같다 —
+ * **그 합치기를 빠뜨리면 여기 `decidedAt` 이 `null` 로 와서 줄이 조용히 사라진다.**
+ */
+function executionRejectedIssue(over: Partial<DecidedIssueApprovalSource> = {}): DecidedIssueApprovalSource {
+  return {
+    ...approvedIssue(),
+    id: "44444444-4444-4444-8444-444444444444",
+    status: "EXECUTION_REJECTED",
+    decidedByName: "재고담당",
+    decidedAt: new Date("2026-10-12T10:00:00+09:00"),
+    ...over,
+  };
+}
+
 /** 재고가 한계수량 이하인 부품 한 줄 (2026-10-16). 🔴 값은 전부 가짜다 — 공개 저장소다. */
 function lowStock(over: Partial<LowStockPartSource> = {}): LowStockPartSource {
   return { no: 7, name: "가짜부품", name2: "", quantity: 2, limitQuantity: 5, ...over };
@@ -376,10 +394,16 @@ describe("결재 결과 — 내가 올린 결재건이 승인/반려됐다 (2026
    * 질의(`listDecidedPartIssueApprovalsFor`)의 WHERE 와 아래 조립이 **같은 목록**을 본다.
    */
   it("🔴 실행된 건은 그 목록에 아예 없다 — EXECUTED·CANCELLED·결재 중이 빠져 있다", () => {
-    assert.deepEqual([...DECIDED_ISSUE_APPROVAL_STATUSES], ["APPROVED", "REJECTED"]);
+    // 🔵 2026-10-21 에 셋째(`EXECUTION_REJECTED`)가 들어왔다 — 넣지 않으면 실행 대기에서 막힌 건이
+    //    목록에서 사라지기만 하고 **올린 사람이 아무 소식도 못 받는다**(그 상수의 주석).
+    assert.deepEqual([...DECIDED_ISSUE_APPROVAL_STATUSES], ["APPROVED", "REJECTED", "EXECUTION_REJECTED"]);
     for (const status of PART_ISSUE_STATUSES) {
       const listed = (DECIDED_ISSUE_APPROVAL_STATUSES as readonly string[]).includes(status);
-      assert.equal(listed, status === "APPROVED" || status === "REJECTED", status);
+      assert.equal(listed, status === "APPROVED" || status === "REJECTED" || status === "EXECUTION_REJECTED", status);
+    }
+    // 🔴 **빠져 있어야 하는 셋**을 글자로 못 박는다 — 위 전수 검사가 느슨해지는 날 여기서 걸린다.
+    for (const status of ["EXECUTED", "CANCELLED", "PENDING_APPROVAL"] as const) {
+      assert.ok(!(DECIDED_ISSUE_APPROVAL_STATUSES as readonly string[]).includes(status), status);
     }
     // 실행된 건은 「종에 안 뜬다」로 그치지 않는다 — 이 저장소의 어느 상태인지까지 못 박는다.
     assert.ok(PART_ISSUE_STATUSES.includes("EXECUTED"));
@@ -403,6 +427,51 @@ describe("결재 결과 — 내가 올린 결재건이 승인/반려됐다 (2026
     const feed = build({ decidedIssueApprovals: [rejectedIssue()] });
     assert.equal(feed.items[0].subject, "불출 결재가 반려되었습니다");
     assert.equal(feed.items[0].detail, "사용 · 2026-10-09 · D260002 · No. 7 가짜부품 ×2 · 결재자 반려 · 2026-10-12");
+  });
+
+  /**
+   * 🔴 **안 넣으면 건이 「실행할 건」 목록에서 사라지기만 하고 아무도 모른다** (2026-10-21).
+   * 올린 사람에게 가는 소식이 이 줄 하나뿐이라, 여기가 비면 **오류 없는 침묵**이 된다.
+   */
+  it("🔴 실행 대기에서 막혀도 올린 사람에게 줄이 선다", () => {
+    const feed = build({ decidedIssueApprovals: [executionRejectedIssue()] });
+    assert.equal(feed.items.length, 1);
+    assert.equal(feed.items[0].kind, NOTIFICATION_KINDS.issueApprovalDecided);
+    assert.equal(feed.items[0].subject, "불출 결재가 실행 대기에서 반려되었습니다");
+    assert.equal(feed.items[0].detail, "사용 · 2026-10-09 · D260002 · No. 7 가짜부품 ×2 · 재고담당 반려 · 2026-10-12");
+    assert.equal(feed.items[0].href, `${BASE}/approvals`);
+    assert.equal(feed.count, 1);
+  });
+
+  /**
+   * 🔴 셋이 **같은 종류**라 색이 같다(`NOTIFICATION_KINDS` 주석) — 그래서 **글자가 유일한
+   * 구분**이다. 「반려되었습니다」와 「실행 대기에서 반려되었습니다」를 뭉개면, 결재 도중 막힌
+   * 것과 결재를 다 받고도 막힌 것이 한 말이 된다.
+   */
+  it("🔴 세 제목이 서로 다른 말이다 — 색이 같으므로 글자가 유일한 구분이다", () => {
+    const subjects = [approvedIssue(), rejectedIssue(), executionRejectedIssue()].map((row) => build({ decidedIssueApprovals: [row] }).items[0].subject);
+    assert.equal(new Set(subjects).size, 3, subjects.join(" / "));
+    for (const subject of subjects) assert.ok(subject.length > 0);
+  });
+
+  it("🔴 실행 대기 반려도 **같은 7일 선**을 쓴다 — 반려와 함께 나타나고 함께 사라진다", () => {
+    const edge = rejectionCutoff(NOW);
+    const justOver = new Date(edge.getTime() - 1);
+
+    const onEdge = build({ decidedIssueApprovals: [rejectedIssue({ decidedAt: edge }), executionRejectedIssue({ decidedAt: edge })] });
+    assert.equal(onEdge.items.length, 2, "딱 7일 되는 순간까지는 둘 다 보인다");
+
+    const over = build({ decidedIssueApprovals: [rejectedIssue({ decidedAt: justOver }), executionRejectedIssue({ decidedAt: justOver })] });
+    assert.deepEqual(over.items, [], "1밀리초를 넘기면 둘 다 함께 사라진다");
+  });
+
+  /**
+   * 🔴 질의가 **단계 줄과 결재건 쪽 칸을 합치는 것**을 빠뜨리면 이 모양으로 온다 — 그때 줄이
+   * 조용히 사라지는 것이 맞다(지어내지 않는다). 승인과 달리 이 상태에는 시각이 **반드시** 있다.
+   */
+  it("결정 시각이 없는 실행 대기 반려 줄은 보이지 않는다 — 질의가 두 자리를 합쳤는지의 거울이다", () => {
+    const feed = build({ decidedIssueApprovals: [executionRejectedIssue({ decidedAt: null })] });
+    assert.deepEqual(feed.items, []);
   });
 
   /**
@@ -849,7 +918,14 @@ describe("🔴 7일은 한 자리에서만 긋는다 — 결재 반려도 그 �
     assert.ok(!fn.includes("24 * 60 * 60 * 1000"), "결재 질의가 「며칠」을 스스로 세고 있다 — 두 벌이 되면 갈린다");
     assert.ok(!fn.includes("REJECTED_VISIBLE_DAYS"), "결재 질의가 기간 상수를 직접 들고 있다");
     // 🔴 승인에는 그 선이 걸리지 않는다 — 걸면 오래 묵은 승인이 조용히 사라진다.
-    assert.ok(fn.includes('or(eq(stockIssueApprovals.status, "APPROVED"), gte(rejectedStep.decidedAt, rejectedSince))'), "반려 7일 선이 사라졌거나 승인 줄에도 걸렸다");
+    assert.ok(fn.includes('eq(stockIssueApprovals.status, "APPROVED")'), "승인 줄에도 7일 선이 걸렸다 — 오래 묵은 승인이 조용히 사라진다");
+    assert.ok(fn.includes("gte(rejectedStep.decidedAt, rejectedSince)"), "결재 중 반려의 7일 선이 사라졌다");
+    /**
+     * 🔴 **셋째 갈래**(2026-10-21) — 실행 대기 반려는 단계 줄이 비어 있어 위 조건으로는 **영원히
+     * 걸리지 않는다.** 빠뜨리면 그 건이 질의에서 통째로 빠져 **종이 조용해진다**(오류가 아니라
+     * 침묵이라 아무도 신고하지 않는다). 그래서 이 한 줄이 그 자리를 지킨다.
+     */
+    assert.ok(fn.includes("gte(stockIssueApprovals.executionRejectedAt, rejectedSince)"), "실행 대기 반려가 7일 선을 못 만난다 — 그 줄이 종에 영영 안 뜬다");
   });
 });
 

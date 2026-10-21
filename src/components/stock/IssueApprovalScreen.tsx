@@ -1,7 +1,7 @@
 "use client";
 
 import { startTransition, useActionState, useState, type ReactNode } from "react";
-import { cancelPartIssueAction, decidePartIssueAction, executePartIssueAction, type PartIssueActionState } from "@/app/actions/part-issue";
+import { cancelPartIssueAction, decidePartIssueAction, executePartIssueAction, rejectExecutionPartIssueAction, type PartIssueActionState } from "@/app/actions/part-issue";
 import { IssueApprovalTrail } from "./IssueApprovalTrail";
 import {
   formatPartIssueMoment,
@@ -27,7 +27,9 @@ import { ENTRY_TYPE_LABEL } from "@/lib/stock/codes";
  * 묶음 셋:
  *  (가) **내가 결재할 건** — 지금 내 차례인 것. 좁히는 일은 조회의 몫이고
  *       (`listPartIssueApprovalsToDecide` — 포털 번호로 집는다) 여기서 한 벌 더 좁히지 않는다.
- *  (나) **실행할 건** — 결재가 끝났고 아직 안 나간 것. **관리자에게만.**
+ *  (나) **실행할 건** — 결재가 끝났고 아직 안 나간 것. **관리자에게만.** 🔴 단추가 **둘**이다:
+ *       [실행]과 [반려]. 2026-10-21 에 [반려]가 붙기 전에는 결재가 다 끝난 건을 **아무도 멈출 수
+ *       없었다**(결재가 도는 동안은 담당자의 [반려]·[보류]·[신청 취소]가 닫혀 있다).
  *  (다) **진행 중인 내 신청** — 내가 올려 결재 중·실행 대기인 것. 결재·실행 단추가 **없다.**
  *       올린 사람에게는 (가)(나)가 비어 보이는 것이 정상이라, 이 묶음이 없으면 올린 건이
  *       사라진 것처럼 보인다. 🔴 (나)가 보이는 세션에서는 거기 뜬 건을 여기서 뺀다 — 그
@@ -74,8 +76,13 @@ const EMPTY_STATE: PartIssueActionState = { error: null };
  *    상자가 열리는 길은 **반려와 실행 둘뿐**이다.
  * 🔵 [신청 취소]도 칸이 없다 — 사유를 받지 않기 때문이다(`cancelPartIssueAction` 주석). 부품
  *    요청 관리의 [신청 취소]와 같은 모양이다.
+ *
+ * 🔴 **`REJECT_EXECUTION` 을 `REJECT` 와 합치지 않는다** (2026-10-21). 가는 서버 액션이 다르고
+ *    (결재자의 반려 ↔ 담당자의 실행 대기 반려) **같은 카드가 두 묶음에 함께 뜰 수 있다** —
+ *    관리자가 자기 결재 차례인 건을 (가)에서 보면서 (나)에서 실행을 기다릴 수 있다. 한 값으로
+ *    뭉개면 한쪽 칸을 열었을 때 **다른 묶음의 칸까지 함께 펼쳐진다.**
  */
-type Draft = { kind: "REJECT"; id: string } | { kind: "EXECUTE"; id: string };
+type Draft = { kind: "REJECT"; id: string } | { kind: "REJECT_EXECUTION"; id: string } | { kind: "EXECUTE"; id: string };
 
 /** 줄별 「이번에 줄 수량」과 지금 재고. 🔴 재고가 모자라면 실행이 막힌다 — **누르기 전에** 보여 준다. */
 function IssueLines({ lines }: { lines: readonly IssueApprovalLine[] }) {
@@ -184,12 +191,14 @@ export function IssueApprovalScreen({
   const [decideState, decide, deciding] = useActionState<PartIssueActionState, FormData>(decidePartIssueAction, EMPTY_STATE);
   const [executeState, execute, executing] = useActionState<PartIssueActionState, FormData>(executePartIssueAction, EMPTY_STATE);
   const [cancelState, cancel, cancelling] = useActionState<PartIssueActionState, FormData>(cancelPartIssueAction, EMPTY_STATE);
+  /** 🔴 [실행]과 **따로** 쥔다 — 한 상태에 묶으면 「내주는 중」과 「반려 중」이 같은 글자로 보인다. */
+  const [stopState, stop, stopping] = useActionState<PartIssueActionState, FormData>(rejectExecutionPartIssueAction, EMPTY_STATE);
   const [draft, setDraft] = useState<Draft | null>(null);
   /** 🔴 방금 누른 카드 — 실패 문구를 **그 카드에만** 싣는다. 없으면 같은 글이 모든 카드에 찍힌다. */
   const [actedId, setActedId] = useState<string | null>(null);
 
-  const busy = deciding || executing || cancelling;
-  const error = decideState.error ?? executeState.error ?? cancelState.error;
+  const busy = deciding || executing || cancelling || stopping;
+  const error = decideState.error ?? executeState.error ?? cancelState.error ?? stopState.error;
   const errorOf = (id: string) => (actedId === id ? error : null);
   const draftOn = (kind: Draft["kind"], id: string) => draft !== null && draft.kind === kind && draft.id === id;
 
@@ -285,6 +294,44 @@ export function IssueApprovalScreen({
     );
   }
 
+  /**
+   * [반려] 칸 — **실행 대기에서 멈춘다** (2026-10-21). 🔴 **사유는 필수다**(두 글자 이상):
+   * 이 사유가 **그대로 신청자에게 보인다**(서버가 반출 신청의 결정 사유 칸에 복사한다). 비면
+   * 신청자는 부품이 왜 안 오는지 알 길이 없다. 서버 액션도 표의 CHECK 도 같은 것을 다시 본다.
+   *
+   * 🔴 **되돌릴 수 없는 단추라 무슨 일이 일어나는지 먼저 적는다** — 결재건과 반출 신청이 **함께**
+   *    닫히고, 다시 내주려면 신청자가 **새로 신청**해야 한다. [실행] 칸이 「재고가 줄어듭니다」를
+   *    먼저 적는 것과 같은 까닭이다.
+   * 🔵 위 `rejectDraft`(결재자의 반려)와 **베껴 쓰지 않고 따로 둔다** — 가는 액션도, 적는 말도,
+   *    일어나는 일도 다르다. 한 함수로 합치면 분기가 셋이 되어 둘 다 읽기 어려워진다.
+   */
+  function rejectExecutionDraft(card: IssueApprovalCard) {
+    return (
+      <form
+        key={`REJECT_EXECUTION:${card.id}`}
+        className="flex w-full flex-col gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          send(stop, card.id, new FormData(e.currentTarget));
+        }}
+      >
+        <p className="text-xs break-keep text-zinc-700">이 건을 내주지 않고 멈춥니다. 결재건과 반출 신청이 함께 닫히고, 적으신 사유가 신청자에게 그대로 보입니다 — 다시 내주려면 신청자가 새로 신청해야 합니다.</p>
+        <label className="flex flex-col gap-1 text-xs text-zinc-500">
+          반려 사유 *
+          <textarea name="note" rows={2} required minLength={2} maxLength={500} className={FIELD} placeholder="예: 재고가 모자라 이번에는 내주기 어렵습니다. 입고된 뒤 다시 신청해 주십시오." />
+        </label>
+        <div className="flex gap-2">
+          <button type="submit" className={BTN_R} disabled={busy}>
+            {stopping ? "처리 중" : "반려 확정"}
+          </button>
+          <button type="button" className={BTN} disabled={busy} onClick={() => setDraft(null)}>
+            돌아가기
+          </button>
+        </div>
+      </form>
+    );
+  }
+
   /** [신청 취소] — 올린 사람이 아직 결재 전일 때만. 그릴지는 서버가 판정해 보낸 `canCancel` 이 정한다. */
   function cancelButton(card: IssueApprovalCard) {
     return (
@@ -336,12 +383,22 @@ export function IssueApprovalScreen({
               card={card}
               error={errorOf(card.id)}
               actions={
+                /* 🔴 펼침 상자가 열리는 길이 **둘**이다 — [실행]과 [반려]. 한 번에 하나만 열린다(`draft` 가 하나다). */
                 draftOn("EXECUTE", card.id) ? (
                   executeDraft(card)
+                ) : draftOn("REJECT_EXECUTION", card.id) ? (
+                  rejectExecutionDraft(card)
                 ) : (
-                  <button type="button" className={BTN_P} disabled={busy} onClick={() => setDraft({ kind: "EXECUTE", id: card.id })}>
-                    실행
-                  </button>
+                  <>
+                    <button type="button" className={BTN_P} disabled={busy} onClick={() => setDraft({ kind: "EXECUTE", id: card.id })}>
+                      실행
+                    </button>
+                    {/* 🔴 **[실행]을 멈출 수 있는 유일한 자리다**(2026-10-21). 이 단추가 없으면 결재가 다 끝난 건은
+                        아무도 닫지 못해 이 목록에 영원히 떠 있는다 — 결재가 도는 동안은 담당자의 [반려]가 닫혀 있다. */}
+                    <button type="button" className={BTN_R} disabled={busy} onClick={() => setDraft({ kind: "REJECT_EXECUTION", id: card.id })}>
+                      반려
+                    </button>
+                  </>
                 )
               }
             />

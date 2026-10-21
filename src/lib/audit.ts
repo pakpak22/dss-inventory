@@ -52,6 +52,16 @@ export type AuditAction =
   | "STOCK_ISSUE_APPROVAL_REJECTED"
   | "STOCK_ISSUE_APPROVAL_EXECUTED"
   | "STOCK_ISSUE_APPROVAL_CANCELLED"
+  /**
+   * **실행 대기에서 담당자가 막았다** (2026-10-21).
+   *
+   * 🔴 `STOCK_ISSUE_APPROVAL_REJECTED` 를 **재사용하지 않는다.** 저것은 결재자가 **결재 중에**
+   *    반려한 것이고 사유가 **단계 줄**에 적힌다. 이쪽은 결재가 다 끝난 뒤 담당자가 막은 것이라
+   *    사유가 **결재건 쪽 칸**(`execution_rejected_reason`)에 적힌다 — 같은 글자로 남기면
+   *    되짚는 사람이 「누가 왜 막았나」를 **엉뚱한 표에서** 찾게 된다.
+   * 🔵 `STOCK_ISSUE_APPROVAL_CANCELLED`(거둠)와도 다르다: 그것은 **올린 사람이** 무르는 길이다.
+   */
+  | "STOCK_ISSUE_APPROVAL_EXECUTION_REJECTED"
   | "WORKBOOK_IMPORT"
   | "WORKBOOK_PARKED"
   | "WORKBOOK_RESUMED"

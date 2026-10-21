@@ -40,6 +40,10 @@ export const AUDIT_ACTION_LABEL: Record<AuditAction, string> = {
   STOCK_ISSUE_APPROVAL_REJECTED: "불출 결재 반려",
   STOCK_ISSUE_APPROVAL_EXECUTED: "불출 결재 실행(반출)",
   STOCK_ISSUE_APPROVAL_CANCELLED: "불출 결재 거둠",
+  // 🔴 「불출 결재 반려」와 **다른 글자여야 한다** (2026-10-21). 멈춘 자리가 다르고, 그 자리가 곧
+  // **사유를 찾을 곳**이다 — 앞은 단계 줄(누가 결재하다 반려했나), 이쪽은 결재건 쪽 칸(담당자가
+  // 실행 직전에 막았다). 이력에서 둘이 같은 말로 보이면 사유를 엉뚱한 표에서 찾게 된다.
+  STOCK_ISSUE_APPROVAL_EXECUTION_REJECTED: "불출 결재 실행 대기 반려",
   WORKBOOK_IMPORT: "현황판 엑셀 가져오기",
   WORKBOOK_PARKED: "현황판 엑셀 멈춤(엑셀 수기입)",
   WORKBOOK_RESUMED: "현황판 엑셀 다시 쓰기 시작",

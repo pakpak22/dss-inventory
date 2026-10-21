@@ -212,6 +212,21 @@ export const PART_ISSUE_TRAIL_MARKS = {
  * 🔵 `currentStepOrder` 가 `null` 인데 결재가 끝나지 않은 상태(반려·거둠·결재 중)면 **「대기」**
  * 로 둔다. 어디서 닫혔는지 모르는 채 「반려」를 칠하면 앞서 승인한 사람들의 자리까지 빨개져
  * 거짓이 된다 — 모를 때는 지어내지 않는 편이 낫다.
+ *
+ * ── 🔴 **실행 대기 반려는 「완료」다** (2026-10-21) ─────────────────────
+ * `EXECUTION_REJECTED` 는 열린 단계가 없어 위 갈래에서 「대기」로 떨어졌는데 **그것이 거짓이다** —
+ * 그 건은 **단계가 전부 승인으로 닫힌** 건이다(그 상태는 `APPROVED` 에서만 올 수 있다). 「대기」로
+ * 그리면 아직 결재가 돌고 있는 것처럼 보이고, 실제로 승인한 사람들의 자리가 **없던 일**이 된다.
+ *
+ * 🔴 **그렇다고 어느 상자를 빨갛게 칠하지도 않는다.** 「반려」·「거둠」과 다른 일이기 때문이다:
+ * 저 둘은 **사슬이 서 있던 그 자리에서** 일어났지만, 이것은 **사슬이 끝난 뒤**에 일어났다 —
+ * 막은 사람은 결재자가 아니라 담당자이고, 그 사람의 상자는 결재선에 **아예 없다.** 아무 상자나
+ * 빨갛게 칠하면 「그 결재자가 막았다」는 거짓이 된다(단계 줄에 사유를 적지 않고 결재건 쪽에
+ * 칸을 둔 것과 **같은 까닭** — `src/db/schema/stock-issue-approvals.ts` 의 그 칸 주석).
+ *
+ * 🔵 그래서 **상자는 `APPROVED`·`EXECUTED` 와 똑같이 「완료」**이고, 「그 뒤에 막혔다」는
+ *    ① 상태 배지(빨강 · 「실행 대기에서 반려됨」)와 ② 그림 위의 한 줄
+ *    (`partIssueProgressText`)이 말한다. 그림은 **결재선이 어떻게 흘렀나**만 말하는 자리다.
  */
 export function partIssueTrailMark(input: {
   stepOrder: number;
@@ -223,8 +238,9 @@ export function partIssueTrailMark(input: {
   if (skipped && stepOrder !== currentStepOrder) return PART_ISSUE_TRAIL_MARKS.SKIPPED;
 
   if (currentStepOrder === null) {
-    // 열린 단계가 없다 — 결재가 끝까지 갔거나(승인·불출 완료) 어디선가 닫혔다.
-    if (status === "APPROVED" || status === "EXECUTED") return PART_ISSUE_TRAIL_MARKS.DONE;
+    // 열린 단계가 없다 — 결재가 끝까지 갔거나(승인·불출 완료·실행 대기 반려) 어디선가 닫혔다.
+    // 🔴 `EXECUTION_REJECTED` 가 여기 **함께 있어야 한다** — 단계는 전부 승인된 건이다(위 주석).
+    if (status === "APPROVED" || status === "EXECUTED" || status === "EXECUTION_REJECTED") return PART_ISSUE_TRAIL_MARKS.DONE;
     return PART_ISSUE_TRAIL_MARKS.UPCOMING;
   }
 
@@ -245,6 +261,11 @@ export function partIssueTrailMark(input: {
  * 「2/2단계」 대신 「2/4단계」로 보인다(A/S 원본의 까닭 그대로).
  * 🔴 **「지금 차례」는 열린 단계가 있을 때만** 적는다 — 끝난 건이 남의 차례를 말하지 않게.
  * 🔵 단계를 못 세었으면(`totalSteps` 가 0) 「2/」 같은 반쪽짜리를 보여 주지 않는다.
+ *
+ * 🔴 **실행 대기 반려는 「결재 끝」에서 멈추지 않는다** (2026-10-21). 상자들이 전부 「완료」로
+ * 그려지므로(`partIssueTrailMark` 의 그 주석) 이 한 줄까지 「결재 끝」이면 **곧 나갈 건으로
+ * 읽힌다** — 실제로는 담당자가 막아 끝난 건이다. 🔵 뒤에 붙이는 글자는 상태 이름표 한 벌
+ * (`PART_ISSUE_STATUS_LABELS`)에서 가져온다: 여기 손으로 적으면 이름표를 다듬는 날 한쪽만 바뀐다.
  */
 export function partIssueProgressText(input: {
   currentStepOrder: number | null;
@@ -258,6 +279,7 @@ export function partIssueProgressText(input: {
     const turn = currentApproverName !== null ? ` · 지금 차례: ${currentApproverName}` : "";
     return `결재선 ${currentStepOrder}/${totalSteps}단계${turn}`;
   }
+  if (status === "EXECUTION_REJECTED") return `결재선 ${totalSteps}단계 · 결재 끝 · ${PART_ISSUE_STATUS_LABELS[status]}`;
   if (status === "APPROVED" || status === "EXECUTED") return `결재선 ${totalSteps}단계 · 결재 끝`;
   return `결재선 ${totalSteps}단계`;
 }
@@ -373,6 +395,16 @@ export function partIssueNotice(sp: Params): PartIssueNotice | null {
   if (one(sp.approved)) return { tone: "info", text: "승인했습니다. 다음 단계가 남아 있으면 그분 차례로 넘어갑니다." };
   if (one(sp.rejected)) {
     return { tone: "info", text: "반려했습니다. 이 결재건은 닫혔습니다 — 다시 올리면 처음 단계부터 결재를 받습니다." };
+  }
+  /**
+   * 🔴 **결재 중 반려(`rejected`)와 다른 말을 한다** (2026-10-21). 저쪽은 결재건만 닫히고 반출
+   *    신청은 결재자가 되돌린 것이지만, 이쪽은 **신청까지 함께 닫힌다**(`requestStatusAfterPartIssue`).
+   *    「다시 올리면 처음 단계부터」로 뭉개면 담당자가 그 신청을 다시 집을 수 있다고 읽는다 —
+   *    실제로는 **신청자가 새로 신청해야** 한다. 🔵 사유가 신청 쪽으로 갔다는 것도 말해 준다:
+   *    그 글이 어디로 갔는지 모르면 같은 말을 따로 전하러 간다.
+   */
+  if (one(sp.executionRejected)) {
+    return { tone: "info", text: "실행 대기에서 반려했습니다. 반출 신청도 함께 닫혔고, 적어 주신 사유가 신청자에게 그대로 보입니다 — 다시 내주려면 신청자가 새로 신청해야 합니다." };
   }
   if (one(sp.cancelled)) return { tone: "info", text: "올린 결재건을 거뒀습니다. 반출 신청 자체는 그대로 남아 있습니다." };
   if (one(sp.executed)) {

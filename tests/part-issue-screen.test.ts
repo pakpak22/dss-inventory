@@ -89,6 +89,33 @@ describe("partIssueTrailMark — 상자 색과 글자는 한 자리에서 함께
     assert.deepEqual(partIssueTrailMark({ stepOrder: 1, currentStepOrder: null, status: "APPROVED", skipped: true }), SKIPPED);
   });
 
+  /**
+   * 🔴 **실행 대기 반려는 「대기」가 아니다** (2026-10-21). 그 건은 **단계가 전부 승인으로 닫힌**
+   * 뒤에 막힌 것이다(그 상태는 `APPROVED` 에서만 올 수 있다) — 「대기」로 그리면 아직 결재가
+   * 돌고 있는 것처럼 보이고, 실제로 승인한 사람들의 자리가 **없던 일**이 된다.
+   */
+  it("🔴 실행 대기 반려는 **승인과 같은 「완료」**다 — 단계는 전부 승인된 건이다", () => {
+    const none = (status: PartIssueStatus) => partIssueTrailMark({ stepOrder: 1, currentStepOrder: null, status, skipped: false });
+    assert.deepEqual(none("EXECUTION_REJECTED"), DONE);
+    assert.deepEqual(none("EXECUTION_REJECTED"), none("APPROVED"));
+    assert.notDeepEqual(none("EXECUTION_REJECTED"), UPCOMING);
+  });
+
+  /**
+   * 🔴 **어느 상자도 빨갛게 칠하지 않는다.** 「반려」·「거둠」은 사슬이 **서 있던 그 자리**에서
+   * 일어났지만, 이것은 사슬이 **끝난 뒤**에 일어났다 — 막은 사람은 결재자가 아니라 담당자이고
+   * 그 사람의 상자는 결재선에 아예 없다. 아무 상자나 칠하면 「그 결재자가 막았다」는 거짓이 된다.
+   */
+  it("🔴 실행 대기 반려로 **빨개지는 상자가 하나도 없다** — 막은 사람은 결재선에 없다", () => {
+    for (const stepOrder of [1, 2, 3]) {
+      for (const currentStepOrder of [null, 2]) {
+        const mark = partIssueTrailMark({ stepOrder, currentStepOrder, status: "EXECUTION_REJECTED", skipped: false });
+        assert.notDeepEqual(mark, REJECTED, `${stepOrder}/${currentStepOrder}`);
+        assert.notDeepEqual(mark, CANCELLED, `${stepOrder}/${currentStepOrder}`);
+      }
+    }
+  });
+
   it("🔴 여섯 가지 모두 색과 글자를 둘 다 들고 있다 — 색만으로 구분되는 상자가 없다", () => {
     const marks = Object.values(PART_ISSUE_TRAIL_MARKS);
     assert.equal(marks.length, 6);
@@ -137,6 +164,19 @@ describe("partIssueProgressText — 「n/m단계 · 지금 차례: ○○○」"
 
   it("🔴 단계를 못 세었으면 「2/」 같은 반쪽짜리를 보여 주지 않는다", () => {
     assert.equal(partIssueProgressText({ currentStepOrder: 2, currentApproverName: "홍길동", totalSteps: 0, status: "PENDING_APPROVAL" }), null);
+  });
+
+  /**
+   * 🔴 상자들이 전부 「완료」로 그려지므로(위 시험), 이 한 줄까지 「결재 끝」이면 **곧 나갈 건으로
+   * 읽힌다** — 실제로는 담당자가 막아 끝난 건이다. 🔵 뒤에 붙는 글자는 **상태 이름표 한 벌**에서
+   * 온다: 여기 손으로 적으면 이름표를 다듬는 날 한쪽만 바뀐다.
+   */
+  it("🔴 실행 대기 반려는 「결재 끝」에서 멈추지 않는다 — 그 뒤에 막혔다고 말한다 (2026-10-21)", () => {
+    const text = partIssueProgressText({ currentStepOrder: null, currentApproverName: null, totalSteps: 3, status: "EXECUTION_REJECTED" });
+    assert.equal(text, `결재선 3단계 · 결재 끝 · ${PART_ISSUE_STATUS_LABELS.EXECUTION_REJECTED}`);
+    assert.notEqual(text, partIssueProgressText({ currentStepOrder: null, currentApproverName: null, totalSteps: 3, status: "APPROVED" }));
+    // 🔴 「누가 막았는지」는 여기서 말하지 않는다 — 그림은 결재선이 어떻게 흘렀나만 말하는 자리다.
+    assert.ok(!text.includes("차례"));
   });
 });
 
@@ -193,6 +233,21 @@ describe("partIssueNotice — 단추를 누르고 돌아왔을 때의 한 줄", 
     assert.ok(partIssueNotice({ cancelled: "1" })?.text.includes("거뒀습니다"));
   });
 
+  /**
+   * 🔴 **결재 중 반려와 다른 말을 한다** (2026-10-21). 저쪽은 결재건만 닫히지만 이쪽은 **반출
+   * 신청까지 함께 닫힌다** — 「다시 올리면 처음 단계부터」로 뭉개면 담당자가 그 신청을 다시 집을
+   * 수 있다고 읽는다. 실제로는 **신청자가 새로 신청해야** 한다.
+   */
+  it("🔴 실행 대기 반려는 **신청까지 닫혔다**고 말한다 — 결재 중 반려와 다른 말이다", () => {
+    const notice = partIssueNotice({ executionRejected: "1" });
+    assert.equal(notice?.tone, "info");
+    assert.ok(notice?.text.includes("신청도 함께 닫혔"), notice?.text);
+    assert.ok(notice?.text.includes("새로 신청"), notice?.text);
+    // 🔵 사유가 어디로 갔는지도 말한다 — 모르면 같은 말을 따로 전하러 간다.
+    assert.ok(notice?.text.includes("사유"), notice?.text);
+    assert.notEqual(notice?.text, partIssueNotice({ rejected: "1" })?.text);
+  });
+
   it("🔴 실행은 이번에 나간 수량을 말하고, 남은 것이 있으면 신청이 살아 있다고 말한다", () => {
     const done = partIssueNotice({ executed: "1", issued: "3", remaining: "0" });
     assert.equal(done?.tone, "info");
@@ -231,8 +286,17 @@ describe("🔵 [승인]은 단추 하나로 끝난다 — 의견 칸과 그 길�
     const screen = src("src/components/stock/IssueApprovalScreen.tsx");
     assert.ok(!screen.includes("승인 의견"), "승인 의견 칸이 돌아왔다");
     assert.ok(!screen.includes("승인 확정"), "승인이 다시 펼침 상자를 거친다 — 단추 하나로 끝나지 않는다");
-    // 🔴 펼침 상자가 열리는 길은 **반려와 실행 둘뿐**이다. 셋째가 생기면 여기서 깨진다.
-    assert.ok(screen.includes('type Draft = { kind: "REJECT"; id: string } | { kind: "EXECUTE"; id: string };'), "펼침 상태가 승인 쪽 칸을 다시 들고 있다");
+    /**
+     * 🔴 펼침 상자가 열리는 길에 **승인이 없다** — 그것이 이 줄이 지키는 것이다.
+     * 🔵 2026-10-21 에 셋째(`REJECT_EXECUTION` — 실행 대기에서 반려)가 **일부러** 생겼다.
+     *    그래서 「둘뿐」을 「승인이 없다」로 고쳐 잰다: 갈래 이름을 전수로 훑어 승인 쪽 칸이
+     *    돌아왔는지만 본다. 글자를 통째로 맞춰 두면 갈래가 늘 때마다 이 시험이 깨지는데,
+     *    정작 지켜야 할 것(승인에는 칸이 없다)은 그때 아무도 다시 보지 않는다.
+     */
+    const draftKinds = /type Draft = (.+);/.exec(screen);
+    assert.ok(draftKinds !== null, "펼침 상태의 갈래를 찾지 못했다 — 모양이 바뀌었으면 시험도 함께 고쳐라");
+    assert.ok(!draftKinds[1].includes("APPROVE"), "펼침 상태가 승인 쪽 칸을 다시 들고 있다");
+    assert.deepEqual(draftKinds[1].match(/kind: "([A-Z_]+)"/g), ['kind: "REJECT"', 'kind: "REJECT_EXECUTION"', 'kind: "EXECUTE"']);
     assert.ok(!/decision:\s*"APPROVED"\s*\|\s*"REJECTED"/.test(screen), "쓰지 않는 `decision` 칸이 펼침 상태에 남아 있다");
   });
 

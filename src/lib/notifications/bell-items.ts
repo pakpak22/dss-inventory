@@ -378,8 +378,15 @@ export type IssueApprovalToDecideSummary = {
  * 「이미 나간 부품이 종에 남는」 줄이 생긴다.
  *
  * 🔵 `PartIssueStatus` 로 좁혀 둔 덕에 **오타가 컴파일에서 걸린다**(없는 상태를 적을 수 없다).
+ *
+ * ── 🔴 `EXECUTION_REJECTED` 가 **셋째로 들어왔다** (2026-10-21) ─────────
+ * 실행 대기에서 담당자가 막은 건이다. **넣지 않으면 그 건은 「실행할 건」 목록에서 사라지기만
+ * 하고 올린 사람은 아무 소식도 받지 못한다** — 오류가 아니라 **침묵**이라 아무도 신고하지
+ * 않는다. 🔵 `REJECTED` 와 같은 7일 선을 쓴다(아래 조립): 둘 다 「막혔다」이고 사람이 다음에 할
+ * 일이 같다(새로 신청한다). 🔴 다만 **결정 시각이 적힌 곳이 다르다** — `REJECTED` 는 단계 줄의
+ * `decided_at`, 이쪽은 결재건의 `execution_rejected_at` 이다(질의가 둘을 합쳐 싣는다).
  */
-export const DECIDED_ISSUE_APPROVAL_STATUSES = ["APPROVED", "REJECTED"] as const satisfies readonly PartIssueStatus[];
+export const DECIDED_ISSUE_APPROVAL_STATUSES = ["APPROVED", "REJECTED", "EXECUTION_REJECTED"] as const satisfies readonly PartIssueStatus[];
 
 export type DecidedIssueApprovalStatus = (typeof DECIDED_ISSUE_APPROVAL_STATUSES)[number];
 
@@ -387,7 +394,7 @@ export type DecidedIssueApprovalStatus = (typeof DECIDED_ISSUE_APPROVAL_STATUSES
 export type DecidedIssueApprovalSource = {
   /** `stock_issue_approvals.id`. 알림 id 가 이 값에서 나온다. */
   id: string;
-  /** 🔴 **둘뿐이다** — 까닭은 바로 위 `DECIDED_ISSUE_APPROVAL_STATUSES`. */
+  /** 🔴 **셋뿐이다** — 까닭은 바로 위 `DECIDED_ISSUE_APPROVAL_STATUSES`. */
   status: DecidedIssueApprovalStatus;
   /** 어느 반출 신청인가 — `stock_requests.summary` 한 줄 요약. */
   summary: string;
@@ -400,9 +407,19 @@ export type DecidedIssueApprovalSource = {
    * 시각이 아예 없다. 올린 시각은 어느 건에나 있고, 「얼마나 묵었나」를 더 길게 말해 준다.
    */
   requestedAt: Date;
-  /** 반려한 결재자 이름. 🔴 **승인 줄에서는 null 이다** — 승인에는 한마디를 받지 않는다. */
+  /**
+   * 막은 사람의 이름. 🔴 **승인 줄에서는 null 이다** — 승인에는 한마디를 받지 않는다.
+   * 🔵 `REJECTED` 면 반려한 **결재자**, `EXECUTION_REJECTED` 면 막은 **담당자**다. 종에서는 둘 다
+   *    「○○○ 반려」로 읽히면 되고, 무엇이 달랐는지는 **줄의 제목**이 말한다(아래 조립 ③).
+   */
   decidedByName: string | null;
-  /** 반려된 시각(`stock_issue_approval_steps.decided_at`). 🔴 **승인 줄에서는 null 이다.** */
+  /**
+   * 막힌 시각. 🔴 **승인 줄에서는 null 이다.**
+   * 🔴 상태마다 **적힌 표가 다르다** — `REJECTED` 는 `stock_issue_approval_steps.decided_at`,
+   *    `EXECUTION_REJECTED` 는 `stock_issue_approvals.execution_rejected_at` 이다. 질의가 둘을
+   *    합쳐 이 한 칸으로 싣는다(`listDecidedPartIssueApprovalsFor`) — 조립은 **7일 선을 그을 때만**
+   *    쓰므로 어느 표에서 왔는지를 알 필요가 없다.
+   */
   decidedAt: Date | null;
 };
 
@@ -636,13 +653,28 @@ export function buildInventoryNotificationItems(input: {
       // 🔴 질의가 이미 걸렀지만 여기서 한 번 더 본다(②와 같은 모양). **마지막 갈래가 핵심이다**:
       //    실행된 건·거둔 건·결재 중인 건은 줄이 되지 않는다. 그 목록은
       //    `DECIDED_ISSUE_APPROVAL_STATUSES` 하나에서 오므로 질의와 갈라질 수 없다.
-      const visible = row.status === "APPROVED" ? true : row.status === "REJECTED" ? isRejectionVisible(row.decidedAt, input.now) : false;
+      /**
+       * 🔵 **막힌 둘(`REJECTED`·`EXECUTION_REJECTED`)은 같은 7일 선을 쓴다** (2026-10-21) — 둘 다
+       *    「막혔다」이고 사람이 다음에 할 일이 같다(새로 신청한다). 선을 긋는 함수도 ②와 **같은
+       *    하나**라 세 자리가 갈라질 수 없다.
+       */
+      const visible = row.status === "APPROVED" ? true : isRejectionVisible(row.decidedAt, input.now);
       if (!visible) continue;
       decidedShown += 1;
       push(
         issueApprovalDecidedNotificationId(row.id),
         NOTIFICATION_KINDS.issueApprovalDecided,
-        row.status === "APPROVED" ? "불출 결재가 승인되었습니다" : "불출 결재가 반려되었습니다",
+        /**
+         * 🔴 **셋이 서로 다른 말이어야 한다.** 같은 종류라 색이 같으므로 **글자가 유일한 구분**이다
+         *    (`NOTIFICATION_KINDS.issueApprovalDecided` 주석). 「반려되었습니다」와 「실행 대기에서
+         *    반려되었습니다」를 뭉개면, 결재 도중 막힌 것과 결재를 다 받고도 막힌 것이 한 말이 된다 —
+         *    올린 사람이 **결재선을 다시 밟아야 하는지**를 그 한 줄로 가늠하는데 그 단서가 사라진다.
+         */
+        row.status === "APPROVED"
+          ? "불출 결재가 승인되었습니다"
+          : row.status === "REJECTED"
+            ? "불출 결재가 반려되었습니다"
+            : "불출 결재가 실행 대기에서 반려되었습니다",
         // 🔴 반려 **사유 본문**도 승인 **수량**도 싣지 않는다 — /approvals 에서 본다.
         //    어느 건인지와, 얼마나 묵었는지만 가린다.
         row.status === "APPROVED"

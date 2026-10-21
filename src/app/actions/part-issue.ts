@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { cancelPartIssueApproval, decidePartIssueApproval, executePartIssueApproval, requestPartIssueApproval } from "@/lib/approval/part-issue";
+import { cancelPartIssueApproval, decidePartIssueApproval, executePartIssueApproval, rejectExecutionPartIssueApproval, requestPartIssueApproval } from "@/lib/approval/part-issue";
 import { PART_ISSUE_ROUTE_GONE_MESSAGE } from "@/lib/approval/part-issue-gate";
 import { requireRole, requireSession } from "@/lib/auth/session";
 import { parseIssueQuantities } from "@/lib/stock/issue";
@@ -10,14 +10,16 @@ import { RETURN_TO_FIELD, safeReturnTo } from "@/lib/stock/return-to";
 
 /**
  * ============================================================================
- * 부품 불출 결재 — 서버 액션 넷 (2026-10-15, 조각 11b · 11c)
+ * 부품 불출 결재 — 서버 액션 다섯 (2026-10-15, 조각 11b · 11c · 2026-10-21 실행 대기 반려)
  * ============================================================================
  * 모양은 `./stock.ts` 그대로다: 세션 → 값 꺼내기 → try/catch → `revalidatePath` → `redirect`.
  * 실패하면 **redirect 하지 않고** 상태로 돌려주어 그 카드 자리에 문구가 뜬다.
  *
  * ── 🔴 누가 누를 수 있나 ────────────────────────────────────────────────
- * **올리기와 실행이 관리자**(`requireRole("ADMIN", …)`)다 — 올리기는 지금 [확인]을 대신하는
- * 자리라 **[확인]과 같은 역할**이어야 하고(11c), 실행은 실제로 재고가 나가는 유일한 단추다.
+ * **올리기·실행·실행 대기 반려가 관리자**(`requireRole("ADMIN", …)`)다 — 올리기는 지금 [확인]을
+ * 대신하는 자리라 **[확인]과 같은 역할**이어야 하고(11c), 실행은 실제로 재고가 나가는 유일한
+ * 단추이며, **실행 대기 반려는 그 실행을 멈추는 단추라 같은 문턱이어야 한다**(한쪽만 열면
+ * 「내보낼 수는 있는데 멈출 수는 없는」 사람이 생긴다).
  * 승인·반려·거두기는 **로그인한 사람이면 통과시키고**, 실제 자격은 **서버 함수가 본다**:
  *  · 승인·반려 → 단계 줄을 `(결재건, REQUESTED, 결재자 = 내 포털 번호)` 로 집는다. 내 차례가
  *    아니면 0행이고 「지금 결재할 차례가 아닙니다」가 돌아온다.
@@ -198,6 +200,46 @@ export async function executePartIssueAction(_prev: PartIssueActionState, formDa
   revalidatePath(APPROVALS);
   revalidatePath("/", "layout");
   redirect(`${APPROVALS}?executed=1&issued=${r.issuing}&remaining=${r.remaining}`);
+}
+
+/**
+ * 실행 대기에서 반려 — **[실행] 옆의 단추.** 🔴 관리자만([실행]과 **같은 울타리**).
+ *
+ * 🔴 **문턱이 [실행]과 같아야 한다.** 멈추는 일은 내보내는 일과 같은 무게이고, 한쪽만 열어 두면
+ *    「내보낼 수는 있는데 멈출 수는 없는」(또는 그 반대의) 사람이 생긴다. 쓰는 분이 정한 것도
+ *    관리자 하나다(확인·반려·마감·보류·실행이 전부 관리자다).
+ *
+ * 🔴 **사유는 필수다**(두 글자 이상) — 이 저장소의 반려·마감·보류와 **같은 잣대**이고(`./stock.ts`),
+ *    아래 서버 함수의 `checkRejectReason` 과 표의 CHECK 가 그 뒤를 두 번 더 지킨다. 왜 막혔는지가
+ *    없으면 신청자는 무엇을 고쳐야 할지 모른 채 같은 신청을 다시 낸다.
+ *
+ * 🔵 돌아갈 자리는 `/approvals` 다 — 이 단추가 거기 붙어 있다([실행]과 같다).
+ */
+export async function rejectExecutionPartIssueAction(_prev: PartIssueActionState, formData: FormData): Promise<PartIssueActionState> {
+  // 🔴 [실행]과 **같은 역할**이다(머리말).
+  const session = await requireRole("ADMIN", APPROVALS);
+  const id = String(formData.get("approvalId") ?? "");
+  const note = cleanNote(formData.get("note"));
+  if (!id) return { error: "결재건이 정해지지 않았습니다." };
+  if (note.length < 2) return { error: "반려 사유를 적으십시오." };
+
+  let r;
+  try {
+    r = await rejectExecutionPartIssueApproval(id, { id: session.user.id, name: session.user.name }, note);
+  } catch (e) {
+    console.error("[part-issue] 실행 대기 반려 실패:", e instanceof Error ? e.message : e);
+    return { error: "반려하지 못했습니다. 잠시 뒤 다시 시도하십시오." };
+  }
+  if (!r.ok) return { error: r.message };
+
+  /**
+   * 🔴 **재고는 움직이지 않았지만 반출 신청은 닫혔다** — `/requests` 의 목록과 거기 그려지는
+   *    결재선 그림이 바뀐다. 🔵 머리말의 「대기 N」은 다시 세지 않는다: 그 숫자가 세는 묶음
+   *    (`ACTIONABLE_REQUEST_STATUSES`)에 `IN_APPROVAL` 도 `REJECTED` 도 없어 **값이 그대로**다.
+   */
+  revalidatePath("/requests");
+  revalidatePath(APPROVALS);
+  redirect(`${APPROVALS}?executionRejected=1`);
 }
 
 /**
