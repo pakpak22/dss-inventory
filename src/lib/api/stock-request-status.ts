@@ -1,5 +1,8 @@
 import type { RequestStatus } from "@/db/schema/stock-requests";
 import type { PartIssueLock } from "@/lib/approval/part-issue-gate";
+// 🔴 **요청 비고를 읽는 규칙은 저 함수 하나다** (2026-10-22). 같은 규칙을 여기 다시 적지 않는다 —
+//    순수 → 순수 import 라 `npm test` 가 그대로 불러온다(`part-issue-rules.ts` 머리말).
+import { readRequestNote } from "@/lib/approval/part-issue-rules";
 import { OWNER_LABEL, type Owner } from "@/lib/parts/codes";
 import { CHARGE_LABEL, INTAKE_NUMBER_RE, isClosedRequest, requestStatusLabel, type ChargeType, type EntryType } from "@/lib/stock/codes";
 import { MAX_KEY } from "./stock-requests";
@@ -318,6 +321,22 @@ export interface ApiRequestStatus {
   closed: boolean;
   /** 신청이 선 시각(UTC) */
   requestedAt: string;
+  /**
+   * **요청 비고** — 신청한 사람이 올릴 때 적은 말 (2026-10-22 에 더한 칸).
+   *
+   * 🔴 **A/S 가 보내기만 하고 되읽지 못하던 값이다.** 이 통로는 `decision.note`(반려 사유)와
+   *    `hold.reason`(보류 사유)만 내주고 있어서, 저쪽이 제가 적어 보낸 말을 수리 건 상세에서
+   *    다시 볼 길이 없었다(2026-10-22 쓰는 분 요청).
+   * 🔴 **`decision`·`hold` 와 달리 최상위이고, 없으면 `null` 이 아니라 빈 글자(`""`)다.** 저 둘은
+   *    「일어났나 안 일어났나」를 가르는 **사건**이라 안 일어났으면 `null` 이 참말이지만, 이것은
+   *    「적힌 말」이라 안 적었으면 **빈 말**이 참말이다. `null` 로 두면 받는 쪽이 `null` 검사와 빈 글자
+   *    검사를 **둘 다** 하게 되고, 한쪽을 빠뜨린 날 화면에 「null」이 그려진다.
+   * 🔴 **읽는 규칙은 `readRequestNote` 하나다** — 글자가 아니면 빈 글자, 앞뒤 공백은 뗀다
+   *    (아래 `toApiRequestStatus`). jsonb 라 옛 신청에는 칸이 아예 없다.
+   * 🔴 **A/S 가 읽기 시작하면 계약이다**(이 타입 머리말). 이름을 바꾸거나 `null` 을 내보내기 시작하면
+   *    저쪽 화면이 **오류 없이** 비거나 「null」을 그린다 — 칸을 더하는 것만 괜찮다. API.md 4-7절.
+   */
+  note: string;
   lines: ApiRequestStatusLine[];
   /**
    * **결정한 사람·시각·사유** — 아직 결정 전이면 `null`.
@@ -364,6 +383,17 @@ export interface RequestStatusSource {
   requesterSub: string | null;
   requestedByName: string;
   requestedAt: string;
+  /**
+   * 신청에 적힌 **요청 비고** (2026-10-22).
+   *
+   * 🔵 **`PendingRequestRow` 가 이미 들고 있는 칸이다** — 부품 요청 관리 화면이 그리고 있어서
+   *    (`lib/stock/requests.ts` 의 `toRow`), 통로는 **옮겨 적기만** 한다. 얹어 주는 칸 둘
+   *    (`requesterSub`·`issueLock`)과 다른 점이 그것이다.
+   * 🔴 **타입이 `string` 이라고 런타임에도 글자인 것은 아니다** — 저쪽 값은 jsonb 를 통째로 형변환해
+   *    만든 것이라(`payload as unknown as EntryInput`) 옛 신청에는 아예 없고 숫자·객체일 수도 있다.
+   *    그래서 밖으로 내보내기 전에 `readRequestNote` 를 한 번 거친다(아래).
+   */
+  note: string;
   /**
    * 신청 줄들.
    *
@@ -417,6 +447,12 @@ export function toApiRequestStatus(requestKey: string | null, r: RequestStatusSo
     status: { code: r.status, label: requestStatusLabel(r.status, closed, r.issueLock) },
     closed,
     requestedAt: r.requestedAt,
+    // 🔴 **읽는 규칙을 여기 다시 적지 않는다** — 「글자가 아니면 빈 글자, 앞뒤 공백 제거」는
+    //    `readRequestNote` 하나가 쥐고 있고, 화면 쪽(승인 요청건)도 같은 함수를 부른다.
+    //    🔵 **칸 하나를 감싸서 넘기는 까닭**: 그 함수는 신청의 payload(`{ note: … }`)를 받는 모양이고,
+    //       여기서 `readRequestNote(r)` 로 줄을 통째로 넘기면 `note` 칸의 **이름이 바뀐 날 tsc 가 못 잡고**
+    //       조용히 빈 글자가 된다(그 함수는 `unknown` 을 받는다). 감싸 두면 이름이 바뀌는 순간 여기서 멈춘다.
+    note: readRequestNote({ note: r.note }),
     // 🔴 **칸을 하나씩 손으로 옮겨 적는다** — 화면 줄을 통째로 펴 보내지 않는다(위 `RequestStatusSource.lines`).
     //    🔵 부품 쪽 값(넷 + 소유)과 줄 쪽 값(수량 둘 + 유상/무상)을 **따로 적는 까닭**은 둘의 성격이 다르기
     //       때문이다(`ApiRequestStatusLineValues` 머리말). 글자는 `OWNER_LABEL`·`CHARGE_LABEL` 한 표에서

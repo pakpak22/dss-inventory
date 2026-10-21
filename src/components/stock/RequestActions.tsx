@@ -120,6 +120,7 @@ export function RequestActions({
   requestId,
   status,
   lines,
+  requestNote,
   canDecide,
   canCancel,
   approvalRequired,
@@ -129,6 +130,21 @@ export function RequestActions({
   /** 지금 상태 — 🔵 **셋 중 하나임이 타입으로 보증된다**(`isClaimableRequest` 가 좁혀 주고, 보류는 부르는 쪽이 따로 가린다). */
   status: RequestActionStatus;
   lines: readonly RequestActionLine[];
+  /**
+   * **요청 비고** — 신청한 사람이 올릴 때 적은 말 (2026-10-22, 쓰는 분 요청: 「불출 신청을 눌렀을 때
+   * 나오는 팝업에도 [A/S]에서 온 비고를 확인할 수 있도록」).
+   *
+   * 🔴 **아래 상자 안의 「신청 사유」 칸과 다른 사람의 말이다.** 저것은 **담당자가 지금 치는** 글이고
+   *    (결재자에게 하는 말), 이것은 **신청한 사람이 이미 적어 보낸** 글이다. 그래서 이 값은 **읽기
+   *    전용**으로, 입력 칸들과 **떨어진 자리**(상자 맨 위)에 그린다 — 입력 칸처럼 보이면 고칠 수
+   *    있다고 믿게 된다.
+   * 🔵 **값은 신청 줄이 이미 들고 온다**(`PendingRequestRow.note` → `ManagerRequestRow.note`).
+   *    팝업이 payload 를 다시 뜯지 않는다 — 뜯는 자리가 둘이 되면 규칙도 둘이 된다.
+   * 🔵 **비어 있는 것이 정상이다**: 재고 관리에서 직접 올린 신청은 늘 비어 있고, 그때는 그리지 않는다.
+   * 🔴 **빠뜨릴 수 없게 필수 칸으로 둔다** — 기본값을 주면 이 묶음을 쓰는 화면이 느는 날 아무 말 없이
+   *    「비고 없음」으로 굳고, 오류가 아니라 **빠짐**이라 아무도 신고하지 않는다.
+   */
+  requestNote: string;
   canDecide: boolean;
   canCancel: boolean;
   /** 「부품 불출」 승인 절차가 **지금 쓰이고 있는가** — 서버 판정(`/requests` 서버 컴포넌트). */
@@ -314,6 +330,22 @@ export function RequestActions({
           <h3 className="text-base font-semibold">{approvalRequired ? "이번에 내보낼 수량" : "이번에 내줄 수량"}</h3>
           {/* 🔴 **무엇이 달라졌는지 먼저 말한다** — 단추 이름만 바뀌면 사람은 눌러 보고 나서야 재고가 안 빠진다는 것을 안다. */}
           {approvalRequired ? <p className="rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs text-blue-900">{PART_ISSUE_REQUEST_DIALOG_NOTICE}</p> : null}
+          {/* 🔴 **신청한 사람이 적은 말 — 읽는 글이다** (2026-10-22). 결재를 올리기(또는 내주기) **전에**
+              A/S 가 무슨 말을 적었는지 여기서 읽는다. 🔴 **자리로 가른다**: 맨 위에 두어, 아래쪽 입력 칸
+              (「신청 사유」·「이번 회차에 남길 말」)과 줄 목록을 사이에 두고 떨어뜨린다. 🔴 **이름표로도
+              가른다** — 「요청 비고 (신청한 사람이 적은 말)」은 승인 요청건 화면에 선 것과 **같은 말**이다
+              (`IssueApprovalScreen.tsx`). 둘 다 「사유」라고만 적으면 누구의 말인지 알 수 없다.
+              🔴 비면 **줄 자체를 그리지 않는다**(재고 관리에서 올린 신청은 늘 비어 있다).
+              🔴 **잘라 숨기지 않는다** — `whitespace-pre-wrap` 로 적은 사람의 줄바꿈을 살리고
+              `break-words` 로 긴 글이 상자를 밀어내지 않게만 한다. */}
+          {requestNote ? (
+            <p
+              className="rounded-md bg-zinc-50 px-2 py-1 text-xs break-keep break-words whitespace-pre-wrap text-zinc-700"
+              title="부품을 요청한 사람이 신청할 때 적은 말입니다. 아래 「신청 사유」는 결재자에게 하는 말로, 서로 다른 말입니다."
+            >
+              요청 비고 (신청한 사람이 적은 말): “{requestNote}”
+            </p>
+          ) : null}
           <p className="text-xs text-zinc-500">
             칸을 <b>비워 두면 그 줄의 남은 수량 전부</b>를 {approvalRequired ? "올립니다" : "내줍니다"}. 이번에 안 줄 줄에는 <b>0</b> 을 적으십시오. 남은 수량이 있으면 이 신청은{" "}
             <b>확인 대기에 그대로 남습니다.</b>

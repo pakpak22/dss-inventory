@@ -184,10 +184,44 @@ function IssueLockNotice({ lock }: { lock: PartIssueLock }) {
   );
 }
 
-/** 「무엇에 쓰려는 신청인가」 — 🔵 기록 내역 화면이 그리는 방식과 **같게** 한다. */
+/**
+ * 「무엇에 쓰려는 신청인가」 — **인수번호(또는 빌려준 곳·사유) 하나뿐**이다.
+ *
+ * 🔴 **요청 비고를 여기 이어 붙이지 않는다** (2026-10-22, 쓰는 분 요청: 「[A/S]에서 온 비고를
+ *    인수번호에 이어서 적지 말고 따로 구분감 있게」). 그 전에는 ` · ` 로 이어 **한 글자**로 만들었는데,
+ *    그러면 「D260701 · 접촉 불량이라 교체 바랍니다」가 한 덩어리로 읽혀 인수번호가 어디서 끝나는지
+ *    눈으로 가를 수 없었다. 비고는 이제 이름표를 단 **제 줄**로 내려간다(아래 `RequestNote`).
+ * 🔵 **머리말(`head`)을 짓는 방식은 그대로 기록 내역과 같다** — 그 화면의 `entryTitle`
+ *    (`app/(app)/entries/page.tsx`)과 같은 갈래다. 🔵 **비고를 따로 그리는 것도 사실 그 화면과 같다**:
+ *    거기는 처음부터 `비고: …` 를 제 줄에 그리고 있었고, 이어 붙이던 쪽이 이 화면뿐이었다.
+ *    🔴 그래서 기록 내역은 **한 글자도 건드리지 않았다.**
+ */
 function aboutOf(r: ManagerRequestRow): string {
-  const head = r.type === "USE" ? (r.noRepairCase ? `수리 건 없음 (${r.reason})` : r.intakeNumber) : r.type === "LOAN" ? `빌려준 곳 ${r.counterparty}` : r.type === "DISPOSE" ? `사유 ${r.reason}` : "";
-  return `${head}${r.note ? `${head ? " · " : ""}${r.note}` : ""}`;
+  return r.type === "USE" ? (r.noRepairCase ? `수리 건 없음 (${r.reason})` : r.intakeNumber) : r.type === "LOAN" ? `빌려준 곳 ${r.counterparty}` : r.type === "DISPOSE" ? `사유 ${r.reason}` : "";
+}
+
+/**
+ * **요청 비고** — 신청한 사람이 올릴 때 적은 말 (2026-10-22). 비어 있으면 **아무것도 안 그린다.**
+ *
+ * 🔴 **비면 그리지 않는 것이 규칙이다** — 재고 관리에서 직접 올린 신청은 **늘** 비어 있어서,
+ *    「요청 비고: -」가 모든 줄에 붙으면 표만 길어지고 정작 적힌 말이 묻힌다(승인 요청건과 같은 규칙).
+ * 🔴 **이름표가 「요청 비고」다** — 같은 날 승인 요청건에 세운 것과 **같은 말**이어야 두 화면을 오가는
+ *    담당자가 같은 것으로 읽는다(`IssueApprovalScreen.tsx`). 🔵 거기는 바로 위에 「신청 사유」가
+ *    나란히 서서 이름표가 한 토막 더 길다(「신청한 사람이 적은 말」) — 이 표에는 그 칸이 없다.
+ * 🔴 **표 칸 안이라 넘치지 않게만 한다.** `break-words` 로 긴 글이 칸을 밀어내지 않게 하고
+ *    `whitespace-pre-wrap` 으로 적은 사람의 줄바꿈을 살린다. 🔴 **잘라서 숨기지 않는다** — 읽으라고
+ *    적은 글이고(A/S 통로가 1000자까지 싣는다), 접으면 「없는 말」과 구별되지 않는다.
+ */
+function RequestNote({ note }: { note: string }) {
+  if (!note) return null;
+  return (
+    <p
+      className="mt-1 rounded-md bg-zinc-50 px-2 py-1 text-xs break-keep break-words whitespace-pre-wrap text-zinc-700"
+      title="부품을 요청한 사람이 신청할 때 적은 말입니다."
+    >
+      <span className="text-zinc-500">요청 비고</span>: “{note}”
+    </p>
+  );
 }
 
 /** 사유 상자 둘이 **같은 틀**을 쓴다 — 나란히 섰을 때 폭·여백이 다르면 같은 종류의 것으로 안 보인다. */
@@ -470,7 +504,13 @@ export function RequestManagerScreen({
                         {ENTRY_TYPE_LABEL[r.type]}
                         <span className="tabular block text-xs text-zinc-500">{r.occurredOn}</span>
                       </td>
-                      <td className={`${TD} max-w-64 text-zinc-700`}>{aboutOf(r) || <span className="text-zinc-400">-</span>}</td>
+                      {/* 🔴 **둘이 한 덩어리로 읽히지 않게 줄을 가른다** (2026-10-22) — 위는 인수번호(또는
+                          빌려준 곳·사유), 아래는 이름표를 단 요청 비고다. 🔵 비고가 없으면 아랫줄 자체가 없어
+                          지금까지와 한 글자도 다르지 않다. */}
+                      <td className={`${TD} max-w-64 text-zinc-700`}>
+                        {aboutOf(r) || <span className="text-zinc-400">-</span>}
+                        <RequestNote note={r.note} />
+                      </td>
                       {/* 🔵 다른 데서 올라온 신청에만 표식을 붙인다 — 거의 전부가 재고 관리에서 직접 올린 것이라,
                           줄마다 출처가 붙으면 눈에 띄어야 할 「A/S」가 묻힌다(`REQUEST_SOURCE_LABEL`). */}
                       <td className={`${TD} whitespace-nowrap text-zinc-700`}>
@@ -510,6 +550,9 @@ export function RequestManagerScreen({
                               requestId={r.id}
                               status={actionStatus}
                               lines={r.lines}
+                              /* 🔵 목록의 「무엇에」 칸이 그리는 것과 **같은 값**이다(위 `RequestNote`) — 상자를
+                                 열었다고 다른 글이 보이면 안 된다. 뽑는 자리는 신청 줄 하나다. */
+                              requestNote={r.note}
                               canDecide={isAdmin}
                               canCancel={canCancel}
                               approvalRequired={approvalRequired}

@@ -57,6 +57,8 @@ const SOURCE: RequestStatusSource = {
   requesterSub: "portal-sub-aaaa-1111",
   requestedByName: "예시 신청자",
   requestedAt: "2026-10-15T01:00:00.000Z",
+  // 🔵 **안 적고 올린 신청이 기본**이다 — 재고 관리 화면에서 올린 신청은 늘 비어 있다(2026-10-22).
+  note: "",
   lines: [LINE],
   decidedByName: null,
   decidedAt: null,
@@ -173,7 +175,8 @@ describe("돌려주는 모양 — 화면이 그릴 수 있을 만큼 (2026-10-15
   it("칸은 이것뿐이다 — 약속이라 이름을 바꾸거나 빼지 않는다", () => {
     assert.deepEqual(
       Object.keys(toApiRequestStatus("AS-1", source())).sort(),
-      ["closed", "decision", "hold", "id", "intakeNumber", "lines", "requestKey", "requestedAt", "requester", "status", "type"].sort(),
+      // 🔵 `note` 는 2026-10-22 에 더한 칸이다 — **최상위**이고 `decision` 안이 아니다(아래 묶음).
+      ["closed", "decision", "hold", "id", "intakeNumber", "lines", "note", "requestKey", "requestedAt", "requester", "status", "type"].sort(),
     );
   });
 
@@ -355,6 +358,73 @@ describe("돌려주는 모양 — 결정과 보류 (2026-10-15)", () => {
 
   it("보류가 아니면 hold 는 null 이다", () => {
     assert.equal(toApiRequestStatus("AS-1", source()).hold, null);
+  });
+});
+
+/**
+ * ============================================================================
+ * 🔴 **요청 비고를 A/S 가 되읽는다** (2026-10-22)
+ * ============================================================================
+ * 값은 2026-10-22 부터 신청에 저장되고 있었는데(`stock_requests.payload` 의 `note`), 이 통로가
+ * `decision.note`(반려 사유)와 `hold.reason`(보류 사유)만 내주어 **A/S 는 제가 적어 보낸 말을
+ * 되읽을 수 없었다.** 쓰는 분 요청으로 최상위에 칸 하나를 더한 자리다.
+ *
+ * 🔴 여기서 못 박는 것 넷:
+ *  1. **최상위다** — `decision` 안이 아니다. 결정 전에도 적힌 말은 있다.
+ *  2. **없으면 `null` 이 아니라 빈 글자다** — 「일어났나」가 아니라 「적힌 말」이라서다. `null` 이
+ *     섞이면 받는 쪽이 검사를 두 벌 하게 되고, 한쪽을 빠뜨린 날 화면에 「null」이 그려진다.
+ *  3. **글자가 아닌 payload 에서도 안 터진다** — jsonb 라 옛 신청에는 칸이 아예 없고, 손으로 고친
+ *     행에는 숫자·객체가 들어 있을 수 있다. 그대로 실으면 「[object Object]」가 신청자의 말인 척한다.
+ *  4. **읽는 규칙이 `readRequestNote` 한 벌이다** — 화면(승인 요청건)과 이 통로가 같은 함수를 쓴다.
+ * ============================================================================
+ */
+describe("🔴 요청 비고 — 최상위 `note` 로 내준다 (2026-10-22)", () => {
+  it("🔴 **최상위**에 실린다 — `decision` 안이 아니다(결정 전에도 적힌 말은 있다)", () => {
+    const q = toApiRequestStatus("AS-1", source({ note: "접촉 불량이라 2개만 먼저" }));
+    assert.equal(q.note, "접촉 불량이라 2개만 먼저");
+    assert.equal(q.decision, null, "아직 결정 전인데 결정 칸이 섰다");
+  });
+
+  it("🔴 안 적었으면 **빈 글자**다 — `null`·`undefined` 가 아니다", () => {
+    const q = toApiRequestStatus("AS-1", source({ note: "" }));
+    assert.equal(q.note, "");
+    assert.notEqual(q.note, null, "null 을 내보내면 받는 쪽이 검사를 두 벌 해야 한다");
+    assert.equal(typeof q.note, "string");
+  });
+
+  it("🔴 앞뒤 공백만 있는 글은 **빈 글자로 떨어진다** — 따옴표만 남은 상자를 그리지 않게", () => {
+    assert.equal(toApiRequestStatus("AS-1", source({ note: "   \n  " })).note, "");
+    assert.equal(toApiRequestStatus("AS-1", source({ note: "  교체 바랍니다  " })).note, "교체 바랍니다");
+  });
+
+  /**
+   * 🔴 **타입이 `string` 이라고 런타임에도 글자인 것은 아니다.** 저 값은 jsonb 를 통째로 형변환해 만든
+   * 것이라(`lib/stock/requests.ts` 의 `toRow`), 옛 신청에는 칸이 아예 없고 손으로 고친 행에는 아무거나
+   * 들어 있을 수 있다. 🔵 그래서 **타입을 뚫고** 넣어 본다 — 운영에서 실제로 올 수 있는 값들이다.
+   */
+  it("🔴 글자가 아닌 값이 들어 있어도 **안 터지고 빈 글자**다 (숫자·객체·null·배열·없음)", () => {
+    for (const bad of [42, { 뭔가: "객체" }, null, ["배열"], undefined]) {
+      const q = toApiRequestStatus("AS-1", source({ note: bad as unknown as string }));
+      assert.equal(q.note, "", `${JSON.stringify(bad) ?? "undefined"} 가 빈 글자로 안 떨어졌다`);
+    }
+  });
+
+  it("🔵 **묻는 법 둘이 같은 값을 준다** — 열쇠로 묻든 인수번호로 묻든 신청 하나는 한 모양이다", () => {
+    const row = source({ note: "같은 말이 와야 한다" });
+    const byKey = buildStatusResponse(["AS-1"], new Map([["AS-1", row]]), "2026-10-22T10:00:00.000Z");
+    const byIntake = buildIntakeStatusResponse([{ requestKey: "AS-1", request: row }], "2026-10-22T10:00:00.000Z");
+    assert.equal(byKey.requests[0].note, "같은 말이 와야 한다");
+    assert.deepEqual(byIntake.requests[0], byKey.requests[0]);
+  });
+
+  it("🔴 반려 사유(`decision.note`)와 **다른 칸**이다 — 섞이면 누구의 말인지 알 수 없다", () => {
+    const q = toApiRequestStatus(
+      "AS-1",
+      source({ note: "신청한 사람이 적은 말", status: "REJECTED", decidedByName: "정영빈", decidedAt: "2026-10-22T04:00:00.000Z", decisionNote: "담당자가 반려한 까닭" }),
+    );
+    assert.equal(q.note, "신청한 사람이 적은 말");
+    assert.equal(q.decision?.note, "담당자가 반려한 까닭");
+    assert.notEqual(q.note, q.decision?.note);
   });
 });
 
