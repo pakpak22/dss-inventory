@@ -568,14 +568,40 @@ describe("용도의 이름표 · 빈 절차 안내", () => {
     }
   });
 
-  test("🔴 매쳐·제너레이터 안내는 「담당자가 바로 불출한다」를 베끼지 않는다", () => {
-    // 저 둘은 절차가 비어서 담당자가 바로 처리하는 것이 아니라, **아직 그 용도로 오는 신청이
-    // 없다.** 첫째 용도의 문장을 베껴 붙이면 관리자는 단계를 넣어 두고 걸리기를 기다리게 된다.
+  /**
+   * 🔴 **이 시험은 2026-10-22 에 뒤집혔다.** 그 전에는 매쳐·제너레이터 안내가 「아직 이 절차로
+   * 오지 않습니다」라고 **말하는 것을** 못 박았다 — 그때는 그 둘이 그릇뿐이라 그것이 참이었다.
+   * 같은 날 신청이 종류별로 갈리면서 참이 **뒤집혔고**, 시험도 「더는 그렇게 말하지 않는다」를
+   * 재는 쪽으로 돌아섰다. 🔵 지우지 않고 고쳐 쓴 까닭: 옛 문장이 되돌아와도 **오류가 나지 않고**
+   * 화면에만 조용히 남는다. 글자를 재는 시험이 없으면 아무도 신고하지 않는다.
+   */
+  test("🔴 매쳐·제너레이터 안내는 「아직 안 온다」를 더는 말하지 않는다 (2026-10-22)", () => {
     for (const scope of ["PART_ISSUE_MATCHER", "PART_ISSUE_GENERATOR"] as const) {
       const notice = APPROVAL_ROUTE_EMPTY_NOTICES[scope];
-      assert.ok(notice.includes("아직 이 절차로 오지 않습니다"), `${scope}: ${notice}`);
+      assert.ok(!notice.includes("아직"), `${scope}: 아직 「아직」이라고 말한다 — ${notice}`);
+      assert.ok(!notice.includes("오지 않습니다"), `${scope}: ${notice}`);
+      // 🔴 **지금 일어나는 일**을 말한다: 단계가 없으면 결재를 건너뛰고 그 자리에서 나간다.
+      //    「단계를 넣어 두고 기다리면 된다」로 읽히면 그 사이 부품이 결재 없이 나간다.
+      assert.ok(notice.includes("결재 없이"), `${scope}: 결재를 건너뛴다는 사실을 말하지 않는다 — ${notice}`);
+      assert.ok(notice.includes("바로 불출합니다"), `${scope}: 무슨 일이 일어나는지 말하지 않는다 — ${notice}`);
+      // 🔴 **어떤 신청이 이 절차를 타는지**까지 말한다 — 이름표에는 그것을 적을 자리가 없다.
+      assert.ok(notice.includes("수리 건"), `${scope}: 어떤 신청이 오는지 말하지 않는다 — ${notice}`);
       assert.notEqual(notice, APPROVAL_ROUTE_EMPTY_NOTICES.PART_ISSUE);
     }
+    assert.ok(APPROVAL_ROUTE_EMPTY_NOTICES.PART_ISSUE_MATCHER.includes("매쳐"));
+    assert.ok(APPROVAL_ROUTE_EMPTY_NOTICES.PART_ISSUE_GENERATOR.includes("제너레이터"));
+  });
+
+  test("🔴 제너레이터 안내는 **토탈 컨트롤러**도 함께 말한다 — 짝표가 둘을 한 절차로 보낸다", () => {
+    // `approvalRouteScopeForWorkflowKind("TOTAL_CONTROLLER")` 가 제너레이터 용도로 떨어지는데
+    // 이름표에는 「제너레이터」밖에 없다. 안내문이 말하지 않으면 관리자는 토탈 컨트롤러 신청이
+    // **결재 없이 나가는 것을 끝내 모른다** — 오류가 한 번도 나지 않아 아무도 신고하지 않는다.
+    const scope = approvalRouteScopeForWorkflowKind("TOTAL_CONTROLLER");
+    assert.equal(scope, "PART_ISSUE_GENERATOR");
+    assert.ok(
+      APPROVAL_ROUTE_EMPTY_NOTICES[scope].includes("토탈 컨트롤러"),
+      `토탈 컨트롤러가 이 절차로 온다는 사실이 안내에 없다 — ${APPROVAL_ROUTE_EMPTY_NOTICES[scope]}`,
+    );
   });
 });
 
