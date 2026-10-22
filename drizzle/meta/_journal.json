@@ -176,6 +176,13 @@
       "when": 1792626332335,
       "tag": "0024_gray_meltdown",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1792630371604,
+      "tag": "0025_brave_grey_gargoyle",
+      "breakpoints": true
     }
   ]
 }

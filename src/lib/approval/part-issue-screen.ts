@@ -3,6 +3,7 @@ import { type ApprovalStepActor } from "./delegation";
 import { partIssueLockFor } from "./part-issue-gate";
 import { PART_ISSUE_STATUS_LABELS, type PartIssueStatus } from "./part-issue-rules";
 import type { EntryType } from "@/lib/stock/codes";
+import type { RepairCaseSnapshot } from "@/lib/stock/repair-case";
 import type { RequestItemView } from "@/lib/stock/request-item-detail";
 
 /**
@@ -159,8 +160,17 @@ export type IssueApprovalCard = {
   /** 이 건이 **타고 있는 판**의 단계들(현재 판이 아니다 — 서버가 결재건의 `route_id` 로 읽는다). */
   trail: IssueApprovalTrailStep[];
   lines: IssueApprovalLine[];
-  /** 반출 신청 쪽 — 요약 글자와 신청자. 신청을 못 찾으면 `null`(있을 수 없지만 지어내지 않는다). */
-  request: { type: EntryType; summary: string; requestedByName: string } | null;
+  /**
+   * 반출 신청 쪽 — 요약 글자와 신청자, 그리고 **그 신청에 딸린 수리 건 여섯 값**.
+   * 신청을 못 찾으면 `null`(있을 수 없지만 지어내지 않는다).
+   *
+   * 🔴 **수리 건을 카드 맨 위(`reason`·`requestNote` 옆)가 아니라 여기 담은 까닭**: 저 둘은 **결재건**에
+   *    적힌 값이고(올린 사람의 말 · 신청자의 말), 수리 건은 **신청** 쪽 값이다. 신청을 못 찾은 카드에
+   *    수리 건만 떠 있으면 어디서 온 값인지 알 수 없다 — 못 찾으면 **함께** 사라지는 것이 맞다.
+   * 🔵 `requestedByName` 과 **같은 자리에서 온다**(서버가 신청 줄에서 옮겨 적는다,
+   *    `./part-issue-screen-data.ts` 의 `toCard`).
+   */
+  request: { type: EntryType; summary: string; requestedByName: string; repairCase: RepairCaseSnapshot } | null;
   /** 내가 올린 건인가 — **서버 판정**이다(화면은 세션이 누구인지 모른다). */
   mine: boolean;
   /**

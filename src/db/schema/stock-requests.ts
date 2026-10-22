@@ -145,6 +145,50 @@ export const stockRequests = pgTable(
      * 🔵 기본값을 두지 않는다 — 「안 받았다」와 「받았는데 그 종류다」를 가를 수 있어야 한다.
      */
     workflowKind: requestWorkflowKindEnum("workflow_kind"),
+    /* ──────────────────────────────────────────────────────────────────────
+     * 그 신청에 딸린 **수리 건의 값 여섯** — 신청이 올라온 **그 시점 값으로 복사** (2026-10-22).
+     *
+     * 🔴 **묶음(jsonb)이 아니라 칸으로 둔다.** 까닭 셋:
+     *   1. **바로 옆에 선례가 있다** — 원장 `stock_entries` 가 같은 통로에서 받은 다섯을 칸으로
+     *      복사해 둔다(`./stock.ts` 51행 근처). 같은 출처의 같은 값을 한쪽은 칸, 한쪽은 묶음으로
+     *      두면 읽는 사람이 둘을 다른 것으로 본다.
+     *   2. **나중에 찾아야 할 값들이다** — 「이 S/N 으로 나간 부품」·「이 고객사 건들」. 묶음 안에
+     *      넣으면 `payload->>'…'` 로 캐야 하고 색인을 걸기도 번거롭다.
+     *   3. **DB 가 모양을 지켜 준다**(NOT NULL + 빈 글자 기본값). 묶음이면 칸이 아예 없는 줄과
+     *      `null` 인 줄과 빈 글자인 줄이 섞이고, 그 셋을 읽는 코드가 매번 세 갈래로 갈린다.
+     * 🔴 **`payload` 에 넣지 않았다.** 그 칸은 「검사를 통과한 EntryInput, 확인 때 **이 값으로
+     *    원장을 쓴다**」는 뜻이고(위 그 칸 주석), 수리 건의 값은 원장에 쓸 입력이 아니다 — 원장은
+     *    [확인] 순간 **제 손으로 다시** A/S 에 물어 제 칸에 적는다(`lib/stock/ledger.ts`). 같은 날
+     *    `workflow_kind` 를 같은 까닭으로 밖에 두었고, 선례는 `source`·`external_key`·`requester_sub` 다.
+     *
+     * 🔴 **「요청 당시 값」이라 나중에 틀려 있을 수 있다.** A/S 에서 모델·L/N·S/N·고객사·인수일을
+     *    고치면 여기 글자는 옛것이 된다 — 그래서 **화면이 「신청 당시」라고 말한다**
+     *    (`lib/stock/repair-case.ts` 의 `REPAIR_CASE_TITLE`). 🔵 그래도 복사해 두는 까닭은 위 1번의
+     *    원장과 같다: 「그때 무엇이었나」가 서류와 맞춰 보는 값이다.
+     * 🔴 **못 받으면 여섯이 빈 글자이고 신청은 그대로 선다** — A/S 가 꺼져 있다고 부품 요청을 막지
+     *    않는다(쓰는 분 지시). 받아 오는 자리는 `lib/stock/requests.ts` 의 `createRequest` 하나다.
+     * 🔵 **칸 이름을 `stock_entries` 와 똑같이** 둔다(`customer_name`·`end_user`·…). 같은 값이라
+     *    이름이 갈리면 두 표를 맞대어 볼 때마다 짝을 외워야 한다.
+     * ────────────────────────────────────────────────────────────────────── */
+    customerName: text("customer_name").notNull().default(""),
+    endUser: text("end_user").notNull().default(""),
+    productModel: text("product_model").notNull().default(""),
+    productSerial: text("product_serial").notNull().default(""),
+    productLot: text("product_lot").notNull().default(""),
+    /**
+     * 인수일 — 🔴 **`date` 가 아니라 `text` 다. `"YYYY-MM-DD"` 글자를 그대로 담는다.**
+     *
+     * 🔴 **까닭은 하루 밀림 하나다.** A/S 는 시각 없는 날짜 글자를 **한 글자도 안 바꾸고** 내보내고
+     *    (저쪽 커밋 `3d6fafb`), 우리도 바꾸지 않는다. 글자로 받아 글자로 넣으면 **Date 가 끼어들
+     *    자리가 통째로 없다** — `date` 칸이어도 지금은 같은 글자로 돌아오지만, 그때는 「PostgreSQL 이
+     *    돌려주는 모양」을 믿는 것이 되고 그 믿음은 코드 어디에도 안 적힌다.
+     * 🔵 **위 다섯과 같은 모양이 되는 덤**이 있다: 여섯이 전부 「빈 글자 = 모름」이라 화면의
+     *    「비면 안 그린다」가 **한 가지 규칙**으로 끝난다. `date` 면 이 칸만 `null` 이라 갈래가 하나 는다.
+     * 🔴 그래서 이름이 `_at` 인데 **시각이 아니다.** 바로 위아래의 `requested_at`·`decided_at` 과 달리
+     *    `timestamptz` 가 아니다 — A/S 가 그 이름(`receivedAt`)으로 보내므로 두 시스템 사이에서
+     *    이름을 갈지 않는 쪽을 골랐다(이름을 갈면 옮겨 적다 빠뜨렸을 때 아무도 모른다).
+     */
+    receivedAt: text("received_at").notNull().default(""),
     requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
     decidedBy: uuid("decided_by"),
     decidedByName: text("decided_by_name"),

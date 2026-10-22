@@ -243,7 +243,14 @@ function toCard(
     currentStep: view.currentStep ? { stepOrder: view.currentStep.stepOrder, approverName: view.currentStep.approverName } : null,
     trail,
     lines: linesOf(view, request),
-    request: request ? { type: view.requestType, summary: view.requestSummary, requestedByName: request.requestedByName } : null,
+    /**
+     * 🔵 **수리 건 여섯 값도 이미 와 있던 값이다** (2026-10-22, 쓰는 분 요청). 위에서 부르는
+     *    `listAllRequests` 가 신청 표의 여섯 칸을 `PendingRequestRow.repairCase` 로 싣고 있으므로
+     *    조회는 한 글자도 안 고치고 **옮겨 적기만** 한다 — 2026-10-21 에 소유구분이 **바로 이
+     *    자리에서** 빠져 「승인 요청건」에서만 안 보이던 일이 있었다(`linesOf` 주석).
+     * 🔴 **신청을 못 찾으면 함께 사라진다** — 삼항의 같은 가지라서 저절로 그렇다(타입 쪽 주석).
+     */
+    request: request ? { type: view.requestType, summary: view.requestSummary, requestedByName: request.requestedByName, repairCase: request.repairCase } : null,
     mine: view.requestedBy === ctx.viewerUserId,
     // 🔵 울타리가 아니라 「그릴까」다. 막는 자리는 `cancelPartIssueApproval` 의 WHERE 다.
     canCancel: checkCanCancelPartIssue(view.status, view.requestedBy, ctx.viewerUserId).ok,

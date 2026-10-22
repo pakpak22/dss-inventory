@@ -24,8 +24,10 @@ import {
   type EntryType,
 } from "./codes";
 import type { EntryInput } from "./form";
+import { lookupIntake } from "./intake-lookup";
 import { buildIssueInput, type IssueQuantity } from "./issue";
 import { LedgerAbort, ledgerErrorMessage, recordEntryIn, type Actor, type EntryAuthor, type RecordResult } from "./ledger";
+import { EMPTY_REPAIR_CASE, repairCaseFromLookup, repairCaseLookupNumber, type RepairCaseSnapshot } from "./repair-case";
 
 /**
  * 반출 확인 대기 (2026-10-06 사용자 결정). 신청 → 담당자 확인 → 원장.
@@ -160,6 +162,14 @@ export interface PendingRequestRow {
    *    (`lib/api/stock-request-status.ts`) A/S 가 받는 모양은 그대로다. 애초에 저쪽이 보낸 값이다.
    */
   workflowKind: RequestWorkflowKind | null;
+  /**
+   * 그 신청에 딸린 **수리 건 여섯 값** — 신청이 올라온 **그때** A/S 에서 받아 적어 둔 것 (2026-10-22).
+   *
+   * 🔴 **지금 값이 아니다.** 화면은 「신청 당시」라고 말해야 하고, 그 글자는 `./repair-case.ts` 한 곳에 있다.
+   * 🔴 **언제나 있다**(`null` 이 아니다) — 못 받았으면 여섯이 빈 글자다. 「비면 안 그린다」를 화면이
+   *    묶음 하나로 가리게 하려는 것이고(`repairCaseGroups`), 그래서 받는 쪽에 `?? ` 가 한 번도 안 붙는다.
+   */
+  repairCase: RepairCaseSnapshot;
   /**
    * 신청한 사람의 재고 관리 `users.id`. 🔴 **`null` 일 수 있다** — A/S 에서 올라왔고 포털 번호로 재고 관리의
    * 사람을 못 찾은 신청이다. 그때도 이름(`requestedByName`)은 있다.
@@ -310,6 +320,35 @@ export interface CreatedRequest {
   created: boolean;
 }
 
+/**
+ * 신청에 적어 둘 **수리 건 여섯 값**을 A/S 에 물어 온다 (2026-10-22, 쓰는 분 요청).
+ *
+ * ── 🔴 **실패해도 신청은 선다. 이 조각에서 가장 중요한 규칙이다** ───────────
+ * 부품을 못 받는 것보다 **정보 몇 칸이 비는 쪽**이 훨씬 낫다(쓰는 분 지시). 그래서 이 함수는
+ * **무슨 일이 있어도 던지지 않고** 빈 값을 돌려준다:
+ *  - A/S 가 꺼져 있거나 느리거나 그런 인수번호가 없으면 → `lookupIntake` 가 이미 갈래로 돌려주고
+ *    `repairCaseFromLookup` 이 빈 값으로 눕힌다(그 함수의 주석).
+ *  - 그 바깥의 사고(통로 주소가 깨져 `fetch` 가 던지는 꼴, env 를 읽다 터지는 꼴)까지 **여기서
+ *    삼킨다.** 🔴 `lookupIntake` 안의 `try` 를 믿고 이 `try` 를 지우지 마라 — 저쪽이 안 잡는 자리가
+ *    한 줄이라도 생기면 **그날부터 반출 신청이 통째로 안 선다.** 잃는 것은 칸 여섯, 지키는 것은 신청이다.
+ * 🔵 삼키되 **조용히 지나가지 않는다** — 로그 한 줄을 남긴다. 신청은 섰는데 칸이 비어 있는 날
+ *    까닭을 찾을 자리가 여기뿐이다.
+ *
+ * 🔴 **인수번호가 없는 신청에는 묻지도 않는다** — 가리는 자리는 순수 함수 하나다(`repairCaseLookupNumber`).
+ * 🔵 **트랜잭션 **밖**에서 부른다**(아래 `createRequest`). 5초까지 기다릴 수 있는 네트워크 호출이라
+ *    (`./intake-lookup.ts` 의 `TIMEOUT_MS`) 트랜잭션 안에 두면 그동안 DB 연결과 잠금을 붙들고 있는다.
+ */
+async function readRepairCaseFor(input: EntryInput): Promise<RepairCaseSnapshot> {
+  const number = repairCaseLookupNumber(input);
+  if (number === null) return EMPTY_REPAIR_CASE;
+  try {
+    return repairCaseFromLookup(await lookupIntake(number));
+  } catch (e) {
+    console.error("[stock] 수리 건 정보를 못 받았다 — 빈 값으로 신청을 만든다:", e instanceof Error ? e.message : e);
+    return EMPTY_REPAIR_CASE;
+  }
+}
+
 /** 같은 바깥 요청 번호로 이미 들어온 신청. 멱등의 양쪽(미리 보기·부딪힌 뒤)이 **같은 질의**를 쓴다. */
 async function findByExternalKey(externalKey: string): Promise<{ id: string; status: RequestStatus } | null> {
   const [row] = await db().select({ id: stockRequests.id, status: stockRequests.status }).from(stockRequests).where(eq(stockRequests.externalKey, externalKey));
@@ -343,6 +382,15 @@ export async function createRequest(input: EntryInput, actor: Requester, origin:
   }
   const names = await partNamesOf(linesOf(input).map((l) => l.partId));
   const summary = buildRequestSummary(input, names);
+  /**
+   * 🔴 **여기가 「요청이 올라올 때 받아 저장」하는 그 자리다** (2026-10-22, 쓰는 분 결정) — 화면도,
+   *    A/S 통로도 **이 함수 하나로** 신청을 만들므로 받아 오는 자리도 하나다(머리말 「신청이 생기는
+   *    길은 여기 하나다」). 부르는 쪽 둘은 한 글자도 안 고쳤다.
+   * 🔴 **멱등 되돌림(위 `findByExternalKey`)보다 **뒤**다** — 같은 `requestKey` 가 두 번 오면 위에서
+   *    이미 돌아갔으므로 **A/S 에 다시 묻지 않는다.** 끊겨서 다시 보낸 호출마다 5초를 더 쓰지 않는다.
+   * 🔵 **트랜잭션 밖**이다(그 함수 주석의 까닭).
+   */
+  const repairCase = await readRepairCaseFor(input);
   try {
     return await db().transaction(async (tx) => {
       const [row] = await tx
@@ -359,6 +407,9 @@ export async function createRequest(input: EntryInput, actor: Requester, origin:
           // 🔴 **「모름」은 `null`** 이다 — 화면에서 직접 올린 신청과 종류를 안 보낸 신청이 같은 자리로
           //    간다(기존 「부품 불출」 절차). 기본값을 지어내지 않는다.
           workflowKind: origin.workflowKind ?? null,
+          // 🔴 **여섯을 펴 넣는다.** 못 받았으면 전부 빈 글자이고, 그래도 신청은 선다(위 `readRepairCaseFor`).
+          //    🔵 인수일은 `"YYYY-MM-DD"` **글자 그대로** 들어간다 — 이 줄에 Date 가 없는 것이 하루 밀림을 막는 방법이다.
+          ...repairCase,
         })
         .returning({ id: stockRequests.id, status: stockRequests.status });
       await tx.insert(auditLogs).values(
@@ -915,6 +966,20 @@ function toRow(r: typeof stockRequests.$inferSelect, names: ReadonlyMap<string, 
     source: r.source,
     // 🔴 **그대로 싣는다** — 「모름」은 `null` 이고, 기본값으로 채우면 옛 신청이 종류별 절차를 타게 된다.
     workflowKind: r.workflowKind,
+    /**
+     * 🔴 **표에 적힌 글자 그대로**다 (2026-10-22). 특히 인수일은 **`new Date()` 를 거치지 않는다** —
+     *    거치면 시간대 때문에 하루가 밀린다(`./repair-case.ts` 의 그 칸 주석). 바로 아래 `requestedAt`
+     *    이 `toISOString()` 을 쓰는 것과 **일부러 다르다**: 저것은 시각이고 이것은 날짜 글자다.
+     * 🔵 「비면 안 그린다」는 여기서 가리지 않는다 — 화면이 `repairCaseGroups` 하나로 가린다.
+     */
+    repairCase: {
+      customerName: r.customerName,
+      endUser: r.endUser,
+      productModel: r.productModel,
+      productSerial: r.productSerial,
+      productLot: r.productLot,
+      receivedAt: r.receivedAt,
+    },
     requestedBy: r.requestedBy,
     requestedByName: r.requestedByName,
     requestedAt: r.requestedAt.toISOString(),

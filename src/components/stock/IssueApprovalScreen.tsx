@@ -3,6 +3,7 @@
 import { startTransition, useActionState, useState, type ReactNode } from "react";
 import { cancelPartIssueAction, decidePartIssueAction, executePartIssueAction, rejectExecutionPartIssueAction, type PartIssueActionState } from "@/app/actions/part-issue";
 import { IssueApprovalTrail } from "./IssueApprovalTrail";
+import { RepairCaseInfo } from "./RepairCaseInfo";
 import { RequestItemDetails } from "./RequestItemDetails";
 import {
   formatPartIssueMoment,
@@ -156,6 +157,16 @@ function ApprovalCard({ card, actions, error }: { card: IssueApprovalCard; actio
           <span className={`${BADGE} ${badge.className}`}>{badge.label}</span>
         </div>
       </div>
+
+      {/* 🔵 **수리 건 — 머리말 바로 아래, 말 둘보다 위** (2026-10-22, 쓰는 분 요청).
+          🔴 **「신청 사유」와 「요청 비고」 사이에 끼우지 않는다.** 그 둘은 2026-10-22 에 **나란히
+             세우기로 정한 한 쌍**이고(누구의 말인지를 이름표로 가른다), 사이에 다른 종류의 상자가
+             들어가면 그 짝이 끊긴다.
+          🔴 **말 둘보다 위인 까닭**: 이것은 사람이 쓴 말이 아니라 A/S 에서 받아 온 **사실**이고,
+             바로 윗줄의 요약 글자에 적힌 인수번호가 **어느 건인지**를 푸는 값이다. 결재자는 「무엇을
+             고치는 건인가」를 먼저 보고 그다음에 사람들의 말을 읽는다.
+          🔵 비면 아무것도 안 선다 — 재고 관리에서 직접 올린 신청은 늘 비어 있다. */}
+      {card.request ? <RepairCaseInfo repairCase={card.request.repairCase} /> : null}
 
       {/* 🔴 사유는 **선택이라 비어 있을 수 있다**(2026-10-15 결정). 비면 **이 줄을 아예 그리지 않는다** —
           빈 자리를 「없음」 같은 글자로 채우면 적을 것이 없었다는 사실을 글자로 지어내는 셈이고, 따옴표만

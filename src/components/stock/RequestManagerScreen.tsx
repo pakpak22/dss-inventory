@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { IssueApprovalTrail } from "./IssueApprovalTrail";
+import { RepairCaseInfo } from "./RepairCaseInfo";
 import { RequestActions, type RequestActionLine, type RequestActionStatus } from "./RequestActions";
 import { RequestItemDetails } from "./RequestItemDetails";
 import type { RequestSource, RequestStatus } from "@/db/schema/stock-requests";
@@ -33,6 +34,7 @@ import {
   type RequestDecisionActor,
   type RequestStatusFilter,
 } from "@/lib/stock/codes";
+import type { RepairCaseSnapshot } from "@/lib/stock/repair-case";
 import { partDetailHref } from "@/lib/stock/request-item-detail";
 import type { RequestNotice } from "@/lib/stock/request-notice";
 
@@ -81,6 +83,12 @@ export interface ManagerRequestRow {
   counterparty: string;
   reason: string;
   note: string;
+  /**
+   * 그 신청에 딸린 **수리 건 여섯 값** — 신청이 올라온 **그때** A/S 에서 받아 적어 둔 것 (2026-10-22).
+   * 🔴 **지금 값이 아니다** — 「신청 당시」라고 말하는 일은 `RepairCaseInfo` 가 한다.
+   * 🔵 **언제나 있다**(`null` 이 아니다). 못 받았으면 여섯이 빈 글자이고, 그때 저 조각이 아무것도 안 그린다.
+   */
+  repairCase: RepairCaseSnapshot;
   lines: ManagerRequestLine[];
   /** 마감된 신청인가 — 🔴 상태값이 아니라 **세어서** 안다(`isClosedRequest`). 화면은 글자만 「마감」으로 바꾼다 */
   closed: boolean;
@@ -545,8 +553,14 @@ export function RequestManagerScreen({
                       {/* 🔴 **둘이 한 덩어리로 읽히지 않게 줄을 가른다** (2026-10-22) — 위는 인수번호(또는
                           빌려준 곳·사유), 아래는 이름표를 단 요청 비고다. 🔵 비고가 없으면 아랫줄 자체가 없어
                           지금까지와 한 글자도 다르지 않다. */}
+                      {/* 🔵 **수리 건 정보가 인수번호 바로 밑**이다 (2026-10-22) — 그 번호가 가리키는 건이
+                          무엇인지를 푸는 값이라, 번호에서 눈을 떼지 않고 읽히는 자리가 여기다. 🔴 요청 비고는
+                          그 **아래로 민다**: 저것은 사람이 쓴 말이고 이것은 A/S 에서 받아 온 사실이라, 사실 둘
+                          사이에 말이 끼면 인수번호와 그 풀이가 끊긴다. 🔵 둘 다 비면 아랫줄 자체가 없어
+                          지금까지와 한 글자도 다르지 않다. */}
                       <td className={`${TD} max-w-64 text-zinc-700`}>
                         {aboutOf(r) || <span className="text-zinc-400">-</span>}
+                        <RepairCaseInfo repairCase={r.repairCase} />
                         <RequestNote note={r.note} />
                       </td>
                       {/* 🔵 다른 데서 올라온 신청에만 표식을 붙인다 — 거의 전부가 재고 관리에서 직접 올린 것이라,
