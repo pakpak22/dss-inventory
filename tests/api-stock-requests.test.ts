@@ -40,9 +40,11 @@ describe("받는 값 — 제대로 온 본문 (2026-10-15)", () => {
     assert.equal(r.value.requestKey, "AS-REQ-2026-0007");
     assert.equal(r.value.intakeNumber, "D260701", "소문자로 와도 저장은 대문자 — 화면 폼과 같은 관례");
     assert.deepEqual(r.value.requester, { sub: "kakao:12345", name: "홍길동" });
+    /* 🔵 2026-10-22: 본문에 O/H 표시가 없는 요청이라 **줄마다 `false`** 로 떨어진다 —
+       그것이 「안 보내면 O/H 아님」 규칙이 실제로 도는 모습이다(칸은 언제나 선다). */
     assert.deepEqual(r.value.lines, [
-      { no: 165, quantity: 2, chargeType: "PAID" },
-      { no: 7, quantity: 1, chargeType: "FREE" },
+      { no: 165, quantity: 2, chargeType: "PAID", fromOhTemplate: false },
+      { no: 7, quantity: 1, chargeType: "FREE", fromOhTemplate: false },
     ]);
     assert.equal(r.value.reason, "증폭기 교체");
     assert.equal(r.value.note, "오후에 가져갑니다");
@@ -238,23 +240,25 @@ describe("부품 No. 되짚기 — 없는 번호와 숨긴 부품을 가른다",
   it("다 있으면 부품 id 로 바뀐다 — 차례·수량·유상무상 그대로", () => {
     const r = resolveApiRequestLines(
       [
-        { no: 165, quantity: 2, chargeType: "PAID" },
-        { no: 7, quantity: 1, chargeType: "FREE" },
+        // 🔵 2026-10-22 에 줄이 한 칸 넓어졌다 — O/H 표시도 **되짚기를 지나 그대로** 간다.
+        //    둘을 **다르게** 둔다: 같으면 뒤바뀌어도 시험이 못 본다.
+        { no: 165, quantity: 2, chargeType: "PAID", fromOhTemplate: true },
+        { no: 7, quantity: 1, chargeType: "FREE", fromOhTemplate: false },
       ],
       rows,
     );
     assert.ok(r.ok);
     assert.deepEqual(r.lines, [
-      { partId: "11111111-1111-4111-8111-111111111111", quantity: 2, chargeType: "PAID" },
-      { partId: "22222222-2222-4222-8222-222222222222", quantity: 1, chargeType: "FREE" },
+      { partId: "11111111-1111-4111-8111-111111111111", quantity: 2, chargeType: "PAID", fromOhTemplate: true },
+      { partId: "22222222-2222-4222-8222-222222222222", quantity: 1, chargeType: "FREE", fromOhTemplate: false },
     ]);
   });
 
   it("🔴 없는 번호는 **번호를 적어** 거절한다 (조용히 빼지 않는다)", () => {
     const r = resolveApiRequestLines(
       [
-        { no: 165, quantity: 1, chargeType: "FREE" },
-        { no: 9999, quantity: 1, chargeType: "FREE" },
+        { no: 165, quantity: 1, chargeType: "FREE", fromOhTemplate: false },
+        { no: 9999, quantity: 1, chargeType: "FREE", fromOhTemplate: false },
       ],
       rows,
     );
@@ -263,8 +267,8 @@ describe("부품 No. 되짚기 — 없는 번호와 숨긴 부품을 가른다",
   });
 
   it("🔴 숨긴(지운) 부품은 **다른 말**로 거절한다 — 오타인지 치운 부품인지 가려야 고칠 수 있다", () => {
-    const missing = resolveApiRequestLines([{ no: 9999, quantity: 1, chargeType: "FREE" }], rows);
-    const hidden = resolveApiRequestLines([{ no: 86, quantity: 1, chargeType: "FREE" }], rows);
+    const missing = resolveApiRequestLines([{ no: 9999, quantity: 1, chargeType: "FREE", fromOhTemplate: false }], rows);
+    const hidden = resolveApiRequestLines([{ no: 86, quantity: 1, chargeType: "FREE", fromOhTemplate: false }], rows);
     assert.equal(missing.ok, false);
     assert.equal(hidden.ok, false);
     assert.match(hidden.ok ? "" : hidden.message, /숨긴/);
@@ -278,7 +282,7 @@ describe("신청에 담기는 내용 — 화면이 만드는 것과 같은 모�
     assert.ok(r.ok);
     return r.value;
   })();
-  const input = buildApiUseRequest(value, [{ partId: "11111111-1111-4111-8111-111111111111", quantity: 2, chargeType: "PAID" }], "2026-10-15");
+  const input = buildApiUseRequest(value, [{ partId: "11111111-1111-4111-8111-111111111111", quantity: 2, chargeType: "PAID", fromOhTemplate: false }], "2026-10-15");
 
   it("🔴 종류는 「사용」 고정이다 — 바깥이 종류를 고르지 않는다", () => {
     assert.equal(input.type, "USE");
@@ -313,7 +317,7 @@ describe("신청에 담기는 내용 — 화면이 만드는 것과 같은 모�
     // 담기면 그 칸의 뜻이 깨지고, 나중에 짝을 바꿀 때 원장 쪽 자료까지 들춰야 한다.
     const withKind = parseApiStockRequest({ ...BODY, workflowKind: "MATCHER" });
     assert.ok(withKind.ok);
-    const built = buildApiUseRequest(withKind.value, [{ partId: "11111111-1111-4111-8111-111111111111", quantity: 2, chargeType: "PAID" }], "2026-10-22");
+    const built = buildApiUseRequest(withKind.value, [{ partId: "11111111-1111-4111-8111-111111111111", quantity: 2, chargeType: "PAID", fromOhTemplate: false }], "2026-10-22");
     assert.ok(!("workflowKind" in built), "payload 에 종류가 섞여 들어갔다");
     assert.ok(!JSON.stringify(built).includes("MATCHER"), "payload 어딘가에 종류가 적혔다");
   });

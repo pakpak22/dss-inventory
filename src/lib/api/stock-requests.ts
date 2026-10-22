@@ -33,6 +33,23 @@ export interface ApiRequestLineInput {
    *    아니라 줄 단위로 받는다(원장도 줄마다 들고 있다 — `stock_transactions.charge_type`).
    */
   chargeType: ChargeType;
+  /**
+   * **A/S 에서 [O/H 부품 한 번에 담기]로 담긴 줄인가** (2026-10-22, 쓰는 분 요청).
+   *
+   * 🔴 **위 `chargeType` 과 일부러 다르게 다룬다.** 저쪽은 안 보내면 **거절**이다(청구에 걸리는 값이라
+   *    한쪽으로 채워 주면 틀린 청구가 조용히 선다). 이쪽은 반대다 — **안 보내면 `false`(O/H 아님)** 로
+   *    떨어뜨린다. 까닭 둘:
+   *     ① 이 값으로 **달라지는 일이 화면의 딱지 하나뿐**이다. 수량도 절차도 청구도 건드리지 않는다.
+   *     ② 거절하면 **현장에서 부품을 못 받는다.** 옛 A/S(칸을 안 보내던 판)나 다른 부르는 쪽이
+   *        생기는 날, 딱지 하나 때문에 신청 전체를 막을 까닭이 없다.
+   *    🔵 수리 건의 종류(`workflowKind`)를 「모르면 `null`」로 떨어뜨리는 것과 **같은 결**이다.
+   * 🔴 **「안 보냄」과 「true 가 아닌 값」을 같은 자리로 보낸다** — 둘 다 「O/H 로 담긴 줄이라고
+   *    말할 근거가 없다」는 뜻이고, 가를 수 있어도 할 수 있는 일이 다르지 않다.
+   * 🔵 **칸 이름(`fromOhTemplate`)은 A/S 와 맞춘 글자다.** 어긋나도 **아무 오류가 안 난다** — 값이
+   *    조용히 `false` 가 되어 딱지만 영영 안 뜬다. 그래서 두 저장소를 맞대어 보는 점검이 이 글자를
+   *    잰다(A/S 쪽 `scripts/check-inventory-contract.ts` 의 ㉢).
+   */
+  fromOhTemplate: boolean;
 }
 
 /** 거절 문구에 쓰는 「PAID(유상) 또는 FREE(무상)」. 🔴 글자를 손으로 적지 않고 **코드값 한 벌에서** 만든다. */
@@ -141,7 +158,12 @@ export function parseApiStockRequest(raw: unknown): ParseApiStockRequestResult {
     if (!isChargeType(line.chargeType)) {
       return { ok: false, message: `${at}(No. ${line.no}): chargeType 은 ${CHARGE_CHOICES}입니다. **기본값이 없으니 줄마다 보내십시오.** 받은 값: ${JSON.stringify(line.chargeType ?? null)}` };
     }
-    lines.push({ no: line.no, quantity: line.quantity, chargeType: line.chargeType });
+    /**
+     * 🔴 **받은 것을 믿지 않되 거절하지도 않는다** — `true` 가 아니면 전부 `false` 다(위 그 칸 주석).
+     * 🔵 글자 `"true"` 도 숫자 `1` 도 `true` 로 봐 주지 않는다: 기계가 보내는 값이라 조용히 고쳐 주면
+     *    「보냈는데 왜 안 뜨지」가 「보낸 적 없는데 떴다」로 바뀌는 날이 온다.
+     */
+    lines.push({ no: line.no, quantity: line.quantity, chargeType: line.chargeType, fromOhTemplate: line.fromOhTemplate === true });
   }
 
   /**
@@ -173,6 +195,8 @@ export interface ResolvedApiLine {
   partId: string;
   quantity: number;
   chargeType: ChargeType;
+  /** 🔵 O/H 표시도 **보낸 값 그대로** 지나간다 — 되짚기는 번호를 id 로 바꾸는 일만 한다. */
+  fromOhTemplate: boolean;
 }
 
 export type ResolveApiLinesResult = { ok: true; lines: ResolvedApiLine[] } | { ok: false; message: string };
@@ -192,7 +216,7 @@ export function resolveApiRequestLines(lines: readonly ApiRequestLineInput[], fo
   }
   if (missing.length > 0) return { ok: false, message: `재고 관리에 없는 부품 No. 입니다: ${missing.join(", ")}. GET /api/v1/parts 의 no 를 보내십시오.` };
   if (hidden.length > 0) return { ok: false, message: `숨긴(지운) 부품이라 반출 신청을 받지 않습니다: No. ${hidden.join(", ")}. 재고 담당자에게 확인하십시오.` };
-  return { ok: true, lines: lines.map((l) => ({ partId: byNo.get(l.no)!.id, quantity: l.quantity, chargeType: l.chargeType })) };
+  return { ok: true, lines: lines.map((l) => ({ partId: byNo.get(l.no)!.id, quantity: l.quantity, chargeType: l.chargeType, fromOhTemplate: l.fromOhTemplate })) };
 }
 
 /**
@@ -214,6 +238,13 @@ export function resolveApiRequestLines(lines: readonly ApiRequestLineInput[], fo
  * 🔴 **유상·무상은 여기서 정하지 않는다.** A/S 가 **줄마다** 보낸 값을 그대로 싣는다 (2026-10-15 담당자 결정).
  *    한 건 안에 `PAID` 와 `FREE` 가 섞여 들어와도 **줄마다 제 값**으로 간다. 안 보냈으면 이 함수에 닿기 전에
  *    거절당한다(`parseApiStockRequest`) — 여기에 기본값을 되살리면 그 울타리가 통째로 무의미해진다.
+ *
+ * 🔴 **O/H 표시(`fromOhTemplate`)를 적어 두는 자리가 여기 하나다** (2026-10-22). 신청 payload 에 그
+ *    **순간의 사실**로 눕고, 담당자가 [확인]을 눌러 원장에 쓰일 때는 **따라가지 않는다** — 원장
+ *    (`stock_entries`)에는 그 칸이 없고 이 조각은 원장을 건드리지 않는다(쓰는 분과 정한 범위).
+ * 🔴 **`true` 일 때만 칸을 적는다.** `false` 를 적어 두면 2026-10-22 전에 올라간 옛 줄(칸이 아예 없다)과
+ *    모양이 갈려, 읽는 쪽이 「없음」과 「거짓」을 따로 다루게 된다. **없으면 아님** 한 줄로 끝내려는 것이고,
+ *    저쪽이 종류를 모를 때 칸을 아예 안 보내는 것(`workflowKind`)과 같은 수법이다.
  */
 export function buildApiUseRequest(value: ApiStockRequestInput, lines: readonly ResolvedApiLine[], todayIso: string): EntryInput {
   return {
@@ -225,7 +256,15 @@ export function buildApiUseRequest(value: ApiStockRequestInput, lines: readonly 
     purpose: "REPAIR",
     purposeText: "",
     note: value.note,
-    lines: lines.map((l) => ({ partId: l.partId, quantity: l.quantity, chargeType: l.chargeType, note: "", actualQuantity: null })),
+    lines: lines.map((l) => ({
+      partId: l.partId,
+      quantity: l.quantity,
+      chargeType: l.chargeType,
+      note: "",
+      actualQuantity: null,
+      // 🔴 참일 때만 적는다(머리말) — 거짓이면 칸 자체가 없고, 그것이 옛 줄과 같은 모양이다.
+      ...(l.fromOhTemplate ? { fromOhTemplate: true } : {}),
+    })),
   };
 }
 

@@ -176,6 +176,13 @@ function linesOf(view: PartIssueView, request: PendingRequestRow | undefined): I
       drawingNo: line?.drawingNo ?? "",
       owner: line?.owner ?? null,
       chargeType: line?.chargeType ?? null,
+      /**
+       * 🔴 **O/H 표시도 그 줄의 값이다** (2026-10-22) — 유상/무상 바로 아래 적는다. 여기서
+       *    빠뜨리면 **「승인 요청건」에서만** 딱지가 안 보인다: 2026-10-21 에 소유구분이 바로
+       *    이 자리에서 빠져 그랬고, 그 전에는 부품 칸 넷이 같은 자리에서 빠져 있었다.
+       * 🔵 줄을 못 찾으면 `false` — 「O/H 로 담겼다고 말할 근거가 없다」가 참말이다.
+       */
+      fromOhTemplate: line?.fromOhTemplate ?? false,
     };
   });
 }

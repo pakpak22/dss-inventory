@@ -188,6 +188,8 @@ describe("돌려주는 모양 — 상태 통로와 같은 줄 (2026-10-16)", () 
         drawingNo: "DWG-1001",
         owner: "KYOSAN",
         chargeType: "PAID",
+        // 🔵 2026-10-22 에 한 칸 더 — 거두는 통로는 상태 통로가 빚은 줄을 그대로 싣는다(위 주석).
+        fromOhTemplate: false,
       },
     ],
     decidedByName: "예시 신청자",

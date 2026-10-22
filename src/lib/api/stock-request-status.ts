@@ -252,6 +252,20 @@ export interface ApiRequestStatusLineValues {
    *    신청에서는 언제나 들어 있다.
    */
   chargeType: { code: ChargeType; label: string } | null;
+  /**
+   * **A/S 의 [O/H 부품 한 번에 담기]로 담긴 줄인가** (2026-10-22, 쓰는 분 요청).
+   *
+   * 🔴 **왜 되돌려 보내는가**: 저쪽이 올릴 때 보낸 값인데도 다시 실어 보낸다 — A/S 는 재고에 관한
+   *    것을 **제 표에 하나도 저장하지 않으므로**(이 통로가 생긴 까닭) 올린 뒤의 목록은 전부 여기서
+   *    받은 것으로 그린다. 안 실어 보내면 **담는 중에는 딱지가 보이다 올리는 순간 사라진다.**
+   * 🔴 **위 `owner`·`chargeType` 과 달리 `null` 이 없고 `{ code, label }` 도 아니다.** 값이 둘뿐인
+   *    참·거짓이라 풀어 줄 글자가 없고, 「모른다」가 「아니다」와 같은 일이다(아래 머리말). 사람이
+   *    읽을 딱지 글자(「O/H」)는 **두 시스템이 각자 제 상수**로 들고 있고, 그 둘이 같은지는 A/S 의
+   *    `scripts/check-inventory-contract.ts` 가 두 저장소를 맞대어 잰다.
+   * 🔵 **옛 신청은 언제나 `false`** 다 — payload 에 칸이 없던 때(2026-10-22 이전)에 올라간 줄이고,
+   *    되메우지 않았다. 「아직 안 왔다」가 아니라 **그때는 그런 값이 없었다**가 참말이다.
+   */
+  fromOhTemplate: boolean;
 }
 
 /**
@@ -429,6 +443,8 @@ export interface RequestStatusSource {
     drawingNo: string;
     owner: Owner | null;
     chargeType: ChargeType | null;
+    /** 🔵 이 칸도 `RequestLineView` 가 이미 들고 있다(2026-10-22) — 통로는 옮겨 적기만 한다. */
+    fromOhTemplate: boolean;
   }[];
   decidedByName: string | null;
   decidedAt: string | null;
@@ -496,6 +512,14 @@ export function toApiRequestStatus(requestKey: string | null, r: RequestStatusSo
       quantity: l.quantity,
       issued: l.issued,
       chargeType: l.chargeType === null ? null : { code: l.chargeType, label: CHARGE_LABEL[l.chargeType] },
+      /**
+       * 🔴 **칸 이름을 A/S 와 맞춘 그 글자다**(`fromOhTemplate`). 저쪽이 올릴 때 보내는 이름과
+       *    **같아야** 한다 — 어긋나면 오류가 아니라 **딱지가 영영 안 뜨는** 빠짐이 되고, 양쪽
+       *    시험은 각자 제 이름으로 통과한다. 그래서 A/S 의 점검 도구가 두 저장소를 맞대어 잰다.
+       * 🔵 **언제나 보낸다**(참일 때만 보내지 않는다) — 저장은 「참일 때만」이지만 통로는 칸이
+       *    늘 있어야 저쪽 점검이 「안 보내게 된 날」을 ✗ 로 잡는다(요청 비고와 같은 가름).
+       */
+      fromOhTemplate: l.fromOhTemplate,
     })),
     // 🔵 결정 시각이 있으면 결정된 것이다 — 상태로 가르지 않는다. 결정 칸을 적는 자리가 넷(확인·마감·반려·취소)이라,
     //    상태 목록을 여기 또 적으면 다섯째가 생기는 날 조용히 빠진다.

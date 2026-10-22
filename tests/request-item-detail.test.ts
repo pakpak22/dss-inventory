@@ -44,7 +44,7 @@ const part = (over: Partial<RequestItemPart> = {}): RequestItemPart => ({
 });
 
 /** 🔴 **줄 쪽 값은 따로 빚는다** — 부품과 한 덩이로 두면 시험이 먼저 둘을 뭉뚱그리게 된다(순수 함수 머리말). */
-const line = (over: Partial<RequestItemLine> = {}): RequestItemLine => ({ chargeType: "PAID", ...over });
+const line = (over: Partial<RequestItemLine> = {}): RequestItemLine => ({ chargeType: "PAID", fromOhTemplate: false, ...over });
 
 describe("자세한 내용 — 무엇을 어떤 차례로 (2026-10-16)", () => {
   it("네 칸을 정해진 차례로 준다 — 고객사 품명이 맨 앞", () => {
@@ -363,7 +363,7 @@ describe("🔴 둘이 서로 다른 성격임이 **코드에** 드러난다 (202
   it("🔵 서로의 값 없이도 제 딱지를 낸다 — 두 함수가 묻는 것이 갈려 있다", () => {
     // 부품만 있고 줄 값이 없어도 소유 딱지는 선다(그 반대도 마찬가지).
     assert.notEqual(requestItemOwnerTag(part({ owner: "SERVICE_SPARE" })), null);
-    assert.notEqual(requestItemChargeTag({ chargeType: "FREE" }), null);
+    assert.notEqual(requestItemChargeTag({ chargeType: "FREE", fromOhTemplate: false }), null);
   });
 
   it("🔴 딱지 개수가 **있는 값의 수** 그대로다 (전수 네 짝) — 없는 값이 빈 자리를 만들지 않는다", () => {

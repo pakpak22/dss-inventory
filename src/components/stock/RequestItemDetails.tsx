@@ -1,4 +1,4 @@
-import { requestItemChargeTag, requestItemDetailGroups, requestItemOwnerTag, type RequestItemTag, type RequestItemView } from "@/lib/stock/request-item-detail";
+import { requestItemChargeTag, requestItemDetailGroups, requestItemOhTag, requestItemOwnerTag, type RequestItemTag, type RequestItemView } from "@/lib/stock/request-item-detail";
 
 /**
  * 부품 한 줄 **아래**에 붙는 작은 글씨 — 고객사 품명 · 품명2 · 교산 품번 · 도번,
@@ -53,7 +53,17 @@ export function RequestItemDetails({ item }: { item: RequestItemView }) {
    *    그 자리를 그대로 두고, 새로 서는 유상/무상을 그 옆에 붙인다. 쓰는 분이 적어 준 차례(① 소유구분
    *    ② 유상/무상)와도 같다.
    */
-  const tags: RequestItemTag[] = [requestItemOwnerTag(item), requestItemChargeTag(item)].filter((t): t is RequestItemTag => t !== null);
+  /**
+   * 🔴 **O/H 딱지가 셋째다** (2026-10-22, 쓰는 분 요청: 「O/H 부품이라는 표시를 부품마다」).
+   *    **앞의 둘 자리를 건드리지 않는다** — 소유는 2026-10-21 전부터 그 자리였고, 유상/무상은
+   *    돈이 걸린 값이라 가운데에 세워 둔 것이다. 새 딱지가 그 사이로 끼어들면 **지금까지 눈이
+   *    익은 자리가 통째로 밀린다.**
+   * 🔵 **셋째라고 묻히지 않는다**: 딱지는 셋 다 상자 모양이고, O/H 는 다른 둘과 섞일 수 없는
+   *    낱말이라(소유는 `DSS`·`KYOSAN`, 돈은 「유상」·「무상」) 자리와 상관없이 집힌다.
+   * 🔴 **세 번 따로 묻는다.** 소유는 부품의 것, 나머지 둘은 그 줄의 것이라 묻는 타입이 갈려
+   *    있다(`request-item-detail.ts` 머리말). 한 함수로 합치면 그 가름이 사라진다.
+   */
+  const tags: RequestItemTag[] = [requestItemOwnerTag(item), requestItemChargeTag(item), requestItemOhTag(item)].filter((t): t is RequestItemTag => t !== null);
   if (lead === null && tags.length === 0 && rest.length === 0) return null;
   return (
     <>

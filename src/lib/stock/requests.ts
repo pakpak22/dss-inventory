@@ -120,6 +120,19 @@ export interface RequestLineView {
    *    (`lib/api/stock-request-status.ts`) 여기 칸이 늘어도 A/S 가 받는 모양은 그대로다.
    */
   chargeType: ChargeType | null;
+  /**
+   * 그 줄이 **A/S 의 [O/H 부품 한 번에 담기]로 담긴 줄인가** (2026-10-22, 쓰는 분 요청).
+   *
+   * 🔴 **유상/무상과 같은 자리에서 온다** — 부품 표가 아니라 **신청 payload** 다(`linesOf`).
+   *    같은 부품이라도 어떤 신청에서는 템플릿으로, 어떤 신청에서는 손으로 담겼을 수 있다.
+   * 🔴 **`null` 이 없다.** 유상/무상은 「없는 것이 참말인」 자리가 있어 `null` 이지만, 이 값은
+   *    「O/H 로 담겼다고 말할 근거가 있나」 하나뿐이라 **없으면 `false`** 다 — 옛 신청(칸이 아예
+   *    없는 payload)과 대여·폐기 신청이 전부 같은 쪽으로 간다. 모르는 것을 따로 두어 봐야
+   *    화면이 할 수 있는 일이 다르지 않다(둘 다 딱지를 안 그린다).
+   * 🔵 **바깥 통로로는 나간다** — 2026-10-22 에 `toApiRequestStatus` 가 이 칸을 옮겨 적게 됐다.
+   *    A/S 가 **제 수리 건 상세에서 올린 뒤에도** 같은 딱지를 봐야 하기 때문이다.
+   */
+  fromOhTemplate: boolean;
 }
 
 export interface PendingRequestRow {
@@ -195,13 +208,19 @@ type LinesLike = { type: EntryType; lines: Array<{ partId: string; quantity: num
  *    가 새어 나가지 않게 여기서 눕힌다.
  * 🔵 **쓰는 쪽은 이 칸을 쳐다보지 않는다** — 신청 만들기·확인·마감은 `partId`·`quantity` 만 쓴다.
  *    칸이 는 것이 그 길의 동작을 한 글자도 바꾸지 않는다.
+ *
+ * 🔴 **O/H 표시도 같은 길로 편다** (2026-10-22). `UseLine` 에만 있는 **선택 칸**이라
+ *    **`=== true` 로 묻는다** — 2026-10-22 전에 올라간 신청의 payload 에는 칸이 아예 없고
+ *    (되메우지 않았다), 대여·폐기의 `SimpleLine` 에는 처음부터 없다. 🔴 **없는 것을 「모름」으로
+ *    따로 두지 않는다**: 화면이 하는 일이 「딱지를 그리나 마나」 하나뿐이라 가를 까닭이 없다
+ *    (유상/무상이 `null` 을 들고 다니는 것과 **일부러 다르다** — 저쪽은 돈이 걸린 값이다).
  */
-function linesOf(input: EntryInput): Array<{ partId: string; quantity: number; chargeType: ChargeType | null }> {
+function linesOf(input: EntryInput): Array<{ partId: string; quantity: number; chargeType: ChargeType | null; fromOhTemplate: boolean }> {
   if (input.type === "RETURN") return [];
-  if (input.type === "ADJUST") return [{ partId: input.partId, quantity: input.actualQuantity, chargeType: null }];
-  if (input.type === "TRANSFER") return [{ partId: input.fromPartId, quantity: input.quantity, chargeType: null }];
-  if (input.type === "USE") return input.lines.map((l) => ({ partId: l.partId, quantity: l.quantity, chargeType: isChargeType(l.chargeType) ? l.chargeType : null }));
-  return (input as LinesLike).lines.map((l) => ({ partId: l.partId, quantity: l.quantity, chargeType: null }));
+  if (input.type === "ADJUST") return [{ partId: input.partId, quantity: input.actualQuantity, chargeType: null, fromOhTemplate: false }];
+  if (input.type === "TRANSFER") return [{ partId: input.fromPartId, quantity: input.quantity, chargeType: null, fromOhTemplate: false }];
+  if (input.type === "USE") return input.lines.map((l) => ({ partId: l.partId, quantity: l.quantity, chargeType: isChargeType(l.chargeType) ? l.chargeType : null, fromOhTemplate: l.fromOhTemplate === true }));
+  return (input as LinesLike).lines.map((l) => ({ partId: l.partId, quantity: l.quantity, chargeType: null, fromOhTemplate: false }));
 }
 
 /** 목록에 보일 한 줄 요약. 부품 이름은 신청 때 붙여 둔다(나중에 부품이 바뀌어도 신청 글자는 그대로). */
@@ -946,6 +965,8 @@ function toRow(r: typeof stockRequests.$inferSelect, names: ReadonlyMap<string, 
       // 🔴 **부품 표가 아니라 신청 줄에서 온다** — 유상/무상은 그 줄의 값이라, 부품을 못 찾아도 그대로 남는다
       //    (`RequestLineView.chargeType` 주석). 그래서 `p` 가 아니라 `l` 을 본다.
       chargeType: l.chargeType,
+      // 🔴 O/H 표시도 **신청 줄의 값**이다 — 부품을 못 찾아도 그대로 남는다(같은 까닭, `l` 을 본다).
+      fromOhTemplate: l.fromOhTemplate,
     };
   });
   return {

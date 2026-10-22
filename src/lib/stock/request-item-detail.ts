@@ -78,6 +78,17 @@ export interface RequestItemLine {
    *    받기를 강제한다(「기본값이 없으니 줄마다 보내십시오」 — `lib/api/stock-requests.ts`).
    */
   chargeType: ChargeType | null;
+  /**
+   * **A/S 의 [O/H 부품 한 번에 담기]로 담긴 줄인가** (2026-10-22, 쓰는 분 요청:
+   * 「O/H 부품이라는 표시를 부품을 요청하는 모든 과정에 부품마다」).
+   *
+   * 🔴 **부품의 속성이 아니라 줄의 값이다** — 같은 부품이라도 어떤 신청에서는 템플릿으로,
+   *    어떤 신청에서는 사람이 손으로 담았다. 그래서 `RequestItemPart` 가 아니라 여기 산다.
+   * 🔴 **`null` 이 없다**(위 `chargeType` 과 일부러 다르다). 「O/H 로 담겼다고 말할 근거가
+   *    있나」 하나뿐이라, 옛 신청(payload 에 칸이 없다)도 대여·폐기도 전부 `false` 다 —
+   *    화면이 하는 일은 어느 쪽이든 「딱지를 안 그린다」로 같다.
+   */
+  fromOhTemplate: boolean;
 }
 
 /**
@@ -194,8 +205,8 @@ export function requestItemDetailGroups(part: RequestItemPart): RequestItemDetai
  *    합치면 모양을 고를 근거가 사라져 결국 화면이 `key` 를 보고 갈라야 한다.
  */
 export interface RequestItemTag {
-  /** 어느 값인가. 🔵 화면의 `key` 이자, 시험이 「둘이 섞이지 않았나」를 짚는 이름이다. */
-  key: "owner" | "chargeType";
+  /** 어느 값인가. 🔵 화면의 `key` 이자, 시험이 「섞이지 않았나」를 짚는 이름이다. */
+  key: "owner" | "chargeType" | "oh";
   /**
    * 값 앞에 붙는 작은 글자. 🔵 **빈 글자일 수 있다** — 값 자체가 이미 말이 되는 딱지는 라벨을 달지 않는다
    * (아래 유상/무상). 🔴 **그 있고 없음이 두 딱지를 가르는 「색 아닌」 표식 하나**이기도 하다.
@@ -262,6 +273,51 @@ export const REQUEST_ITEM_CHARGE_TAG_CLASS: Record<ChargeType, string> = {
 export function requestItemChargeTag(line: RequestItemLine): RequestItemTag | null {
   if (line.chargeType === null) return null;
   return { key: "chargeType", label: "", value: CHARGE_LABEL[line.chargeType], className: REQUEST_ITEM_CHARGE_TAG_CLASS[line.chargeType] };
+}
+
+/**
+ * **O/H 딱지에 적히는 글자** (2026-10-22).
+ *
+ * 🔴 **이 저장소에서 그 말을 적는 자리는 여기 하나다.** 세 화면이 전부 `requestItemOhTag` 를 지나므로
+ *    화면에 손으로 적을 자리가 없다 — 적어 두면 말을 바꾸는 날 한 화면만 옛말을 한다.
+ * 🔴 **「오버홀」로 풀지 않는다.** 이 저장소가 쓰는 낱말이 「O/H」다(「O/H 템플릿」·「O/H 단가」).
+ * 🔴 **A/S 도 같은 글자를 쓴다**(저쪽 `STOCK_REQUEST_OH_TAG_VALUE`). 두 저장소에 나뉘어 있어 어느
+ *    쪽도 혼자서는 어긋난 것을 알지 못하므로, 그 둘이 같은지는 A/S 의 두 저장소 맞대기 점검
+ *    (`scripts/check-inventory-contract.ts`)이 잰다.
+ */
+export const REQUEST_ITEM_OH_TAG_VALUE = "O/H";
+
+/**
+ * O/H 딱지의 꾸밈 — 🔴 **다른 두 딱지와 색 말고도 갈린다.**
+ *
+ *  ① **글자가 다르다**(「O/H」). 소유(`DSS`·`KYOSAN`)나 유상/무상과 섞일 수 없는 낱말이라,
+ *     색을 전부 지워도 무엇인지 알 수 있다.
+ *  ② **라벨이 없고 굵다.** 유상/무상과 같은 자리(라벨 없음)이지만 글자가 달라 섞이지 않는다.
+ *  ③ 바탕이 **차 있다**(연보라). 소유(연회색)·무상(흰 바탕)과 칠해진 정도가 다르다.
+ *
+ * 🔵 보라를 고른 까닭: 이 저장소에서 보라는 **「사람이 일부러 그렇게 해 둔 것」**에 쓴다
+ *    (보류 배지·보류 사유 상자 — `REQUEST_STATUS_BADGE` 주석). O/H 로 담긴 줄도 담당자가
+ *    [한 번에 담기]를 눌러 **그렇게 담긴** 줄이다. 🔴 유상의 노랑과 겹치지 않는 계열이라,
+ *    둘이 나란히 서도 **어느 쪽이 돈 이야기인지** 흐려지지 않는다.
+ */
+export const REQUEST_ITEM_OH_TAG_CLASS = "border-violet-300 bg-violet-50 font-semibold text-violet-900";
+
+/**
+ * **그 줄이 O/H 템플릿에서 담긴 줄인가** 딱지. 아니면 `null` 이고, 그때 화면은 **아무것도 안 그린다.**
+ *
+ * 🔴 **「일반」 같은 딱지를 만들지 않는다**(쓰는 분 지시). 줄마다 딱지가 하나씩 더 서면 목록이
+ *    시끄러워지고, 무엇보다 **옛 신청**(payload 에 칸이 없어 `false` 인 줄)이 「확인해 보니 일반
+ *    부품」으로 **단정돼 보인다** — 참말은 「그때는 그 값을 적지 않았다」다.
+ * 🔴 **받는 것이 `RequestItemLine` 이다** — 부품(`RequestItemPart`)으로는 부를 수 없다. 「이 **부품**은
+ *    O/H 부품인가요?」는 답이 없는 물음이다(파일 머리말, 유상/무상과 같은 가름).
+ * 🔴 **라벨을 달지 않는다.** 「O/H」가 그 자체로 무슨 뜻인지까지 말하는 낱말이고, 앞에 「O/H 부품」을
+ *    또 적으면 같은 말이 두 번 나와 딱지가 길어진다(유상/무상과 같은 까닭).
+ * 🔵 **지금 템플릿을 다시 보지 않는다.** 값은 신청이 올라온 **그 순간**에 찍힌 것이고, 템플릿이
+ *    바뀌어도 옛 신청의 딱지는 바뀌지 않는다(`lib/stock/form.ts` 의 `UseLine.fromOhTemplate`).
+ */
+export function requestItemOhTag(line: RequestItemLine): RequestItemTag | null {
+  if (!line.fromOhTemplate) return null;
+  return { key: "oh", label: "", value: REQUEST_ITEM_OH_TAG_VALUE, className: REQUEST_ITEM_OH_TAG_CLASS };
 }
 
 /**

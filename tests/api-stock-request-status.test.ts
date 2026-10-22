@@ -47,6 +47,9 @@ const LINE: SourceLine = {
   drawingNo: "DWG-1001",
   owner: "KYOSAN",
   chargeType: "PAID",
+  // 🔵 2026-10-22 에 줄이 한 칸 더 넓어졌다 — A/S 의 [O/H 부품 한 번에 담기]로 담긴 줄인가.
+  //    본보기는 **참**으로 둔다: 거짓이면 옮겨 적기를 빠뜨려도 기본값과 같아 시험이 못 본다.
+  fromOhTemplate: true,
 };
 
 const SOURCE: RequestStatusSource = {
@@ -227,6 +230,8 @@ describe("돌려주는 모양 — 화면이 그릴 수 있을 만큼 (2026-10-15
         quantity: 8,
         issued: 5,
         chargeType: { code: "PAID", label: CHARGE_LABEL.PAID },
+        // 🔵 2026-10-22 에 한 칸 더 — 본보기 줄(`LINE`)이 참이라 그대로 실려 나온다.
+        fromOhTemplate: true,
       },
     ]);
   });
@@ -267,6 +272,8 @@ const GONE_LINE: SourceLine = {
   drawingNo: "",
   owner: null,
   chargeType: "FREE",
+  // 🔵 지워진 부품이어도 **그 줄의 값**은 그대로다 — O/H 표시는 부품이 아니라 줄에 적힌다.
+  fromOhTemplate: false,
 };
 
 describe("🔴 줄에 어느 부품인지가 실린다 — 부품 쪽 값 (2026-10-21)", () => {
