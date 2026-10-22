@@ -290,6 +290,9 @@ export function OhTemplateScreen({
             template={null}
             partOptions={partOptions}
             onMessage={setMessage}
+            /* 🔵 저장에 성공하면 **편집기를 닫고** 알린다. 기존 템플릿 쪽도 같은 모양이어야
+               한다(아래) — 한쪽만 닫으면 같은 저장 단추가 자리에 따라 다르게 굴고, 안 닫는 쪽은
+               지역 상태가 화면을 덮어 `router.refresh()` 가 **아무 일도 안 한 것처럼** 보인다. */
             onSaved={(saved) => {
               setCreating(false);
               done(saved);
@@ -343,6 +346,11 @@ export function OhTemplateScreen({
                   </button>
                 </div>
 
+                {/* 🔵 **여기는 `done` 그대로다 — 일부러 안 닫는다**(2026-10-22, 저장 쪽을 고치며 함께 판단).
+                    모델 딱지는 서버가 내려 준 `template.models` 를 그대로 그리므로 `router.refresh()`
+                    만으로 눈에 보이게 바뀐다 — 편집기처럼 지역 상태가 화면을 덮는 자리가 아니다.
+                    게다가 모델 잇기는 편집기를 **열어 둔 채로도** 할 수 있어서, 여기서 닫으면
+                    아직 저장하지 않은 부품 줄이 통째로 사라진다. 그래서 고칠 것이 없다. */}
                 <ModelLinks
                   template={template}
                   unlinkedModels={unlinkedModels}
@@ -356,7 +364,24 @@ export function OhTemplateScreen({
                     template={template}
                     partOptions={partOptions}
                     onMessage={setMessage}
-                    onSaved={done}
+                    /**
+                     * 🔴 **저장에 성공하면 편집기를 닫는다** (2026-10-22 쓰는 분 지적).
+                     * 그 전에는 `onSaved={done}` 이라 편집기가 **열린 채**로 남았다. `done()` 안에서
+                     * `router.refresh()` 는 그때도 돌고 있었지만, 열려 있는 편집기는 제 입력값을
+                     * **지역 상태**(`name`·`items`·`prices`)로 들고 있어 다시 읽어 온 자료가 화면에
+                     * 한 글자도 안 비쳤다 — 쓰는 분 눈에는 「팝업만 뜨고 리프레시가 안 된다」로 보였다.
+                     * 닫으면 접힌 `ItemPreview` 로 돌아가면서 방금 저장한 값(O/H 단가 포함)이
+                     * **다시 읽힌 자료**로 그려진다. 새 템플릿 쪽(위 `setCreating(false)`)과 같은 모양이다.
+                     *
+                     * 🔴 **성공했을 때만 불린다** — `save()` 가 `if (!result.ok) … return;` 뒤에서야
+                     *    `onSaved` 를 부른다. 실패했는데 닫으면 사람이 적던 내용이 사라진다.
+                     * 🔵 이 `onSaved` 는 `DeleteTemplateDialog` 의 `onDone` 이기도 하다 — 지운 뒤에도
+                     *    닫히는 것이 맞다(그 템플릿 자체가 목록에서 사라진다).
+                     */
+                    onSaved={(saved) => {
+                      setOpenId(null);
+                      done(saved);
+                    }}
                     onClose={() => setOpenId(null)}
                   />
                 ) : (
