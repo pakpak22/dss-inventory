@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition, type ReactNode } from "react";
 import { toggleFavoriteAction } from "@/app/actions/favorites";
 import {
   CATEGORIES,
@@ -105,6 +105,41 @@ const PART_CELL: Record<PartFieldKey, { td: string; inner?: string; search: Sear
   kyosanPartNo: { td: "px-2.5 py-1.5 font-mono text-xs whitespace-nowrap", search: "p" },
   drawingNo: { td: "px-2.5 py-1.5 font-mono text-xs whitespace-nowrap", search: "d" },
 };
+
+/** 다섯 칸 중 하나인가. `cellBody` 가 **같은 표**(`PART_FIELDS`·`PART_CELL`)로 넘길 때 쓴다. */
+const PART_FIELD_KEY_SET: ReadonlySet<string> = new Set(PART_FIELDS.map((f) => f.key));
+function isPartFieldKey(key: SortKey): key is PartFieldKey {
+  return PART_FIELD_KEY_SET.has(key);
+}
+
+/**
+ * 그 칸에 **적을 값이 없나**. 🔴 판정은 여기 하나지만 **어떻게 할지는 그리는 쪽이 정한다** —
+ * 표는 `-` 를 적어 자리를 지키고(열이 밀리면 안 된다), 카드는 아예 안 그린다(「도번 -」이 줄마다
+ * 서면 카드만 길어지고 정작 있는 값이 묻힌다).
+ * 🔵 수량은 `0` 도 값이라 비었다고 하지 않는다.
+ */
+function isBlank(p: PartRow, key: SortKey): boolean {
+  if (isPartFieldKey(key)) return p[key] === "";
+  if (key === "note") return p.note.trim() === "";
+  if (key === "supplyPrice") return p.supplyPrice === null;
+  if (key === "quotePrice") return p.quotePrice === null;
+  return false;
+}
+
+/**
+ * 🔴 한계수량에 걸린 **수량 글자색이 적힌 유일한 자리**. 표의 `<td>` 와 카드가 **이 한 줄**을 본다 —
+ *    두 곳에 따로 적으면 「표는 빨간데 카드는 검다」가 되고, 그 날 아무 오류도 안 난다.
+ * 🔴 판정은 `isLowStock` 하나다(종·상세 창·질의가 보는 그 함수). 여기에 부등호를 손으로 적지 마라.
+ * 🔴 **색만으로 알리지 않는다** — 부르는 쪽이 `lowStockTitle` 로 까닭을 함께 단다.
+ */
+const lowStockClass = (p: PartRow): string => (isLowStock(p.quantity, p.limitQuantity) ? "text-red-700" : "");
+
+/**
+ * 카드에서 **제 줄을 통째로 받는 칸**. 비고는 길어서 다른 칸과 한 줄에 서면 넘친다 —
+ * 이름표와 값을 붙여 두는 규칙(`inline-block whitespace-nowrap`)을 지킬 수 없는 유일한 칸이다.
+ * 🔵 **차례를 적는 자리가 아니다** — 어느 칸이 예외인지만 쥔다. 차례는 `COLUMNS` 가 그대로 쥔다.
+ */
+const CARD_FULL_LINE: ReadonlySet<SortKey> = new Set<SortKey>(["note"]);
 
 const INPUT =
   "rounded-md border border-zinc-200 bg-white px-2 py-1 text-sm text-zinc-900";
@@ -308,6 +343,72 @@ export function PartsList({
   }
   function closeDetail() {
     navigate({ ...state, part: null });
+  }
+
+  /**
+   * ★ 즐겨찾기 단추. 🔴 **표의 줄과 카드가 같은 이 함수를 쓴다** — 특히 `e.stopPropagation()` 이
+   *    여기 한 번만 적혀 있어야 한다. 베껴 적은 쪽에서 그 한 줄이 빠지면 줄·카드 전체가 상세를 여는
+   *    자리라서 **별을 누를 때마다 상세 상자가 열린다.**
+   */
+  function favoriteStar(p: PartRow) {
+    const on = favoriteSet.has(p.id);
+    return (
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          toggleFavorite(p.id);
+        }}
+        className={`rounded px-1 text-base leading-none ${on ? "text-amber-500 hover:text-amber-600" : "text-zinc-300 hover:text-amber-400"}`}
+        aria-pressed={on}
+        aria-label={on ? "즐겨찾기 끄기" : "즐겨찾기 켜기"}
+        title={on ? "즐겨찾기 끄기" : "즐겨찾기 — 누르면 항상 위에 보입니다"}
+      >
+        {on ? "★" : "☆"}
+      </button>
+    );
+  }
+
+  /**
+   * 칸 하나의 **값**을 그린다. 🔴 **표의 `<td>` 와 카드가 같은 이 함수를 쓴다** — 칸이 하나 늘 때
+   *    고칠 자리가 한 군데여야 한다(위 `COLUMNS` 주석과 같은 까닭: 따로 적으면 한쪽만 고쳐진다).
+   * 🔵 **꼴은 여기 없다** — 칸 넓이·줄바꿈은 표가 `PART_CELL`·`<td>` 로, 카드가 제 묶음으로 입힌다.
+   * 🔵 **비었을 때 무엇을 적을지도 여기 없다** — 판정만 `isBlank` 에 있고 처리는 부르는 쪽이 한다.
+   */
+  function cellBody(p: PartRow, key: SortKey): ReactNode {
+    // 다섯 칸은 찾은 글자에 노란 칠을 한다. 어느 「찾을 곳」의 글자인지는 `PART_CELL` 이 쥔다.
+    if (isPartFieldKey(key)) return <Marked text={p[key]} toks={tk(PART_CELL[key].search)} />;
+    switch (key) {
+      case "no":
+        return p.no;
+      case "quantity":
+        return formatQuantity(p.quantity);
+      case "supplyPrice":
+        return formatMoney(p.supplyPrice, p.supplyCurrency);
+      case "quotePrice":
+        return formatMoney(p.quotePrice, "KRW");
+      case "note": {
+        const preview = notePreview(p.note, tk("m"));
+        return (
+          <>
+            {preview.clippedStart ? "…" : ""}
+            <Marked text={preview.text} toks={tk("m")} />
+            {preview.clippedEnd ? "…" : ""}
+          </>
+        );
+      }
+      case "itemName":
+        return p.itemName;
+      case "category":
+        return CATEGORY_LABEL[p.category];
+      case "owner":
+        return <OwnerBadge owner={p.owner} />;
+      default: {
+        // 🔴 칸이 하나 늘면 **여기서 tsc 가 멈춘다** — 표에만 더하고 카드를 잊는 일을 막는다.
+        const unhandled: never = key;
+        return unhandled;
+      }
+    }
   }
 
   const itemCount = new Map<string, number>();
@@ -593,7 +694,127 @@ export function PartsList({
               : "아직 등록된 부품이 없습니다."}
           </div>
         ) : (
-          <div className="overflow-x-auto border-t border-zinc-200">
+          <>
+            {/*
+              ── 📱 **좁은 화면(lg 미만)은 줄 하나가 카드 한 장이다** (2026-10-22 쓰는 분 요청) ──
+              가로 스크롤이 있어 글자가 찌그러지지는 않지만, 폭 360px 짜리 휴대폰에서 열 열세 개짜리
+              표를 좌우로 밀어 보는 것은 실제로는 못 쓴다 — 첫 두 칸만 보이고 나머지는 화면 밖이다.
+
+              🔴 **카드는 열 목록을 다시 적지 않는다.** 표가 도는 그 표(`COLUMNS`·`PART_FIELDS`·
+                 `PART_CELL`·`yearColumns`)를 **그대로 돌고**, 값은 표와 **같은 `cellBody`** 가 그린다.
+                 세 번째 사본을 만들면 「차례가 어긋나 값이 한 칸씩 밀리던」 그 자리(아래 `<tbody>`
+                 주석)가 되돌아온다. 칸이 하나 늘 때 고칠 곳은 한 군데여야 한다.
+              🔴 **겹치는 것은 배치뿐이다** — 1024px 이상에서는 아래 표가 지금 그대로 선다.
+              🔴 **인쇄는 언제나 표다**(`no-print`·`print:block`). [인쇄] 단추는 전용 화면
+                 (`/print/parts`)으로 가지만, 사람이 이 화면에서 Ctrl+P 를 누를 수 있다. A4 가로는
+                 CSS 로 약 1047px 이라 `lg`(1024px) 경계에 아슬아슬하게 걸린다 — 여백·배율에 따라
+                 1024px 아래로 떨어지면 종이에 카드가 나간다. 운에 맡기지 않고 못 박아 둔다.
+                 (`tests/parts-list-cards.test.ts` 가 이 두 글자를 잰다.)
+            */}
+            <div className="no-print border-t border-zinc-200 lg:hidden">
+              {/*
+                🔴 **정렬 고르개** — 카드에는 머리글이 없어 `<th>` 안의 정렬 단추가 사라진다. 같은
+                   `sortBy`·`state.sort`·`state.desc` 를 쓰고, 고를 수 있는 칸은 `COLUMNS` 가 안다.
+                🔵 모양은 위 거르기 상자의 「분류」·「소유」 고르개와 같다 — 새 모양을 만들지 않는다.
+                   휴대폰에서는 네이티브 `select` 가 운영체제 고르개로 열려 가장 누르기 쉽다.
+              */}
+              <div className="flex flex-wrap items-end gap-2 px-3 py-2">
+                <label className="flex flex-col gap-1 text-xs text-zinc-500">
+                  정렬
+                  <select
+                    className={INPUT}
+                    value={state.sort}
+                    onChange={(e) => sortBy(e.target.value as SortKey)}
+                  >
+                    {COLUMNS.map((c) => (
+                      <option key={c.key} value={c.key}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className={BTN}
+                  onClick={() => sortBy(state.sort)}
+                  title="누르면 오름차순·내림차순이 바뀝니다"
+                >
+                  {state.desc ? "▼ 내림차순" : "▲ 오름차순"}
+                </button>
+              </div>
+              <ul className="divide-y divide-zinc-100 border-t border-zinc-200">
+                {page.rows.map((p) => {
+                  // 머리줄에 세울 칸. 🔴 고객사 품명이 **빈 부품이 많다**(없으면 빈 문자열) — 그때는
+                  //    품명이 선다. 머리줄이 비면 이 카드가 어느 부품인지 가릴 글자가 없어진다.
+                  const headKey: PartFieldKey = p.customerName ? "customerName" : "name";
+                  // 🔴 머리줄·수량 줄에 **이미 선 칸은 뺀다** — 같은 글자가 두 번 서면 카드만 길어진다.
+                  // 🔵 값이 빈 칸도 뺀다(`isBlank` 주석).
+                  const cols = COLUMNS.filter(
+                    (c) => c.key !== "no" && c.key !== "quantity" && c.key !== headKey && !isBlank(p, c.key),
+                  );
+                  return (
+                    <li key={p.id}>
+                      {/* 🔴 줄을 눌러 상세 열기·Enter 키는 표의 `<tr>` 과 **같은 규칙**이다. */}
+                      <div
+                        tabIndex={0}
+                        onClick={() => {
+                          if (!String(window.getSelection() ?? "")) openDetail(p.no);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") openDetail(p.no);
+                        }}
+                        className="flex cursor-pointer flex-col gap-1 px-3 py-2.5 hover:bg-zinc-50 focus-visible:outline-2 focus-visible:outline-zinc-900"
+                      >
+                        {/* 맨 윗줄: ★ · No. · 그 부품을 가리키는 가장 중요한 글자 */}
+                        <div className="flex items-start gap-1.5">
+                          {favoriteStar(p)}
+                          <span className="tabular pt-0.5 text-xs text-zinc-500">{cellBody(p, "no")}</span>
+                          <span className="min-w-0 flex-1 text-sm font-medium break-keep text-zinc-900">
+                            {cellBody(p, headKey)}
+                          </span>
+                        </div>
+                        {/* 숫자는 한 줄에 모은다 — `.tabular` 로 세로가 맞는다. */}
+                        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-xs text-zinc-500">
+                          <span className="whitespace-nowrap">
+                            수량{" "}
+                            <b
+                              className={`tabular text-sm ${lowStockClass(p)}`}
+                              title={lowStockTitle(p.quantity, p.limitQuantity)}
+                            >
+                              {cellBody(p, "quantity")}
+                            </b>
+                          </span>
+                          {yearColumns.map((y) => (
+                            <span key={`y${y}`} className="whitespace-nowrap text-amber-800">
+                              {y}년 사용 <b className="tabular">{formatQuantity(usageOf(p.id, y))}</b>
+                            </span>
+                          ))}
+                        </div>
+                        {cols.length > 0 ? (
+                          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-xs text-zinc-600">
+                            {cols.map((c) => (
+                              /* 🔴 **이름표와 값은 한 쌍으로 붙어 다닌다** — 좁은 칸에서 이름표만 윗줄에
+                                  남고 값이 아랫줄로 떨어진 적이 있다(`stock/RepairCaseInfo.tsx` 가 같은
+                                  문제를 겪고 고친 방식 그대로다). `inline-block` 이 **함께** 있어야 쌍이
+                                  통째로 내려간다 — `whitespace-nowrap` 만으로는 inline 상자가 쪼개진다.
+                                  🔵 비고만 제 줄을 받는다(`CARD_FULL_LINE`) — 길어서 한 쌍으로 묶을 수 없다. */
+                              <span
+                                key={c.key}
+                                className={CARD_FULL_LINE.has(c.key) ? "basis-full break-keep" : "inline-block whitespace-nowrap"}
+                              >
+                                <span className="text-zinc-400">{c.label} </span>
+                                {cellBody(p, c.key)}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+            <div className="hidden overflow-x-auto border-t border-zinc-200 lg:block print:block">
             <table className="w-full border-collapse text-sm">
               <thead>
                 <tr className="bg-zinc-50 text-left text-xs text-zinc-500">
@@ -648,7 +869,6 @@ export function PartsList({
               </thead>
               <tbody>
                 {page.rows.map((p) => {
-                  const preview = notePreview(p.note, tk("m"));
                   return (
                     <tr
                       key={p.id}
@@ -662,40 +882,21 @@ export function PartsList({
                       }}
                       className="cursor-pointer border-b border-zinc-100 align-top last:border-0 hover:bg-zinc-50 focus-visible:outline-2 focus-visible:outline-zinc-900"
                     >
-                      <td className="px-1 py-1 text-center">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleFavorite(p.id);
-                          }}
-                          className={`rounded px-1 text-base leading-none ${favoriteSet.has(p.id) ? "text-amber-500 hover:text-amber-600" : "text-zinc-300 hover:text-amber-400"}`}
-                          aria-pressed={favoriteSet.has(p.id)}
-                          aria-label={
-                            favoriteSet.has(p.id)
-                              ? "즐겨찾기 끄기"
-                              : "즐겨찾기 켜기"
-                          }
-                          title={
-                            favoriteSet.has(p.id)
-                              ? "즐겨찾기 끄기"
-                              : "즐겨찾기 — 누르면 항상 위에 보입니다"
-                          }
-                        >
-                          {favoriteSet.has(p.id) ? "★" : "☆"}
-                        </button>
-                      </td>
+                      {/* 🔴 ★ 는 카드와 **같은 함수**가 그린다 — `stopPropagation` 이 한 자리여야 한다. */}
+                      <td className="px-1 py-1 text-center">{favoriteStar(p)}</td>
                       <td className="tabular px-2.5 py-1.5 text-right text-zinc-500">
-                        {p.no}
+                        {cellBody(p, "no")}
                       </td>
                       {/* 🔴 다섯 칸은 머리글(위 COLUMNS)과 **같은 표**(PART_FIELDS)를 돈다 — 둘을 따로 적어
-                          두었더니 차례가 어긋나면 값이 한 칸씩 밀리는 자리였다. 꼴은 PART_CELL. */}
+                          두었더니 차례가 어긋나면 값이 한 칸씩 밀리는 자리였다. 꼴은 PART_CELL.
+                          🔵 값을 그리는 것은 카드와 **같은 `cellBody`** 다. 빈 칸에 `-` 를 적는 것은
+                             표만의 규칙이라 여기 남는다(카드는 그 칸을 아예 안 그린다). */}
                       {PART_FIELDS.map((f) => {
                         const cell = PART_CELL[f.key];
-                        const body = p[f.key] ? (
-                          <Marked text={p[f.key]} toks={tk(cell.search)} />
-                        ) : (
+                        const body = isBlank(p, f.key) ? (
                           <span className="text-zinc-400">-</span>
+                        ) : (
+                          cellBody(p, f.key)
                         );
                         return (
                           <td
@@ -718,10 +919,10 @@ export function PartsList({
                         🔵 한계수량을 정하지 않은 부품(`null`)은 **지금 그대로** 검다.
                       */}
                       <td
-                        className={`tabular px-2.5 py-1.5 text-right font-semibold whitespace-nowrap ${isLowStock(p.quantity, p.limitQuantity) ? "text-red-700" : ""}`}
+                        className={`tabular px-2.5 py-1.5 text-right font-semibold whitespace-nowrap ${lowStockClass(p)}`}
                         title={lowStockTitle(p.quantity, p.limitQuantity)}
                       >
-                        {formatQuantity(p.quantity)}
+                        {cellBody(p, "quantity")}
                       </td>
                       {yearColumns.map((y) => (
                         <td
@@ -736,34 +937,33 @@ export function PartsList({
                         </td>
                       ))}
                       <td className="tabular px-2.5 py-1.5 text-right whitespace-nowrap">
-                        {formatMoney(p.supplyPrice, p.supplyCurrency)}
+                        {cellBody(p, "supplyPrice")}
                       </td>
                       <td className="tabular px-2.5 py-1.5 text-right whitespace-nowrap">
-                        {formatMoney(p.quotePrice, "KRW")}
+                        {cellBody(p, "quotePrice")}
                       </td>
                       <td
                         className="max-w-80 px-2.5 py-1.5 text-zinc-700"
                         title={p.note}
                       >
-                        {preview.clippedStart ? "…" : ""}
-                        <Marked text={preview.text} toks={tk("m")} />
-                        {preview.clippedEnd ? "…" : ""}
+                        {cellBody(p, "note")}
                       </td>
                       <td className="px-2.5 py-1.5 whitespace-nowrap">
-                        {p.itemName}
+                        {cellBody(p, "itemName")}
                       </td>
                       <td className="px-2.5 py-1.5 whitespace-nowrap">
-                        {CATEGORY_LABEL[p.category]}
+                        {cellBody(p, "category")}
                       </td>
                       <td className="px-2.5 py-1.5">
-                        <OwnerBadge owner={p.owner} />
+                        {cellBody(p, "owner")}
                       </td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
-          </div>
+            </div>
+          </>
         )}
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-200 px-4 py-2.5 text-sm text-zinc-500 no-print">
@@ -811,9 +1011,15 @@ export function PartsList({
         </div>
       </section>
 
+      {/* 🔵 좁은 화면에는 머리글이 없다 — 한 문장만 갈아 끼운다(1024px 이상의 글자는 그대로다). */}
       <p className="text-xs text-zinc-500 no-print">
-        행을 누르면 비고 전체와 이력이 보입니다. 머리글을 누르면 그 칸 기준으로
-        정렬됩니다.
+        행을 누르면 비고 전체와 이력이 보입니다.{" "}
+        <span className="hidden lg:inline">
+          머리글을 누르면 그 칸 기준으로 정렬됩니다.
+        </span>
+        <span className="lg:hidden">
+          정렬은 목록 위의 고르개에서 바꿉니다.
+        </span>
       </p>
 
       <PartDetailDialog
