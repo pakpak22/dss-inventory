@@ -19,6 +19,22 @@ import type { PartHistoryLine } from "@/lib/stock/queries";
  * 이력은 두 구역으로 가른다(DESIGN 2-2절): **이 프로그램에 쌓인 기록**(조각 4, 합계가 현재 수량과 맞는다)과
  * **전환일 이전 참고용**(조각 5, 엑셀에서 가져온 과거 기록 — 합계를 따로 내고 「수량 계산에 쓰지 않습니다」). 한 표에 섞지 않는다.
  * 전환일 글자는 설정값에서 온다(코드에 날짜 없음, DESIGN 10-3절 7번).
+ *
+ * ── 좁은 화면 (2026-10-22, 쓰는 분 요청) ──────────────────────────────────
+ * 고친 자리는 **머리 줄 하나**다 — 아래 「좁은 화면에서는 세로로 쌓는다」 주석에 까닭을 적었다.
+ * 처방은 AppHeader.tsx 와 같은 둘(`whitespace-nowrap` 울타리 + `flex-wrap` 접힘)에
+ * **「안 줄어드는 칸을 좁은 화면에서만 풀어 준다」**(`lg:shrink-0`)를 더한 것이다.
+ *
+ * 🔴 **폭과 높이를 여기서 정하지 않는다.** 이 창의 폭은 두 곳이 함께 정한다 —
+ *    `w-full max-w-4xl`(아래 dialog) 과 `globals.css` 의 `@media (max-width: 30rem)` 안
+ *    `dialog:modal` 규칙(좌우 1rem 씩 띄운다). 여기에 폭을 또 적으면 선택자 힘이 센 쪽이
+ *    **조용히** 이겨 한쪽이 아무 일도 안 하게 된다. 높이도 마찬가지로 손대지 않는다:
+ *    최대 높이와 세로 스크롤은 브라우저 기본 `dialog:modal` 규칙이 이미 주고 있고
+ *    (창을 열 때 `el.scrollTop = 0` 을 하는 것이 그 증거다), 여기서 덮으면 내용이 길 때
+ *    **[닫기] 까지 굴러 올라갈 길이 막힌다.**
+ * 🔴 **`lg`(1024px) 이상은 한 글자도 달라지지 않는다.** 좁은 화면용으로 줄인 값은 모두
+ *    `lg:` 짝을 달아 예전 값으로 되돌려 둔다 — 짝이 맞는지는 시험이 센다
+ *    (`tests/part-detail-dialog-responsive.test.ts`).
  */
 
 /** 상세 창이 받는 자료 한 묶음. 서버가 `?part=No.` 일 때 읽어 내려준다. 창이 닫혀 있으면 전부 빈 값. */
@@ -44,7 +60,14 @@ export interface PartDetailDialogProps {
   onClose: () => void;
 }
 
-const BTN = "rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-100 disabled:opacity-50";
+/**
+ * 🔴 `whitespace-nowrap` 은 모양이 아니라 **울타리**다 (AppHeader.tsx 의 같은 까닭).
+ *    글자가 안 꺾이면 이 칸의 min-content 가 낱말 전체 폭이 되어 **줄어들 수가 없다** —
+ *    없으면 「수량 조정」이 「수 / 량 / 조 / 정」으로 세로로 선다.
+ * 🔵 좁은 화면에서만 좌우 여백을 줄인다(`px-2`). `lg` 이상은 `lg:px-3` 로 예전 그대로다.
+ */
+const BTN =
+  "rounded-md border border-zinc-300 px-2 py-1.5 text-sm whitespace-nowrap text-zinc-700 hover:bg-zinc-100 disabled:opacity-50 lg:px-3";
 const BADGE = "inline-flex items-center rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium whitespace-nowrap text-zinc-700";
 
 export function PartDetailDialog({ part, missingNo, canEdit, canRecord, detail, transitionDate, onClose }: PartDetailDialogProps) {
@@ -79,9 +102,9 @@ export function PartDetailDialog({ part, missingNo, canEdit, canRecord, detail, 
       }}
     >
       {part === null ? (
-        <div className="flex flex-col gap-4 p-4">
+        <div className="flex flex-col gap-4 p-3 lg:p-4">
           <div className="flex items-start justify-between gap-3">
-            <h2 className="text-base font-semibold text-zinc-900">부품 상세</h2>
+            <h2 className="text-base font-semibold whitespace-nowrap text-zinc-900">부품 상세</h2>
             <button type="button" className={BTN} onClick={onClose}>
               닫기
             </button>
@@ -89,13 +112,28 @@ export function PartDetailDialog({ part, missingNo, canEdit, canRecord, detail, 
           <p className="text-sm text-zinc-500">No. {missingNo} 부품이 없습니다. 지워졌거나 주소가 잘못되었습니다.</p>
         </div>
       ) : (
-        <div className="flex flex-col gap-5 p-4">
-          <div className="flex items-start justify-between gap-3">
+        <div className="flex flex-col gap-4 p-3 lg:gap-5 lg:p-4">
+          {/* 🔴 좁은 화면에서는 **세로로 쌓는다**(2026-10-22, 쓰는 분이 폰으로 찍어 보내 주신 화면).
+              그 전까지 이 줄은 줄바꿈 없는 가로 한 줄이었고, 오른쪽 단추 묶음에 `shrink-0` 이 붙어
+              있어 **줄어들 줄 모르는 칸**이었다. 그래서 폭이 모자라면 왼쪽(제목·딱지)만 혼자
+              min-content 까지 찌그러졌다 — 한글은 아무 데서나 꺾이므로 min-content 가 **한 자 폭**이다.
+              결과가 「예시 PCB-007」이 「P / C / B / - / 0 / 0 / 7」로 세로로 서고, 딱지 넷이 한 줄에
+              하나씩 네 줄을 먹고, 단추 묶음은 화면 밖으로 잘리는 그 화면이었다.
+              `lg` 미만에서 `flex-col` 로 쌓으면 양쪽이 각각 **온 폭**을 받아 찌그러질 까닭이 없어진다.
+              🔴 `lg`(1024px) 이상은 `lg:flex-row lg:items-start lg:justify-between` 으로 **예전 그대로**다
+                 — 이 저장소가 좁은 화면을 가르는 경계가 그 값이다(PartsList 의 카드/표와 같은 값). */}
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div className="flex flex-col gap-1.5">
-              <h2 className="text-base font-semibold text-zinc-900">
+              {/* 🔵 `break-keep`(word-break: keep-all) — 한글은 기본값이 낱말 가운데서도 꺾인다.
+                  쌓기만으로도 찌그러짐은 끝나지만, 이름이 길어 줄이 넘어갈 때 「공 / 급」처럼
+                  낱말이 쪼개지는 것을 한 번 더 막는다. `lg` 이상은 `lg:break-normal` 로 되돌려
+                  넓은 화면의 줄바꿈 자리가 예전과 한 글자도 달라지지 않게 한다. */}
+              <h2 className="text-base font-semibold break-keep text-zinc-900 lg:break-normal">
                 {part.name}
                 {part.name2 ? <span className="font-normal text-zinc-500"> · {part.name2}</span> : null}
               </h2>
+              {/* 딱지는 `flex-wrap` 으로 가로로 흐르다 넘치면 줄을 바꾼다. 딱지 하나하나가 안 쪼개지는
+                  것은 BADGE 의 `whitespace-nowrap` 이 맡는다 — 둘이 짝이다. */}
               <div className="flex flex-wrap gap-1.5">
                 <span className={BADGE}>No. {part.no}</span>
                 <span className={BADGE}>{part.itemName}</span>
@@ -103,7 +141,13 @@ export function PartDetailDialog({ part, missingNo, canEdit, canRecord, detail, 
                 <span className={BADGE}>{OWNER_LABEL[part.owner]}</span>
               </div>
             </div>
-            <div className="flex shrink-0 flex-wrap justify-end gap-2">
+            {/* 🔴 `shrink-0` 을 `lg:shrink-0` 으로 **좁혔다**. 좁은 화면에서 안 줄어드는 칸이면
+                `flex-wrap` 이 있어도 소용이 없다 — 접히기 전에 묶음 전체가 제 max-content(단추 여섯을
+                한 줄에 늘어놓은 폭)를 고집해 화면 밖으로 나간다. 좁은 화면에서는 줄어들 수 있어야
+                비로소 접히고, 그래야 **[닫기] 까지 여섯 개가 다 닿는다.**
+                🔵 왼쪽 맞춤도 좁은 화면만이다(`lg:justify-end`) — 접힌 마지막 줄이 오른쪽에 매달리면
+                   어디까지가 한 묶음인지 읽기 어렵다. */}
+            <div className="flex flex-wrap gap-2 lg:shrink-0 lg:justify-end">
               {canRecord ? (
                 <>
                   <Link href={`/entries/new?type=USE&part=${part.no}`} className={BTN}>
@@ -133,7 +177,9 @@ export function PartDetailDialog({ part, missingNo, canEdit, canRecord, detail, 
             </div>
           </div>
 
-          <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-3 lg:grid-cols-5">
+          {/* 🔵 좁은 화면에서는 칸 사이를 좁힌다 — 360px 에서 두 칸을 나누고 나면 24px 짜리 사잇골이
+              값보다 넓어 보인다. `lg` 이상은 `lg:gap-x-6` 으로 예전 그대로다. */}
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3 lg:grid-cols-5 lg:gap-x-6">
             <div className="flex flex-col gap-0.5">
               <dt className="text-xs text-zinc-500">수량</dt>
               <dd className="tabular">
