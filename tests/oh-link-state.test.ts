@@ -35,6 +35,10 @@ function option(fields: Partial<OhPartLinkOption> & { id: string; no: number; na
     drawingNo: "",
     kyosanPartNo: "",
     quotePrice: null,
+    // 🔵 2026-10-22 에 늘었다 — 고르개의 결과 줄이 **그 부품에 대한 내용을 다 보여 주는** 데 쓴다.
+    //    이 판정(`describeOhPartLink`)은 이 둘을 보지 않는다. 모양을 맞추려고 둘 뿐이다.
+    owner: "DSS",
+    quantity: 0,
     ...fields,
   };
 }

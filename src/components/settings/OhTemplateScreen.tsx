@@ -58,6 +58,20 @@ import type { OhTemplateView } from "@/lib/oh/view";
  * 고르개(`src/components/parts/PartPicker.tsx`)가 그 자리를 맡는다 — **연결은 고를 때 맺히고**,
  * 손으로 글자를 고쳐서 풀리는 일은 없다.
  *
+ * ── 🔴 아직 아무것도 아닌 줄에서는 고르개가 **먼저, 그리고 펼쳐진 채로** (2026-10-22 요청 1) ──
+ * 고르개는 2026-10-15 부터 있었지만 **작은 글씨 [재고에서 고르기] 뒤에 접혀** 있었고, 줄의 첫
+ * 칸은 품명 입력칸이었다. 그래서 새 템플릿을 만드는 사람은 **재고에 있는 부품까지 손으로 쳤고**,
+ * 그 줄은 `재고 미연결` 이 되어 부품 요청에 담기지도, O/H 단가를 붙이지도 못했다.
+ * 쓰는 분의 말은 「A/S 의 [수리 건 상세]처럼 — 검색 결과가 뜨고 그중에서 고른다」였다.
+ * 그래서 셋을 바꿨다. **고르개 자체는 그대로다 — 새로 만들지 않았다.**
+ *   ① 줄이 `EMPTY`(이음도 없고 품명도 빈) 이면 고르개가 **기본으로 펼쳐져** 있다.
+ *   ② 이어지지 않은 줄에서는 고르개가 **품명 칸보다 위**에 선다 — 글상자 둘이 나란히 서면
+ *      사람은 위엣것에 친다. A/S 의 그 화면도 찾는 칸이 맨 위다.
+ *   ③ 품명 칸의 안내 글자가 **그 칸이 무엇을 위한 칸인지**를 말한다(재고에 없는 부품용).
+ * 🔵 **자유 입력은 그대로 남는다**(바로 아래 머리말) — 양식에서 옮겨 온 이름 중에 재고 마스터에
+ *    없는 것이 있고, 그 줄을 버리면 템플릿이 반쪽이 된다. 품명을 치기 시작하면 그 줄은 `UNLINKED`
+ *    가 되어 고르개가 접힌다(재고에 없는 이름을 적는 중이라는 뜻이다). 다시 펴는 길은 그대로 있다.
+ *
  * ── 🔴 이어진 줄의 품명은 **고객사 품명**이다 ───────────────────────────
  * 그 줄의 `partNameText` 는 그 부품의 `parts.customer_name` 이고, 그래서 **이 화면에서 고칠 수
  * 없다**(입력칸이 아니라 읽기만 하는 글자다). 고치려면 재고 현황의 그 부품으로 가야 한다 —
@@ -551,8 +565,42 @@ function TemplateEditor({
 
   const knownPrices = useMemo(() => knownPriceParts(template), [template]);
 
-  /** 지금 고르개를 펼쳐 둔 줄. 한 번에 하나만 펼친다 — 줄마다 펼쳐 두면 화면이 목록이 된다. */
+  /** 지금 고르개를 **손으로 펼쳐 둔** 줄. 한 번에 하나만 펼친다 — 줄마다 펼쳐 두면 화면이 목록이 된다. */
   const [pickerKey, setPickerKey] = useState<string | null>(null);
+  /**
+   * 🔴 **손으로 접은 줄**만 담는다. 아직 아무것도 아닌 줄(`EMPTY`)은 **기본이 펼침**이라,
+   * 「안 접었다」가 곧 「펼쳐져 있다」다(2026-10-22 요청 1, 아래 `pickerShown`).
+   *
+   * 🔵 펼친 줄을 담지 않고 접은 줄을 담는 까닭: 펼침을 담으면 줄이 새로 생길 때마다 담아 줘야
+   *    하고, [+ 부품 추가] 와 `toRows(null)` 둘 중 하나만 빠뜨려도 그 자리만 예전 모양으로 돌아간다.
+   *    접힘을 담으면 더할 일이 사람이 누를 때 한 군데뿐이다.
+   */
+  const [collapsedPickers, setCollapsedPickers] = useState<Set<string>>(() => new Set());
+
+  /**
+   * 그 줄의 고르개를 펼치거나 접는다.
+   * 🔴 **두 상태를 함께** 움직여야 한다 — 기본이 펼침인 줄을 `pickerKey` 만으로 접으면 다음
+   * 렌더에서 기본값이 도로 펼쳐, 닫기 단추가 아무 일도 안 하는 것처럼 보인다.
+   */
+  function togglePicker(key: string, shown: boolean) {
+    if (shown) {
+      if (pickerKey === key) setPickerKey(null);
+      setCollapsedPickers((previous) => {
+        if (previous.has(key)) return previous;
+        const next = new Set(previous);
+        next.add(key);
+        return next;
+      });
+      return;
+    }
+    setPickerKey(key);
+    setCollapsedPickers((previous) => {
+      if (!previous.has(key)) return previous;
+      const next = new Set(previous);
+      next.delete(key);
+      return next;
+    });
+  }
   /** 🔴 「고객사 품명이 없는 줄이 N개입니다」를 저장 전에 묻는 중인가(아래 dialog). */
   const [confirming, setConfirming] = useState(false);
   const confirmRef = useRef<HTMLDialogElement>(null);
@@ -753,6 +801,31 @@ function TemplateEditor({
           //    연결(MISSING)은 가리킬 부품이 없어 `null` 이다(파일 머리말).
           const quotePrice = "part" in link ? link.part.quotePrice : null;
           const quoteHint = quotePrice === null ? null : `견적가 ${quotePrice.toLocaleString("ko-KR")}원`;
+          /**
+           * 🔴 이 줄의 고르개가 지금 보이는가. **아직 아무것도 아닌 줄은 기본이 펼침**이다
+           * (2026-10-22 요청 1) — 손으로 접었을 때만 닫힌다(위 `collapsedPickers`).
+           */
+          const pickerShown = pickerKey === row.key || (link.kind === "EMPTY" && !collapsedPickers.has(row.key));
+          /**
+           * 🔴 고르개를 **한 번만 빚어 두 자리 중 하나에** 꽂는다(아래). 이어지지 않은 줄에서는
+           * 찾는 칸이 **품명 칸보다 먼저** 와야 한다 — A/S 의 [수리 건 상세]가 그렇고, 글상자 둘이
+           * 나란히 서면 사람은 위엣것에 친다. 이어진 줄은 품명이 읽는 글자라 지금 자리 그대로다.
+           */
+          const picker =
+            pickerShown && !busy ? (
+              <div className="my-1 rounded-md border border-zinc-200 bg-zinc-50 p-2">
+                <PartPicker
+                  parts={partOptions}
+                  exclude={new Set()}
+                  label={`${index + 1}번째 줄에 넣을 재고 부품 찾기`}
+                  onPick={(part) => pickPart(row.key, part)}
+                  /* 🔴 **그 부품에 대한 내용이 한 줄에 다 나오게** 한다(2026-10-22 요청 1) — 고르는
+                     사람이 **재고가 몇 개인지 보고 고른다.** 켜는 자리는 여기 하나이고, 안 켠
+                     다섯 자리(`src/components/stock/EntryForm.tsx`)는 그대로다. */
+                  detailed
+                />
+              </div>
+            ) : null;
 
           return (
             <div key={row.key} className={ITEM_GRID}>
@@ -760,15 +833,23 @@ function TemplateEditor({
                 {/* ── 이어진 줄: 품명은 **고객사 품명**이고 여기서 고칠 수 없다(파일 머리말) ──
                     🔴 입력칸으로 그리면 사람은 고칠 수 있다고 믿는다. 읽는 글자로 그린다. */}
                 {row.partId === null ? (
-                  <input
-                    value={row.partNameText}
-                    onChange={(e) => changePartName(row.key, e.target.value)}
-                    autoComplete="off"
-                    placeholder={`${index + 1}번째 부품 품명`}
-                    aria-label={`${index + 1}번째 부품 품명`}
-                    className={INPUT}
-                    disabled={busy}
-                  />
+                  <>
+                    {/* 🔴 찾는 칸이 먼저다(2026-10-22 요청 1) — 빈 줄에서는 펼쳐진 채로 시작한다. */}
+                    {picker}
+                    {/* 🔴 안내를 「n번째 부품 품명」으로만 적어 두었더니, 재고에 **있는** 부품도 손으로
+                        쳐서 재고 미연결 줄이 됐다 — 그 줄은 부품 요청에 담기지 않고 O/H 단가도 붙일 수
+                        없다. 이 칸이 **무엇을 위한 칸인지**를 칸 안에서 말한다(자리 번호는 aria-label 에
+                        그대로 남는다). */}
+                    <input
+                      value={row.partNameText}
+                      onChange={(e) => changePartName(row.key, e.target.value)}
+                      autoComplete="off"
+                      placeholder="재고에 없는 부품이면 품명을 직접 적습니다"
+                      aria-label={`${index + 1}번째 부품 품명`}
+                      className={INPUT}
+                      disabled={busy}
+                    />
+                  </>
                 ) : row.partNameText === "" ? (
                   // 🔴 고객사 품명이 없는 줄. 빈 자리로 두면 아무도 모른 채 견적서가 비어 나간다.
                   <p className="rounded-md border border-red-300 bg-red-50 px-2 py-1 text-[11px] text-red-700">
@@ -802,7 +883,7 @@ function TemplateEditor({
                       )}
                       <button
                         type="button"
-                        onClick={() => setPickerKey(pickerKey === row.key ? null : row.key)}
+                        onClick={() => togglePicker(row.key, pickerShown)}
                         disabled={busy}
                         aria-label={`${index + 1}번째 부품 다시 고르기`}
                         className="text-zinc-500 underline underline-offset-2 hover:text-zinc-900 disabled:opacity-50"
@@ -847,12 +928,12 @@ function TemplateEditor({
                       )}
                       <button
                         type="button"
-                        onClick={() => setPickerKey(pickerKey === row.key ? null : row.key)}
+                        onClick={() => togglePicker(row.key, pickerShown)}
                         disabled={busy}
                         aria-label={`${index + 1}번째 부품 재고에서 고르기`}
                         className="text-zinc-500 underline underline-offset-2 hover:text-zinc-900 disabled:opacity-50"
                       >
-                        {pickerKey === row.key ? "고르기 닫기" : "재고에서 고르기"}
+                        {pickerShown ? "고르기 닫기" : "재고에서 고르기"}
                       </button>
                     </>
                   )}
@@ -875,17 +956,9 @@ function TemplateEditor({
                 </div>
 
                 {/* 🔴 고르면 연결과 품명(= 고객사 품명)이 **함께** 채워진다. 공용 고르개라 수량 변경
-                    기록 화면과 같은 칸으로 찾는다(No.·품명·품명2·고객사 품명·도번·교산 품번). */}
-                {pickerKey === row.key && !busy && (
-                  <div className="mt-1 rounded-md border border-zinc-200 bg-zinc-50 p-2">
-                    <PartPicker
-                      parts={partOptions}
-                      exclude={new Set()}
-                      label={`${index + 1}번째 줄에 넣을 재고 부품 찾기`}
-                      onPick={(part) => pickPart(row.key, part)}
-                    />
-                  </div>
-                )}
+                    기록 화면과 같은 칸으로 찾는다(No.·품명·품명2·고객사 품명·도번·교산 품번).
+                    🔵 **이어진 줄에서만 여기 선다** — 이어지지 않은 줄에서는 품명 칸 위로 올라간다(위). */}
+                {row.partId === null ? null : picker}
 
                 {nameError && <p className={FIELD_ERROR}>{nameError}</p>}
                 {partIdError && <p className={FIELD_ERROR}>{partIdError}</p>}

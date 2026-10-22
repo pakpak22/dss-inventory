@@ -1,3 +1,6 @@
+// 🔵 **타입만** 가져온다 — 빌드 때 지워지므로 "use client" 화면이 이 파일을 읽어도 스키마가
+//    브라우저로 따라가지 않는다(`src/components/parts/PartPicker.tsx` 도 같은 길을 쓴다).
+import type { Owner } from "@/db/schema/codes";
 import type { PartQueryFields } from "@/lib/parts/search";
 import { isExactNormalizedMatch } from "./name-match";
 
@@ -57,8 +60,18 @@ import { isExactNormalizedMatch } from "./name-match";
  * 단가 칸을 비워 둔 줄에 **견적가를 회색 placeholder 로 비쳐 주는 데만** 쓴다(2026-10-22).
  * 🔴 **`null` 은 「견적가를 정하지 않았다」이지 0 이 아니다** — O/H 단가와 같은 잣대다
  * (`src/lib/api/parts.ts` 의 `ApiPart.overhaulQuotePrice` 머리말).
+ *
+ * 🔵 **`owner`·`quantity` 도 찾는 칸이 아니다**(2026-10-22 요청 1) — 고르개의 결과 줄에 **그
+ * 부품에 대한 내용이 다 보이게** 하는 데 쓴다. 고르는 사람이 **재고가 몇 개인지 보고 고른다.**
+ * 🔵 `quantity` 는 **재고 현황 목록이 읽는 그 수**다(`stock_balances.quantity`, 줄이 없으면 0) —
+ * 질의가 거기서 맞춰 준다(`listOhPartOptions` 머리말). 「모름」이라는 값은 없다.
  */
-export type OhPartLinkOption = PartQueryFields & { id: string; quotePrice: number | null };
+export type OhPartLinkOption = PartQueryFields & {
+  id: string;
+  quotePrice: number | null;
+  owner: Owner;
+  quantity: number;
+};
 
 export type OhPartLinkState =
   /** 자유 입력 줄인데 품명이 비었다. 저장할 때 걸러지는 줄이라 아직 아무것도 아니다. */

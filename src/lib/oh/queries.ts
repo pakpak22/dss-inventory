@@ -8,6 +8,7 @@ import {
   partOverhaulUnitPrices,
 } from "@/db/schema/oh-templates";
 import { parts } from "@/db/schema/parts";
+import { stockBalances } from "@/db/schema/stock-balances";
 import type { OhPartLinkOption } from "./link-state";
 import type { OhTemplateItemView, OhTemplateModelView, OhTemplateView } from "./view";
 
@@ -148,9 +149,20 @@ export async function listOhTemplates(): Promise<OhTemplateView[]> {
  * 화면이 그 부품의 **견적가를 회색 placeholder 로** 비쳐 주는 데 쓴다. 새 조회를 열지 않고 이미
  * 부품을 읽는 이 자리에 칸만 더한다. `null` 은 「견적가를 정하지 않았다」이고 0 과 다르다 — 그대로
  * 나른다(`?? 0` 금지, `src/lib/api/parts.ts` 머리말과 같은 잣대).
+ *
+ * ── 🔴 **소유와 재고 수도 준다** (2026-10-22 요청 1) ────────────────────
+ * 쓰는 분이 A/S 의 [수리 건 상세] 결과 줄을 짚으며 「**그 부품에 대한 모든 내용이 나온다** —
+ * 이런 형식으로」라고 하셨다. **고르는 사람이 재고가 몇 개인지 보고 고르는 것**이 그 요청의 핵심이다.
+ * 🔴 그 전까지 이 머리말은 「이 화면은 수량을 묻지 않으므로 실어 보낼 까닭이 없다」고 적고 있었다 —
+ *    **그 판단이 뒤집혔다.** 고르는 자리에서 재고를 못 보면 없는 부품을 템플릿에 담게 된다.
+ *
+ * 🔵 **재고 수를 여기서 새로 세지 않는다** — 재고 현황 목록(`listParts`)이 읽는 **그 자리**를
+ *    그대로 읽는다: `stock_balances.quantity` 를 `leftJoin` 하고, 수량 줄이 아직 없는 부품은
+ *    **0** 으로 본다. 다른 수(신청에 묶여 아직 안 나간 수량을 뺀 잔량 따위)를 쓰면 「목록엔 5개인데
+ *    고르개는 다르다」가 된다(`src/lib/parts/queries.ts` 와 `tests/part-limit-quantity.test.ts` 머리말).
  */
 export async function listOhPartOptions(): Promise<OhPartLinkOption[]> {
-  return db()
+  const rows = await db()
     .select({
       id: parts.id,
       no: parts.no,
@@ -160,10 +172,17 @@ export async function listOhPartOptions(): Promise<OhPartLinkOption[]> {
       drawingNo: parts.drawingNo,
       kyosanPartNo: parts.kyosanPartNo,
       quotePrice: parts.quotePrice,
+      owner: parts.owner,
+      quantity: stockBalances.quantity,
     })
     .from(parts)
+    .leftJoin(stockBalances, eq(stockBalances.partId, parts.id))
     .where(eq(parts.isDeleted, false))
     .orderBy(asc(parts.name), asc(parts.no));
+
+  // 🔴 수량 줄이 아직 없는 부품은 **0 개**다 — `listParts` 의 `?? 0` 과 **같은 말**이어야 한다.
+  //    여기서만 `null` 로 흘리면 고르개가 그 부품의 재고를 아예 안 그려, 「0개」와 「모름」이 섞인다.
+  return rows.map((row) => ({ ...row, quantity: row.quantity ?? 0 }));
 }
 
 /**
