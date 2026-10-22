@@ -2,25 +2,39 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { describeOhPartLink, type OhPartLinkOption } from "../src/lib/oh/link-state";
+import { overhaulUnitPriceFollowsQuote, resolveOverhaulUnitPrice } from "../src/lib/oh/unit-price";
 import { PART_FIELDS } from "../src/lib/parts/field-order";
 
 /**
  * ============================================================================
- * O/H 템플릿 — 부품을 **찾아서 고른다**, 견적가는 **비쳐 주기만 한다** (2026-10-22 요청 둘)
+ * O/H 템플릿 — 부품을 **찾아서 고른다**, 단가를 **비워 두면 견적가가 쓰인다** (2026-10-22)
  * ============================================================================
  * 쓰는 분의 말 그대로:
  *   ① 「부품 고르기를 A/S 의 [수리 건 상세]와 같은 방식으로 — 검색 결과가 뜨고 그중에서 고른다」
  *   ② 「O/H 단가 칸에 기존 견적단가가 회색으로 비쳐 보이고, 임의로 고쳐 적을 수도 있어야 한다」
  *
- * ── 🔴 ② 의 답은 placeholder 다 — 칸에 **값을 미리 붓지 않는다** ────────
- * 값을 부어 두면 「견적가를 따라간다」와 「마침 같은 숫자를 적어 두었다」가 **구별되지 않는다.**
- * 나중에 견적가가 바뀌어도 템플릿은 옛 숫자에 묶이고, 아무도 왜 그런지 모른다. 그래서 비워 두면
- * 여전히 「정하지 않음」(`null`)이 저장되고, 비친 글자는 **글자일 뿐**이다(커밋 9d8df96 의 결정).
+ * ── 🔴 ② 의 답이 **같은 날 오후에 뒤집혔다** ────────────────────────────
+ * 아침 커밋 `9d8df96` 은 ② 를 「**비쳐 주기만** 한다 — 비워 두면 **정하지 않음**이고,
+ * `[견적가 N원 적용]` 단추를 **눌러야** 값이 들어간다」로 풀었고, 이 묶음의 시험 이름들이
+ * 그렇게 적혀 있었다. 🔴 **그 글이 틀린 설계를 못 박고 있었다** — 단언은 맞으니 영영 통과한다.
+ * 오후에 쓰는 분이 정하신 것:
+ *
+ *   「비워 두면 견적가가 자동으로 쓰인다. 나중에 견적가가 바뀌면 따라서 바뀐다.
+ *    그렇게 되면 [견적가 적용]이라는 단추도 필요 없어질 테니까.」
+ *
+ * 그래서 이 묶음을 **지우지 않고 새 뜻으로 다시 썼다.** 바뀐 단언마다 까닭을 그 자리에 적었다.
+ *
+ * ── 🔵 그런데 「칸에 값을 미리 붓지 않는다」는 **그대로 남는다** — 까닭이 바뀌었을 뿐 ──
+ * 아침의 까닭: 「부어 두면 『따라간다』와 『마침 같은 숫자를 적어 두었다』가 구별되지 않는다」.
+ * 오후의 까닭: 🔴 **부어 두면 그 순간의 숫자에 박혀 「견적가가 바뀌면 따라 바뀐다」가 깨진다.**
+ * 두 결정이 같은 자리를 지킨다. 바뀐 것은 **비어 있음의 뜻**이고(「정하지 않음」 → 「견적가를
+ * 따른다」), 푸는 일은 **읽는 쪽 한 함수**(`resolveOverhaulUnitPrice`)가 맡는다.
  *
  * ── 🔴 이 화면에는 렌더 시험 틀이 없다 ──────────────────────────────────
  * 서버 액션을 물고 있어 그릴 수 없다(`tests/part-limit-quantity.test.ts` 머리말과 같은 사정).
  * 그래서 **파일 글자에서** 잰다. 느슨하지만, 여기서 지키는 둘은 어긋나도 **오류가 안 난다**:
  * 고르개가 도로 접히는 것도, 견적가가 값으로 새어 들어가는 것도 화면에서만 드러난다.
+ * 🔵 다만 **푸는 규칙 자체는 순수 함수**라 글자가 아니라 **값으로** 잰다(아래 ②-가).
  *
  * 🔴 **재는 쪽을 좁힌다** — 주석을 떼고(`stripComments`), 그 줄을 그리는 자리만 잘라서 본다.
  *    이 시험이 설명하려고 인용한 글자가 그대로 세어지면 헛통과·헛실패가 난다(2026-10-16 의 함정).
@@ -54,6 +68,9 @@ const PRICE_ENTRIES = slice(SCREEN, "const priceEntries = [", "const result = aw
 
 /** 저장된 단가를 칸에 채우는 함수만. */
 const PRICE_DRAFT = slice(SCREEN, "function toPriceDraft", "function knownPriceParts", "단가 초안");
+
+/** 접은 목록에 O/H 단가를 적는 함수만. 🔵 **편집 칸이 아니라 읽는 글자**다 — 거기는 푼 값을 적는다. */
+const PRICE_TEXT = slice(SCREEN, "function priceText", "export function OhTemplateScreen", "접은 목록의 단가 글자");
 
 /** 고르개가 받는 부품 목록을 읽는 질의만. */
 const PART_OPTIONS_QUERY = slice(
@@ -133,29 +150,132 @@ describe("① 부품은 **찾아서 고른다** — 공용 고르개를 쓴다",
   });
 });
 
-/* ──────────────── ② 견적가는 비쳐 주기만 한다 ──────────────── */
+/* ──────────────── ②-가 푸는 규칙 — 값으로 잰다 ──────────────── */
 
-describe("② 견적가는 **비쳐 주기만** 한다 — 칸에 값을 미리 붓지 않는다", () => {
-  it("🔴 단가 칸의 값은 사람이 적은 글자(`priceRaw`)뿐이다", () => {
-    assert.ok(ITEM_ROW.includes("value={priceRaw}"), "단가 칸이 사람이 적은 글자를 그리지 않는다");
+/**
+ * 🔴 **뜻이 셋이고, 둘을 뭉개면 못 되돌린다.** 이 묶음만 글자가 아니라 값으로 재므로 실제
+ * 동작을 지킨다 — 아래 ②-나(글자로 재는 쪽)가 다 통과해도 여기가 깨지면 숫자가 틀린 것이다.
+ */
+describe("②-가 O/H 단가를 **푸는 함수** — 비면 견적가, 0 은 무상, 숫자는 그 숫자", () => {
+  it("🔴 비어 있으면(`null`) **그 부품의 견적가**가 쓰인다 (2026-10-22 쓰는 분 결정)", () => {
+    assert.equal(resolveOverhaulUnitPrice(null, 1_482_500), 1_482_500);
   });
 
-  it("🔴 견적가가 **값 자리(`value`)에 닿지 않는다** — 닿으면 「따라간다」와 「적어 두었다」가 안 갈린다", () => {
-    for (const line of ITEM_ROW.split("\n")) {
-      if (!line.includes("quotePrice")) continue;
+  it("🔴 저장된 `0` 은 **0 그대로**다 — 「O/H 때는 무상」이 견적가 청구로 둔갑하면 안 된다", () => {
+    // 🔴 `stored || quotePrice` 로 적으면 바로 여기서 깨진다. 오류가 안 나는 종류의 버그라
+    //    이 한 줄이 유일한 방어선이다 — 받은 사람은 무상으로 약속받은 것을 청구당한다.
+    assert.strictEqual(resolveOverhaulUnitPrice(0, 1_482_500), 0);
+  });
+
+  it("🔴 사람이 정한 숫자가 견적가를 **이긴다**", () => {
+    assert.equal(resolveOverhaulUnitPrice(125_000, 990_000), 125_000);
+  });
+
+  it("🔴 둘 다 없으면 `null` — 따라갈 숫자가 없으니 받는 쪽이 칸을 비우고 사람이 채운다", () => {
+    assert.strictEqual(resolveOverhaulUnitPrice(null, null), null);
+  });
+
+  it("🔴 견적가가 `0` 이어도 **0 이 흘러간다** — 「견적가 없음」과 「견적가 0원」도 다른 말이다", () => {
+    assert.strictEqual(resolveOverhaulUnitPrice(null, 0), 0);
+  });
+
+  it("「견적가를 따라가는 중인가」는 **저장된 값이 비었는가**로만 판정한다", () => {
+    assert.equal(overhaulUnitPriceFollowsQuote(null), true);
+    // 🔴 0 은 사람이 정한 값이다 — 따라가는 중이 아니다.
+    assert.equal(overhaulUnitPriceFollowsQuote(0), false);
+    assert.equal(overhaulUnitPriceFollowsQuote(125_000), false);
+  });
+
+  it("🔴 푸는 자리는 **하나**다 — 통로가 제 폴백을 따로 적지 않고 그 함수를 부른다", () => {
+    /**
+     * 같은 폴백을 두 곳에서 각자 계산하면 언젠가 서로 다른 값을 말한다(이 묶음에서 실제로 겪은
+     * 사고다). A/S 가 받는 값이 **이미 풀린 값**이어야 저쪽이 한 글자도 안 고친다.
+     */
+    const apiParts = stripComments(src("src/lib/api/parts.ts"));
+    assert.ok(
+      apiParts.includes("resolveOverhaulUnitPrice(p.overhaulUnitPrice, p.quotePrice)"),
+      "통로가 푸는 함수를 안 부른다 — A/S 가 받는 값이 안 풀린 값이 된다",
+    );
+    for (const line of apiParts.split("\n")) {
+      if (!line.includes("overhaulQuotePrice:")) continue;
       assert.ok(
-        !/\bvalue=/.test(line),
-        `견적가가 값 자리로 샜다: ${line.trim()} — 견적가가 바뀌어도 템플릿은 옛 숫자에 묶인다`,
+        !/\?\?|\|\|/.test(line),
+        `통로가 폴백을 손으로 적었다: ${line.trim()} — 규칙이 두 벌이 되는 첫 걸음이다`,
       );
     }
   });
 
-  it("🔴 견적가는 **안내 자리에만** 쓰인다 — 회색으로 비치는 글자(`placeholder`)가 그 자리다", () => {
-    const priceCell = slice(ITEM_ROW, "value={priceRaw}", "{priceServerError &&", "단가 칸");
-    assert.ok(priceCell.includes("placeholder="), "단가 칸에 비쳐 줄 자리가 없다");
+  it("🔴 화면도 **그 함수**를 부른다 — 접은 목록이 제 폴백을 적지 않았다", () => {
     assert.ok(
-      /placeholder=\{[\s\S]*?quoteHint[\s\S]*?\}/.test(priceCell),
-      "견적가가 placeholder 로 안 비친다 — 요청 2 가 바라는 「회색으로 비쳐 보임」이 사라졌다",
+      SCREEN.includes('from "@/lib/oh/unit-price"'),
+      "화면이 푸는 함수를 안 쓴다 — 화면이 비친 숫자와 통로가 내보내는 숫자가 갈린다",
+    );
+    assert.ok(
+      PRICE_TEXT.includes("resolveOverhaulUnitPrice"),
+      "접은 목록의 O/H 단가 글자가 저장된 값만 본다 — 비어 있어도 견적가로 나가는데 「미정」이라고 적힌다",
+    );
+  });
+});
+
+/* ──────────────── ②-나 칸에 값을 미리 붓지 않는다 ──────────────── */
+
+describe("②-나 비워 둔 칸은 **비운 채로 저장**된다 — 견적가를 칸에 붓지 않는다", () => {
+  it("🔴 단가 칸의 값은 사람이 적은 글자(`priceRaw`)뿐이다", () => {
+    assert.ok(ITEM_ROW.includes("value={priceRaw}"), "단가 칸이 사람이 적은 글자를 그리지 않는다");
+  });
+
+  it("🔴 견적가가 **값 자리(`value`)에 닿지 않는다** — 닿으면 그 숫자에 박혀 안 따라간다", () => {
+    /**
+     * 🔵 **아침 결정에서 넘어온 단언이고, 까닭만 바뀌었다.** 그때는 「『따라간다』와 『마침 같은
+     * 숫자를 적어 두었다』가 구별되지 않는다」였다. 지금은 더 곧은 까닭이 있다 — 값을 부으면
+     * 사람이 적은 것과 똑같이 **저장**되고, 그 뒤로 견적가가 바뀌어도 템플릿은 옛 숫자에 묶인다.
+     * 쓰는 분이 정한 「나중에 견적가가 바뀌면 따라서 바뀐다」가 바로 그 자리에서 깨진다.
+     */
+    for (const line of ITEM_ROW.split("\n")) {
+      if (!line.includes("quotePrice")) continue;
+      assert.ok(
+        !/\bvalue=/.test(line),
+        `견적가가 값 자리로 샜다: ${line.trim()} — 저장돼 버려 견적가를 더는 안 따라간다`,
+      );
+    }
+  });
+
+  it("🔴 **`[견적가 적용]` 단추가 없다** — 안 눌러도 쓰이므로 할 일이 없어졌다 (2026-10-22 오후)", () => {
+    /**
+     * 🔴 아침에는 이 단추가 ② 의 **답**이었다(`changePrice` 로 칸에 값을 실제로 넣는 몸짓).
+     *    오후 결정으로 두 가지가 동시에 참이 됐다: ⓐ 안 눌러도 견적가가 쓰이니 할 일이 없고,
+     *    ⓑ 누르면 그 순간의 숫자가 **박혀** 새 결정을 정면으로 깬다. 쓰는 분의 말 그대로
+     *    「그렇게 되면 [견적가 적용]이라는 단추도 필요 없어질 테니까」.
+     * 🔵 화면에서 **두 줄로 깨져** 보이고 있던 것도 그 단추다.
+     */
+    assert.ok(
+      !ITEM_ROW.includes("changePrice(row.partId, String(quotePrice))"),
+      "견적가를 칸에 붓는 몸짓이 남아 있다 — 누르면 그 숫자에 박혀 더는 안 따라간다",
+    );
+    assert.ok(!ITEM_ROW.includes("적용"), "단가 칸에 [적용] 단추가 남아 있다");
+  });
+
+  it("🔴 비치는 글자는 **숫자 하나**다 — 말을 붙이면 칸에서 잘린다", () => {
+    /**
+     * 🔴 단가 칸은 `ITEM_GRID` 에서 `7rem`(약 112px)이다. 아침 판은 `미정 · 견적가 1,482,500원`
+     *    을 비춰 **잘렸다.** 쓰는 분의 원래 말이 「기존 견적단가가 **회색 글씨로 자동으로 적혀
+     *    있고**」였으니 적혀 있어야 할 것은 숫자이고, 칸 머리글이 이미 `O/H 단가 (원)` 라고
+     *    말하고 있어 「견적가」·「원」을 또 넣을 자리가 아니다. 어디서 온 숫자인지는 `title` 이 민다.
+     */
+    const hint = ITEM_ROW.split("\n").find((one) => one.includes("const quoteHint"));
+    assert.ok(hint, "비칠 글자를 빚는 자리가 없어졌다");
+    assert.ok(hint.includes("toLocaleString"), "세 자리마다 쉼표를 안 찍는다 — 긴 금액을 눈으로 못 읽는다");
+    assert.ok(!hint.includes("견적가") && !hint.includes("원"), `비치는 글자에 말이 붙었다: ${hint.trim()}`);
+
+    const priceCell = slice(ITEM_ROW, "value={priceRaw}", "{priceServerError &&", "단가 칸");
+    const placeholder = slice(priceCell, "placeholder={", "title={", "비치는 글자");
+    assert.ok(placeholder.includes("quoteHint"), "견적가가 placeholder 로 안 비친다");
+    assert.ok(!placeholder.includes("·"), `비치는 글자를 둘 이어 붙였다: ${placeholder.trim()} — 칸에서 잘린다`);
+    // 🔴 「저장 뒤 표시」가 **먼저**다 — 새로 이은 부품은 이미 정해 둔 단가가 있을 수 있어
+    //    견적가를 비추면 「이 부품은 견적가로 나간다」는 틀린 말이 된다(화면 머리말).
+    assert.ok(
+      placeholder.indexOf("priceUnknown") < placeholder.indexOf("quoteHint"),
+      "모르는 줄에까지 견적가를 비춘다 — 이미 정해 둔 O/H 단가가 있을 수 있다",
     );
   });
 
@@ -168,18 +288,23 @@ describe("② 견적가는 **비쳐 주기만** 한다 — 칸에 값을 미리 
     );
   });
 
-  it("🔴 저장된 단가를 칸에 채울 때도 견적가로 메우지 않는다 — `null` 은 빈 글자 그대로다", () => {
-    assert.ok(!PRICE_DRAFT.includes("quotePrice"), "초안을 빚을 때 견적가가 섞였다");
+  it("🔴 **편집 칸의 초안**을 빚을 때도 견적가로 메우지 않는다 — `null` 은 빈 글자 그대로다", () => {
+    /**
+     * 🔴 여기서 메우면 다음 저장이 그 숫자를 **진짜로 적는다** — 아무도 안 친 값이 저장되고,
+     *    그 뒤로 견적가가 바뀌어도 안 따라간다. 🔵 푼 값을 적는 자리는 **읽는 글자**(`priceText`)
+     *    뿐이고, 거기는 저장 길에 닿지 않는다(②-가의 마지막 단언이 그쪽을 지킨다).
+     */
+    assert.ok(!PRICE_DRAFT.includes("quotePrice"), "편집 칸의 초안에 견적가가 섞였다");
     assert.ok(
       PRICE_DRAFT.includes('item.ohPrice === null ? "" :'),
-      "「정하지 않음」이 빈 글자로 안 간다 — 0 으로 메우면 그 자리에서 「무상」이 된다",
+      "「비어 있음」이 빈 글자로 안 간다 — 0 으로 메우면 그 자리에서 「무상」이 된다",
     );
   });
 
   it("🔵 견적가는 **이미 있는 길**로 온다 — 부품 목록 질의에 칸 하나를 더했을 뿐이다", () => {
     assert.ok(
       PART_OPTIONS_QUERY.includes("quotePrice: parts.quotePrice"),
-      "고르개가 받는 목록에 견적가가 없다 — 화면이 비쳐 줄 값을 어디서도 못 받는다",
+      "고르개가 받는 목록에 견적가가 없다 — 화면이 비치고 풀 값을 어디서도 못 받는다",
     );
     /**
      * 🔴 **견적가 줄만 본다.** 처음에는 질의 전체에 `?? 0` 이 없는지로 쟀는데, 2026-10-22 에

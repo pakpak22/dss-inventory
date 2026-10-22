@@ -27,6 +27,8 @@ import {
   linkedProductModelIds,
   type AsProductModelDirectory,
 } from "@/lib/oh/product-models";
+// 🔴 폴백을 이 화면에 다시 적지 않는다 — 푸는 자리는 그 한 곳이다(그 파일 머리말).
+import { overhaulUnitPriceFollowsQuote, resolveOverhaulUnitPrice } from "@/lib/oh/unit-price";
 // 🔴 `queries.ts` 가 아니라 타입만 든 파일에서 가져온다 — 그쪽은 server-only 라 이 조각이 끌어오면
 //    빌드가 깨진다(`src/lib/oh/view.ts` 머리말).
 import type { OhTemplateView } from "@/lib/oh/view";
@@ -84,9 +86,10 @@ import type { OhTemplateView } from "@/lib/oh/view";
  * 있고, 그 줄을 버리면 템플릿이 반쪽이 된다.
  *
  * ── 🔴 O/H 단가의 `null` 은 0 이 아니다 ─────────────────────────────────
- * 빈 칸은 「정하지 않음」이고 저장 쪽이 그 줄을 **지운다.** 0 은 「오버홀 때는 무상」이라는
- * 뜻이다. 화면에서 `?? 0` 으로 뭉개면 그 갈림이 사라지고, **견적서가 정하지 않은 부품을 0원으로
- * 청구한다.**
+ * 빈 칸은 저장 쪽이 그 줄을 **지운다**(= `null`). 0 은 「오버홀 때는 무상」이라는 뜻이다.
+ * 화면에서 `?? 0` 으로 뭉개면 그 갈림이 사라지고, **견적서가 무상이 아닌 부품을 0원으로
+ * 청구한다.** 🔵 `null` 이 뜻하는 바는 2026-10-22 오후에 「정하지 않음」에서 **「견적가를
+ * 따른다」**로 바뀌었다(아래) — 그래도 `0` 과 가르는 일은 그대로다.
  *
  * ── 🔵 아직 저장되지 않은 연결의 단가는 「모른다」 ──────────────────────
  * 서버가 내려 주는 `ohPrice` 는 **이미 저장된 줄의 것**이다. 편집 중에 새로 이은 부품은 그 값을
@@ -95,14 +98,22 @@ import type { OhTemplateView } from "@/lib/oh/view";
  * 이미 저장돼 있던 부품(값을 안다) + 사람이 그 칸에 손댄 부품. 나머지는 **아예 보내지 않는다**
  * — 액션이 「보내지 않으면 건드리지 않는다」를 보장한다(`src/lib/oh/input.ts` 머리말).
  *
- * ── 🔴 O/H 단가가 비어 있으면 견적가를 회색으로 비쳐 준다 (2026-10-22, 쓰는 분 결정) ──
- * 칸이 비어 있고 그 줄에 재고 연결이 있으면(`link.part`), 그 부품의 `quotePrice`(견적가)를
- * **placeholder 로만** 보여 준다 — 입력값이 아니다. [견적가 …원 적용] 을 누르면 `changePrice` 로
- * **그 칸에 실제로 값을 넣는다**(사람이 친 것과 똑같은 길). 🔴 **누르지 않으면 아무 일도 안
- * 일어난다** — `prices`·`touchedPrices` 상태가 그대로이므로 저장은 이 조각 전과 똑같이 움직인다
- * (`save()` 의 `priceEntries` 는 여전히 `knownPrices`·`touchedPrices` 만 본다). placeholder 는
- * **값이 아니라 글자**라서 `priceRaw`·`prices` 에 닿지 않는다 — 저장되는 뜻을 바꾸지 않는 길이
- * 바로 이것이다.
+ * ── 🔴 **O/H 단가를 비워 두면 그 부품의 견적가가 쓰인다** (2026-10-22 오후, 쓰는 분 결정) ──
+ * 🔴 **그 전에는 반대였다.** 같은 날 아침 커밋 `9d8df96` 은 「견적가를 **비쳐 주기만** 한다 —
+ *    값이 아니라 안내다. 비워 두면 **정하지 않음**이고, `[견적가 N원 적용]` 단추를 **눌러야**
+ *    값이 들어간다」로 정해 두었고, 이 머리말에도 그렇게 적혀 있었다.
+ *    오후에 쓰는 분이 뒤집으셨다: 「비워 두면 견적가가 자동으로 쓰인다. 나중에 견적가가 바뀌면
+ *    따라서 바뀐다. 그렇게 되면 `[견적가 적용]` 이라는 단추도 필요 없어질 테니까.」
+ *    **그 단추는 없앴다**(아래 단가 칸 주석). 안 적어 두면 다음 사람이 옛 결정으로 되돌린다.
+ *
+ * 🔵 **화면이 하는 일은 그대로다 — 바뀐 것은 「비어 있음」의 뜻이다.** 칸이 비어 있으면 여전히
+ *    `null` 이 저장되고(저장 쪽이 행을 지운다), 견적가는 여전히 **placeholder 로만** 비친다 —
+ *    값을 미리 부으면 그 순간의 숫자에 **박혀** 「견적가가 바뀌면 따라 바뀐다」가 깨지기 때문이다.
+ *    🔴 그래서 `save()` 의 `priceEntries` 는 이 조각 전과 똑같이 `knownPrices`·`touchedPrices`
+ *    만 본다. 견적가는 `priceRaw`·`prices` 에 **닿지 않는다.**
+ * 🔵 **「비면 견적가가 쓰인다」를 푸는 일은 읽는 쪽에서** 한다 — `resolveOverhaulUnitPrice`
+ *    한 함수이고(`src/lib/oh/unit-price.ts`), 통로(`toApiPart`)도 이 화면의 접은 목록
+ *    (`priceText`)도 그 하나를 부른다. 두 곳에 각자 적으면 언젠가 서로 다른 값을 말한다.
  * ============================================================================
  */
 
@@ -177,9 +188,22 @@ function knownPriceParts(template: OhTemplateView | null): Set<string> {
   return ids;
 }
 
-function priceText(value: number | null): string {
-  // 🔴 `null` 은 0 이 아니다 — 「정하지 않음」이라고 적는다.
-  return value === null ? "미정" : `${value.toLocaleString("ko-KR")}원`;
+/**
+ * 접은 목록에 적는 O/H 단가. 🔴 **저장된 값이 아니라 실제로 견적서에 나가는 값**을 적는다
+ * (2026-10-22 결정) — 저장된 값이 비어 있으면 그 부품의 견적가가 나가므로, 그 숫자를 적고
+ * 「견적가」라고 밝힌다. 그 전에는 비면 그냥 `미정` 이었는데, 이제 그것은 **거짓말**이다:
+ * 비어 있어도 견적가가 있으면 그 금액으로 청구된다.
+ *
+ * 🔴 `null` 은 여전히 0 이 아니다 — 둘 다 없을 때만 `미정` 이고, 저장된 `0` 은 `0원`(무상)이다.
+ *
+ * @param stored     저장된 O/H 단가(행이 없으면 `null`)
+ * @param quotePrice 그 부품의 견적가. 가리킬 부품이 없는 줄(자유 입력·지워진 연결)은 `null`
+ */
+function priceText(stored: number | null, quotePrice: number | null): string {
+  const resolved = resolveOverhaulUnitPrice(stored, quotePrice);
+  if (resolved === null) return "미정";
+  const amount = `${resolved.toLocaleString("ko-KR")}원`;
+  return overhaulUnitPriceFollowsQuote(stored) ? `${amount} (견적가)` : amount;
 }
 
 export function OhTemplateScreen({
@@ -397,7 +421,8 @@ function ItemPreview({ template, partOptions }: { template: OhTemplateView; part
             ) : (
               <>
                 <span className="text-xs text-zinc-500">
-                  No. {item.partNo ?? "?"} · {item.partName ?? "?"} · O/H 단가 {priceText(item.ohPrice)}
+                  No. {item.partNo ?? "?"} · {item.partName ?? "?"} · O/H 단가{" "}
+                  {priceText(item.ohPrice, "part" in link ? link.part.quotePrice : null)}
                 </span>
                 {/* 🔴 고객사 품명이 없는 줄. 그대로 견적서에 나가면 품명 칸이 빈다. */}
                 {link.kind === "NO_CUSTOMER_NAME" && (
@@ -800,7 +825,14 @@ function TemplateEditor({
           // 🔴 견적가는 **이어진 부품이 있을 때만** 안다(`link.part`) — 자유 입력 줄·지워진 부품
           //    연결(MISSING)은 가리킬 부품이 없어 `null` 이다(파일 머리말).
           const quotePrice = "part" in link ? link.part.quotePrice : null;
-          const quoteHint = quotePrice === null ? null : `견적가 ${quotePrice.toLocaleString("ko-KR")}원`;
+          /**
+           * 🔴 **숫자만** 비친다(2026-10-22 오후). 그 전에는 `견적가 1,482,500원` 꼴이었고,
+           * 앞에 `미정 ·` 까지 붙어 **112px 칸에서 잘렸다.** 쓰는 분의 말이 원래 「기존 견적단가가
+           * **회색 글씨로 자동으로 적혀 있고**」였으니, 적혀 있어야 할 것은 숫자다 — 칸 머리글이
+           * 이미 `O/H 단가 (원)` 라고 말하고 있어 「견적가」라는 말을 또 넣을 자리가 아니다.
+           * 무엇에서 온 숫자인지는 `title`(마우스를 얹으면 뜨는 말)이 밝힌다.
+           */
+          const quoteHint = quotePrice === null ? null : quotePrice.toLocaleString("ko-KR");
           /**
            * 🔴 이 줄의 고르개가 지금 보이는가. **아직 아무것도 아닌 줄은 기본이 펼침**이다
            * (2026-10-22 요청 1) — 손으로 접었을 때만 닫힌다(위 `collapsedPickers`).
@@ -991,43 +1023,41 @@ function TemplateEditor({
                   }}
                   inputMode="numeric"
                   disabled={busy || row.partId === null}
+                  /**
+                   * 🔴 비칠 것을 **하나만** 고른다(2026-10-22 오후). 둘을 `·` 로 잇던 글이
+                   * 칸에서 잘렸고, 새 뜻에서는 이을 까닭도 없어졌다 — 비면 그 숫자가 실제로
+                   * 쓰이므로 숫자 하나가 곧 답이다.
+                   * 🔴 `priceUnknown` 이 **먼저**다: 편집 중에 새로 이은 부품은 이미 정해 둔 O/H
+                   *    단가가 있을 수 있어(이 화면이 그 값을 받지 않는다 — 파일 머리말) 견적가를
+                   *    비치면 「이 부품은 견적가로 나간다」는 **틀린 말**이 된다.
+                   * 🔵 견적가도 없으면 `미정` 이다 — 따라갈 숫자가 없으므로 O/H 단가가 정말로
+                   *    비어 나가고, 견적서 쪽이 칸을 비우고 사람이 채운다(API.md 2절).
+                   */
                   placeholder={
                     row.partId === null
                       ? "재고 연결 필요"
-                      : quoteHint
-                        ? `${priceUnknown ? "저장 뒤 표시" : "미정"} · ${quoteHint}`
-                        : priceUnknown
-                          ? "저장 뒤 표시"
-                          : "미정"
+                      : priceUnknown
+                        ? "저장 뒤 표시"
+                        : (quoteHint ?? "미정")
                   }
                   title={
                     row.partId === null
                       ? "재고와 이어야 O/H 단가를 정할 수 있습니다."
-                      : (priceUnknown
-                          ? "이 부품에 이미 정해 둔 O/H 단가가 있을 수 있습니다. 비워 두면 그대로 두고, 값을 적으면 그 값으로 정합니다."
-                          : "비워 두면 정하지 않음입니다. 0 은 무상이라는 뜻입니다.") +
-                        (quoteHint ? ` 비워 두는 동안 이 부품의 ${quoteHint}를 회색으로 보여 드립니다 — 값이 아니라 안내이고, 아래 단추를 눌러야 칸에 들어갑니다.` : "")
+                      : priceUnknown
+                        ? "이 부품에 이미 정해 둔 O/H 단가가 있을 수 있습니다. 비워 두면 그대로 두고, 값을 적으면 그 값으로 정합니다."
+                        : quoteHint
+                          ? `비워 두면 이 부품의 견적가 ${quoteHint}원이 그대로 쓰입니다 — 나중에 견적가가 바뀌면 따라서 바뀝니다. 회색 숫자가 그 금액입니다. 다른 금액으로 청구하려면 적으십시오. 0 은 오버홀 때 무상이라는 뜻입니다.`
+                          : "이 부품은 견적가도 정해져 있지 않아, 비워 두면 O/H 단가가 비어 나갑니다. 0 은 오버홀 때 무상이라는 뜻입니다."
                   }
                   aria-label={`${index + 1}번째 부품 O/H 단가`}
                   className={INPUT}
                 />
-                {/* 🔴 견적가를 placeholder 로만 비추는 것과 별개로, **누르면 채우는** 몸짓이 따로
-                    있어야 한다(파일 머리말) — placeholder 는 글자일 뿐이라 탭으로도 입력되지 않는다.
-                    값이 생기면(사람이 치거나 이 단추를 눌러서) 더 보여 줄 까닭이 없어 사라진다. */}
-                {quotePrice !== null && priceRaw === "" && row.partId !== null && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (row.partId === null) return;
-                      changePrice(row.partId, String(quotePrice));
-                    }}
-                    disabled={busy}
-                    aria-label={`${index + 1}번째 부품 O/H 단가에 견적가 ${quotePrice.toLocaleString("ko-KR")}원 적용`}
-                    className="mt-1 text-[11px] text-zinc-500 underline underline-offset-2 hover:text-zinc-900 disabled:opacity-50"
-                  >
-                    {quoteHint} 적용
-                  </button>
-                )}
+                {/* 🔴 **여기 있던 「견적가 적용」 단추를 없앴다**(2026-10-22 오후, 쓰는 분 결정).
+                    그 단추는 「비치는 글자를 칸에 실제로 넣는」 몸짓이었는데, 이제 **안 눌러도
+                    비워 둔 칸이 견적가로 나간다** — 쓰는 분의 말 그대로 「그렇게 되면 [견적가 적용]
+                    이라는 단추도 필요 없어질 테니까」다. 더구나 누르면 그 순간의 숫자가 칸에
+                    **박혀** 나중에 견적가가 바뀌어도 안 따라간다 — 새 뜻을 정면으로 깬다.
+                    🔵 다른 금액으로 청구할 일은 칸에 직접 적으면 된다(그 길은 그대로다). */}
                 {/* 화면에서 미리 재 본다. 최종 판정은 서버가 같은 함수로 다시 한다. */}
                 {row.partId !== null && !priceCheck.ok && <p className={FIELD_ERROR}>{priceCheck.message}</p>}
                 {priceServerError && <p className={FIELD_ERROR}>{priceServerError}</p>}

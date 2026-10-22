@@ -38,8 +38,14 @@ export const API_PART_COLUMNS = {
   supplyPrice: parts.supplyPrice,
   supplyCurrency: parts.supplyCurrency,
   quotePrice: parts.quotePrice,
-  /** 🔴 정해진 부품만 값이 있고 나머지는 `null` 이다. 0 으로 채우지 않는다(`./parts.ts` 머리말) */
-  overhaulQuotePrice: partOverhaulUnitPrices.unitPrice,
+  /**
+   * 🔴 **저장된 값 그대로**다 — 정한 부품만 값이 있고 나머지는 `null` 이다. 0 으로 채우지 않는다.
+   * 🔴 **여기서 `COALESCE` 로 풀지 않는다.** 2026-10-22 결정(「비면 견적가를 따른다」)을 푸는
+   *    일은 `toApiPart` 가 `resolveOverhaulUnitPrice` 로 한다 — 순수 함수라 시험이 붙고,
+   *    SQL 로 풀면 화면·질의·통로가 각자 다른 식을 들고 다니게 된다(`./parts.ts` 머리말).
+   *    🔵 칸 이름이 `overhaulQuotePrice` 가 아닌 까닭도 같다 — **푼 값과 안 푼 값을 가른다.**
+   */
+  overhaulUnitPrice: partOverhaulUnitPrices.unitPrice,
   note: parts.note,
   itemCode: partItems.code,
   itemName: partItems.name,

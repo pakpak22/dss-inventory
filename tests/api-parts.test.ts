@@ -16,7 +16,8 @@ const SRC: ApiPartSource = {
   supplyPrice: 54000,
   supplyCurrency: "JPY",
   quotePrice: 990000,
-  overhaulQuotePrice: 125000,
+  // 🔵 **저장된** O/H 단가다. 내보내는 `overhaulQuotePrice` 와 이름이 다른 까닭은 그 칸 머리말에.
+  overhaulUnitPrice: 125000,
   note: "2024.04.07 재고 100EA시 주문 필요",
   itemCode: "PCB",
   itemName: "PCB",
@@ -82,35 +83,71 @@ describe("API 목록 조건", () => {
 
 /**
  * ============================================================================
- * O/H 단가 칸 (`overhaulQuotePrice`, 2026-10-16)
+ * O/H 단가 칸 (`overhaulQuotePrice`) — **통로가 내주는 값은 이미 풀려 있다**
  * ============================================================================
- * A/S 의 **공용 부품 고르개**는 부품을 고르는 순간 단가를 자동으로 붓는다. 오버홀 건이면
- * O/H 단가를, 아니면 일반 단가를 붓는다. 그 고르개가 재고 관리 쪽으로 넘어오는데 O/H 단가만
- * 통로에 없었다 — 이 칸이 그것이다.
+ * A/S 의 **공용 부품 고르개**는 부품을 고르는 순간 단가를 자동으로 붓는다. 오버홀 줄이면
+ * O/H 단가를, 아니면 일반 단가를 붓는다(가르는 것은 견적서 종류가 아니라 **그 줄의 `OH` 표시**다).
  *
- * 🔴 이 시험들이 지키는 것은 **한 가지 혼동**이다: 「O/H 단가를 정하지 않았다(`null`)」와
- *    「O/H 때는 무상이다(`0`)」는 다른 말이다. 둘을 섞으면 되돌릴 수 없다.
- *      · `null` 을 0 으로 보내면 → 고르개가 **0원을 부어** 정하지 않은 부품을 0원으로 청구한다.
- *      · `0` 을 null 로 보내면 → 무상으로 정해 둔 부품이 「안 정해짐」이 되어 사람이 다시 채운다.
- *    그래서 `?? 0`(앞) 도 `|| null`(뒤) 도 끼우면 안 되고, 아래 셋이 그 자리를 각각 밟는다.
+ * ── 🔴 2026-10-22 오후, 쓰는 분이 뜻을 바꾸셨다 ─────────────────────────
+ * 그 전(2026-10-16~10-22 오전)에는 **저장된 값을 그대로** 내주었고, O/H 단가를 안 정한 부품은
+ * `null` 로 나가 A/S 고르개가 단가 칸을 **비워 두었다**. 쓰는 분의 새 결정은:
+ *
+ *   「비워 두면 견적가가 자동으로 쓰인다. 나중에 견적가가 바뀌면 따라서 바뀐다.」
+ *
+ * 그래서 **푸는 일을 재고관리가 한다** — 두 숫자를 다 쥐고 있는 쪽이 여기이고, 저쪽이 같은
+ * 폴백을 따로 계산하면 언젠가 서로 다른 값을 말한다. 🔴 **A/S 는 한 글자도 안 고친다.**
+ *
+ * ── 🔴 이 시험들이 지키는 것은 **뜻 셋이 안 뭉개지는 것**이다 ───────────
+ *   | 저장된 값 | 뜻                   | 내주는 값     |
+ *   |-----------|----------------------|---------------|
+ *   | `null`    | 「견적가를 따른다」  | `quotePrice`  |
+ *   | `0`       | 「O/H 때는 무상」    | `0`           |
+ *   | 숫자      | 사람이 정한 O/H 단가 | 그 숫자       |
+ *
+ *   🔴 **`0` 과 빈 값을 섞으면 되돌릴 수 없다.** `stored || quotePrice` 로 적으면 무상 부품이
+ *      견적가로 청구되고(받는 사람은 무상 약속을 청구당한다), `?? 0` 으로 적으면 견적가가 있는
+ *      부품이 0원이 된다. 아래 ①~④ 가 그 자리를 각각 밟는다.
  * ============================================================================
  */
 describe("API 부품의 O/H 단가", () => {
-  it("정한 부품은 값이 그대로 실린다", () => {
-    assert.equal(toApiPart(SRC).overhaulQuotePrice, 125000);
+  it("① 정한 부품은 그 값이 그대로 실린다 — 견적가가 있어도 사람이 정한 값이 이긴다", () => {
+    const p = toApiPart(SRC);
+    assert.equal(p.overhaulQuotePrice, 125000);
+    assert.notEqual(p.overhaulQuotePrice, SRC.quotePrice, "견적가가 사람이 정한 값을 덮었다");
   });
 
-  it("🔴 안 정한 부품은 null 이다 — **0 이 아니다**", () => {
-    const p = toApiPart({ ...SRC, overhaulQuotePrice: null });
+  it("🔴 ② 비워 둔 부품은 **그 부품의 견적가**가 나간다 (2026-10-22 쓰는 분 결정)", () => {
+    const p = toApiPart({ ...SRC, overhaulUnitPrice: null });
     assert.ok("overhaulQuotePrice" in p, "칸 자체가 빠지면 받는 쪽은 옛 판으로 알고 넘어간다");
-    assert.strictEqual(p.overhaulQuotePrice, null);
+    assert.strictEqual(p.overhaulQuotePrice, 990000, "비워 둔 칸이 견적가를 안 따라간다");
+    assert.strictEqual(p.overhaulQuotePrice, p.quotePrice, "따라가는 상대는 **그 부품의** 견적가다");
     assert.notStrictEqual(p.overhaulQuotePrice, 0, "0 으로 채우면 고르개가 0원을 붓는다");
   });
 
-  it("🔴 0 은 0 그대로다 — 「O/H 때 무상」이 「안 정함」으로 바뀌면 안 된다", () => {
-    const p = toApiPart({ ...SRC, overhaulQuotePrice: 0 });
+  it("🔴 ③ 저장된 `0` 은 0 그대로다 — **견적가로 바뀌면 무상 약속이 청구로 둔갑한다**", () => {
+    const p = toApiPart({ ...SRC, overhaulUnitPrice: 0 });
     assert.strictEqual(p.overhaulQuotePrice, 0);
     assert.notStrictEqual(p.overhaulQuotePrice, null, "`|| null` 꼴을 쓰면 여기서 깨진다");
+    assert.notStrictEqual(
+      p.overhaulQuotePrice,
+      990000,
+      "`stored || quotePrice` 로 적으면 여기서 깨진다 — 0 은 「안 정함」이 아니라 「무상」이다",
+    );
+  });
+
+  it("🔴 ④ 둘 다 없으면 `null` — 따라갈 숫자가 없으니 칸을 비우고 사람이 채운다", () => {
+    const p = toApiPart({ ...SRC, overhaulUnitPrice: null, quotePrice: null });
+    assert.strictEqual(p.overhaulQuotePrice, null);
+    assert.strictEqual(p.quotePrice, null);
+  });
+
+  it("🔴 「사람이 정한 값인가 / 견적가를 따른 것인가」를 말하는 칸은 **안 내준다** (2026-10-22 판단)", () => {
+    // 받는 쪽(A/S 견적서)이 그 갈림으로 하는 일이 없다 — 어느 쪽이든 똑같이 단가 칸에 붓는다.
+    // 쓰이지 않는 칸을 내주면 아무도 안 지키는 약속이 하나 는다. 필요해지면 그때 더하면 된다
+    // (칸을 더하는 것은 깨지 않는 변경이다 — `src/lib/api/parts.ts` 머리말).
+    // 🔵 숫자를 두 개 내주지 않는 것이 더 중요하다: 어느 것이 진짜인지 받는 쪽이 고르게 된다.
+    const keys = Object.keys(toApiPart(SRC));
+    assert.equal(keys.filter((k) => k.toLowerCase().includes("overhaul")).length, 1, "O/H 칸이 둘 이상이다");
   });
 
   it("통화 칸을 따로 두지 않는다 — 견적가와 같이 **항상 원**이다", () => {
@@ -132,10 +169,21 @@ describe("부품 통로가 읽는 칸 한 벌", () => {
     assert.deepEqual(Object.keys(API_PART_COLUMNS).sort(), Object.keys(SRC).sort());
   });
 
-  it("🔴 overhaulQuotePrice 는 parts 가 아니라 part_overhaul_unit_prices.unit_price 를 읽는다", () => {
-    const col = API_PART_COLUMNS.overhaulQuotePrice;
+  it("🔴 overhaulUnitPrice 는 parts 가 아니라 part_overhaul_unit_prices.unit_price 를 읽는다", () => {
+    const col = API_PART_COLUMNS.overhaulUnitPrice;
     assert.equal(col.name, "unit_price");
     assert.equal(col.table, partOverhaulUnitPrices, "parts 에 칸을 더해 읽으면 재고 현황·엑셀 한 벌에 단가가 따라 나간다 (2026-10-14 결정)");
+  });
+
+  it("🔴 질의는 **안 푼 값**을 읽는다 — SQL 로 `COALESCE` 해서 푸는 길로 가지 않았다", () => {
+    /**
+     * 폴백(「비면 견적가」)을 SQL 에 두면 순수 함수 시험이 안 붙고, 화면·질의·통로가 각자 다른
+     * 식을 들고 다니게 된다. 🔴 그래서 칸 이름도 `overhaulQuotePrice`(푼 값)가 아니라
+     * `overhaulUnitPrice`(저장된 값)다 — 이름이 같으면 `toApiPart` 가 그냥 복사하는 칸으로 보여
+     * 다음 사람이 푸는 줄을 지운다. 이 시험은 그 이름이 다시 붙는 날 말해 준다.
+     */
+    assert.ok(!("overhaulQuotePrice" in API_PART_COLUMNS), "질의가 푼 값을 읽는 것처럼 이름이 붙었다");
+    assert.equal(API_PART_COLUMNS.overhaulUnitPrice.table, partOverhaulUnitPrices);
   });
 
   it("🔴 잇는 열쇠는 part_id = parts.id 하나다", () => {

@@ -1,4 +1,5 @@
 import type { Category, Currency, Owner } from "@/db/schema/codes";
+import { resolveOverhaulUnitPrice } from "@/lib/oh/unit-price";
 import { CATEGORY_LABEL, OWNER_LABEL, isCategory, isOwner } from "@/lib/parts/codes";
 
 /**
@@ -31,14 +32,28 @@ export interface ApiPart {
    * **오버홀(O/H) 작업일 때의 견적가.** 일반 수리면 `quotePrice`, O/H 면 이 값을 쓴다
    * (A/S 의 부품 고르개가 고르는 순간 단가를 붓는 자리다). 2026-10-16 에 더했다.
    *
-   * 🔴 **`null` 은 「정하지 않았다」이고, `0` 은 「O/H 때는 무상」이다 — 섞지 않는다.**
-   *    `null` 을 0 으로 바꿔 보내면 고르개가 **0원을 부어** 정하지 않은 부품을 0원으로 청구한다.
-   *    받는 쪽도 `?? 0` 으로 뭉개지 말고, `null` 이면 칸을 **비워 두고 사람이 채우게** 한다.
+   * ── 🔴 2026-10-22 오후부터 **이미 풀린 값**이다 (쓰는 분 결정) ──────────
+   * 저장된 O/H 단가가 없는 부품은 이제 **그 부품의 `quotePrice` 가 실려 나간다** —
+   * 「비워 두면 견적가가 자동으로 쓰이고, 견적가가 바뀌면 따라 바뀐다」가 그 결정이다.
+   * 푸는 일은 `resolveOverhaulUnitPrice` **한 함수**가 하고(`src/lib/oh/unit-price.ts`),
+   * 🔴 **받는 쪽은 아무것도 안 고친다** — 같은 폴백을 두 시스템이 각자 계산하면 언젠가 서로
+   * 다른 값을 말한다. 값을 **복사해 두지도 않는다**: DB 의 빈 값은 빈 채로 남고, 읽을 때마다
+   * 그때의 견적가로 다시 풀린다.
+   * 🔴 그 전(2026-10-16~10-22 오전)에는 **정한 부품만 값이 있고 나머지는 `null`** 이었다.
+   *    지금 `null` 은 「O/H 단가도 견적가도 둘 다 없다」는 뜻이다 — 뜻이 좁아졌을 뿐이라 받는
+   *    쪽이 하던 일(「`null` 이면 칸을 비우고 사람이 채운다」)은 그대로 맞다.
+   *
+   * 🔴 **`0` 은 「O/H 때는 무상」이고 `null` 과 섞지 않는다.** 받는 쪽은 `?? 0` 으로 뭉개지
+   *    말고(정하지 않은 부품이 0원으로 청구된다), `|| null` 도 쓰지 말라(무상이 뒤집힌다).
    *    (까닭은 `db/schema/oh-templates.ts` 의 `part_overhaul_unit_prices` 머리말)
    * 🔵 **통화 칸을 두지 않는다** — `quotePrice` 와 같이 **항상 원**이다. 통화가 갈리는 것은
    *    공급가(`supplyPrice`·`supplyCurrency`)뿐이다.
-   * 🔵 O/H 단가를 **정한 부품만** 값이 있다. 지운 단가는 행이 통째로 사라지므로 `null` 로 온다
-   *    — 그 표에는 소프트 삭제가 없다(비우면 0 을 저장하지 않고 행을 지운다).
+   * 🔵 **「사람이 정한 값인가 / 견적가를 따른 것인가」를 말해 주는 칸은 두지 않았다**(2026-10-22).
+   *    받는 쪽(A/S 견적서)이 그 갈림으로 하는 일이 하나도 없고 — 어느 쪽이든 똑같이 단가 칸에
+   *    붓는다 — 쓰이지 않는 칸을 내주면 그 뒤로는 아무도 안 지키는 약속이 하나 는다.
+   *    🔵 그 갈림이 보여야 하는 자리는 **값을 정하는 화면**뿐이고, 그 화면은 재고관리 안에 있어
+   *    두 숫자를 이미 다 쥐고 있다(`overhaulUnitPriceFollowsQuote`). 필요해지면 그때 칸을
+   *    더하면 된다 — 더하는 것은 깨지 않는 변경이다(위 머리말).
    */
   overhaulQuotePrice: number | null;
   note: string;
@@ -60,8 +75,14 @@ export interface ApiPartSource {
   supplyPrice: number | null;
   supplyCurrency: Currency;
   quotePrice: number | null;
-  /** 🔴 정해진 것만. 없으면 `null` 이고 **0 으로 채우지 않는다**(위 `ApiPart.overhaulQuotePrice`) */
-  overhaulQuotePrice: number | null;
+  /**
+   * 🔴 **DB 에 저장돼 있는 값 그대로다**(`part_overhaul_unit_prices.unit_price`, 행이 없으면
+   * `null`). 내보내는 `ApiPart.overhaulQuotePrice` 와 **이름이 일부러 다르다** — 저쪽은 견적가를
+   * 섞어 **푼 값**이고 이쪽은 **안 푼 값**이라, 같은 이름이면 `toApiPart` 가 그냥 복사하는 칸으로
+   * 보여 다음 사람이 푸는 줄을 지운다(2026-10-22 에 이름을 갈랐다).
+   * 🔴 0 으로 채우지 않는다 — `0` 은 「무상」이다(위 `ApiPart.overhaulQuotePrice`).
+   */
+  overhaulUnitPrice: number | null;
   note: string;
   itemCode: string;
   itemName: string;
@@ -82,9 +103,11 @@ export function toApiPart(p: ApiPartSource): ApiPart {
     supplyPrice: p.supplyPrice,
     supplyCurrency: p.supplyCurrency,
     quotePrice: p.quotePrice,
-    // 🔴 그대로 나른다. `?? 0` · `|| null` 을 끼우지 않는다 — 앞엣것은 「정하지 않음」을 0원으로,
-    //    뒤엣것은 「무상(0)」을 「정하지 않음」으로 바꿔 버린다. 둘 다 되돌릴 수 없는 손실이다.
-    overhaulQuotePrice: p.overhaulQuotePrice,
+    // 🔴 **여기서 푼다 — 받는 쪽이 아니라.** 저장된 O/H 단가가 없으면 「견적가를 따른다」는
+    //    뜻이므로 `quotePrice` 가 나간다(2026-10-22 쓰는 분 결정, 위 칸 머리말).
+    //    🔴 직접 `?? `·`||` 를 적지 말고 **그 한 함수**를 부른다 — `||` 로 적으면 무상(`0`)이
+    //    견적가로 둔갑하고, 두 곳에 각자 적으면 언젠가 서로 다른 값을 말한다.
+    overhaulQuotePrice: resolveOverhaulUnitPrice(p.overhaulUnitPrice, p.quotePrice),
     note: p.note,
     item: { code: p.itemCode, name: p.itemName },
     category: { code: p.category, label: CATEGORY_LABEL[p.category] },
