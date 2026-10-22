@@ -331,3 +331,73 @@ describe("⑨ 🔴 머리말의 z 가 본문 쪽 최대보다 위다", () => {
     );
   });
 });
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * ⑩ 🔴 서랍의 사용자 묶음은 **바닥에 붙는다** (2026-10-22, 쓰는 분 요청)
+ * ═════════════════════════════════════════════════════════════════════════ */
+
+describe("⑩ 🔴 사용자 묶음이 서랍 **맨 아래**에 붙는다 — 늘어나는 빈 칸막이로", () => {
+  /**
+   * 그 전에는 메뉴 링크 여섯 **바로 밑**에 붙어 있고 그 아래로 빈 자리가 길게 남았다.
+   *
+   * 🔴 받치고 있는 것이 **빈 div 하나**라 다음 사람이 「쓸데없는 칸」으로 보고 지우기 쉽다.
+   *    지우면 묶음이 다시 링크 밑으로 올라붙는데 **오류는 한 줄도 안 난다** — 그래서 못 박는다.
+   * 🔴 **주석을 떼고 잰다**(이 파일 머리말의 `codeOnly`). 칸막이의 까닭이 바로 그 자리에 길게
+   *    적혀 있어, 주석이 코드 대신 걸리면 **까닭을 통째로 지워도 시험이 통과한다.**
+   * 🔵 재는 것은 **자리뿐**이다 — 묶음 안의 차례는 ⑦ 이, 아래쪽 노치 여백은 ⑧ 이 따로 지킨다.
+   */
+  it("🔴 `</nav>` 와 아래 묶음 **사이**에 늘어나는 빈 칸막이가 있다", () => {
+    const panel = detailsBlock();
+    const nav = panel.indexOf("</nav>");
+    const 묶음 = panel.indexOf("border-t");
+    assert.ok(nav > 0, "서랍의 </nav> 를 찾지 못했다 — 모양이 바뀌었으면 시험도 함께 고쳐라");
+    assert.ok(묶음 > nav, "구분선(border-t)으로 시작하는 아래 묶음을 <nav> 뒤에서 찾지 못했다");
+
+    const 사이 = panel.slice(nav, 묶음);
+    const 칸막이 = /<div ([^>]*)\/>/.exec(사이);
+    assert.ok(칸막이, "메뉴 링크와 아래 묶음 **사이**에 빈 칸막이가 없다 — 2026-10-22 에 사용자 묶음을 서랍 바닥으로 내렸고, 받치는 것이 그 칸 하나다");
+
+    const 속성 = 칸막이[1];
+    const classes = (/className="([^"]*)"/.exec(속성)?.[1] ?? "").split(/\s+/).filter(Boolean);
+    assert.ok(
+      classes.includes("grow"),
+      `칸막이가 남는 자리를 안 먹는다(class: ${classes.join(" ") || "(없음)"}) — grow 가 빠지면 높이 0 인 빈 칸이 되어 묶음이 다시 링크 바로 밑으로 올라붙는다`
+    );
+    assert.match(속성, /aria-hidden="true"/, "칸막이가 화면 낭독기에 읽힌다 — 아무것도 그리지 않는 칸이라 알릴 것이 없다");
+  });
+
+  it("🔴 아래 묶음은 `mt-3` 그대로다 — `mt-auto` 로 내리지 않았다", () => {
+    const panel = detailsBlock();
+    const 묶음 = /<div className="([^"]*\bborder-t\b[^"]*)">/.exec(panel);
+    assert.ok(묶음, "아래 묶음의 className 을 찾지 못했다 — 모양이 바뀌었으면 시험도 함께 고쳐라");
+
+    const classes = 묶음[1].split(/\s+/).filter(Boolean);
+    assert.ok(classes.includes("mt-3"), `구분선 위 12px 간격이 사라졌다(class: ${묶음[1]})`);
+    // 🔴 margin-top:auto 는 **남는 자리가 있을 때만** 내려 준다. 메뉴가 서랍보다 길어지는 순간
+    //    0 으로 풀려 구분선이 마지막 링크에 바짝 달라붙는다 — 간격이 가장 필요한 바로 그 때다.
+    //    칸막이는 그 경우에 높이 0 으로 줄 뿐이라 mt-3 가 그대로 남는다.
+    assert.ok(
+      !panel.includes("mt-auto"),
+      "서랍에 mt-auto 가 들어왔다 — 자리가 남을 때는 멀쩡해 보이지만, 메뉴가 서랍보다 길어지면 0 으로 풀려 구분선 위 12px 간격이 사라진다"
+    );
+  });
+
+  it("🔵 칸막이가 먹히는 **전제** — 서랍 본체가 세로 flex 이고 높이가 화면에 매여 있다", () => {
+    const panel = detailsBlock();
+    const 본체 = /className="(relative z-50 [^"]*)"/.exec(panel);
+    assert.ok(본체, "서랍 본체의 className 을 찾지 못했다 — 모양이 바뀌었으면 시험도 함께 고쳐라");
+
+    const classes = 본체[1].split(/\s+/).filter(Boolean);
+    assert.ok(
+      classes.includes("flex") && classes.includes("flex-col"),
+      "서랍 본체가 세로 flex 가 아니다 — flex 가 아니면 grow 는 아무 뜻이 없고 칸막이가 **조용히** 높이 0 이 된다"
+    );
+    assert.ok(
+      classes.includes("overflow-y-auto") && classes.includes("min-h-0"),
+      "내용이 길어질 때 서랍이 안 구른다 — 그 경우 칸막이가 0 으로 줄어도 메뉴 아래가 잘린다"
+    );
+    // 🔴 늘어날 **남는 자리**는 바깥 상자가 화면 높이를 꽉 채워서 생긴다. 바깥이 높이를 안 잡으면
+    //    서랍이 제 내용만큼만 높아져 남는 자리가 늘 0 이고, 묶음은 영영 바닥에 안 붙는다.
+    assert.ok(panel.includes("fixed inset-0"), "서랍 바깥이 화면 높이를 안 잡는다 — 남는 자리가 아예 없어 칸막이가 늘 0 이다");
+  });
+});

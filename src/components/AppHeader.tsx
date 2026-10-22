@@ -329,6 +329,41 @@ export function AppHeader({ user, portalUrl, services, currentServiceId, isAdmin
                 <nav aria-label="화면" className="flex flex-col gap-0.5">
                   <ScreenLinks isAdmin={isAdmin} canRecord={canRecord} pendingRequests={pendingRequests} linkClassName={PANEL_LINK} />
                 </nav>
+                {/*
+                  빈 칸막이 — 아래 묶음을 **서랍 바닥**에 붙인다 (2026-10-22, 쓰는 분 요청).
+                  그 전에는 메뉴 링크 여섯 **바로 밑**에 붙어 있고 그 아래로 빈 자리가 길게 남았다.
+                  🔵 바뀌는 것은 **자리뿐**이다 — 아래 묶음 안의 차례(이름 → 통합 로그인으로 →
+                     로그아웃 → 역할 바꿔 보기)는 넓은 화면의 오른쪽 끝 차례와 일부러 같게 맞춰
+                     둔 것이라 손대지 않았다.
+
+                  🔴 **`mt-auto` 를 쓰지 않은 까닭.** 아래 묶음에 margin-top:auto 를 주면 자리가
+                     남을 때는 잘 내려가지만, 메뉴가 **서랍보다 길어지는 순간**(가로로 눕힌 폰 ·
+                     글자 크기를 키운 기기 · 메뉴가 더 느는 날) 남는 자리가 없어 auto 가 **0 으로
+                     풀린다.** 그러면 지금 보장돼 있는 구분선 위 12px 간격(아래 `mt-3`)이 사라져
+                     구분선이 마지막 링크에 바짝 달라붙는다 — 간격이 가장 필요한 때에 없어지는데
+                     오류는 한 줄도 안 나고 눈에만 드러난다.
+
+                  🔵 **칸막이는 두 경우가 모두 옳다.** 서랍 본체가 세로 flex 이고 높이가 화면에
+                     매여 있으므로(바깥이 fixed inset-0),
+                      · 자리가 남으면 `grow` 가 남는 자리를 **전부** 가져가 아래 묶음이 바닥에 붙고,
+                      · 내용이 길어지면 남는 자리가 없어 칸막이가 **높이 0** 으로 줄어 **예전과
+                        픽셀 단위로 같은 모양**이 된다(스크롤도 그대로 생긴다).
+                     아래 묶음의 `mt-3` 은 두 경우 다 그대로 12px 이다 — 바깥 여백은 남는 자리를
+                     나눠 주기 **전에** 떼어 두는 몫이라 `grow` 가 먹지 않는다.
+                     🔵 칸막이는 `flex-basis: auto` + 내용 없음이라 밑너비가 0 이다. 그래서 자리가
+                        모자랄 때 flex 가 깎을 것도 없다 — 깎이는 쪽은 늘 **아무도 아니다**.
+
+                  🔴 **빈 div 라고 지우지 마라.** 지우면 아래 묶음이 다시 링크 바로 밑으로
+                     올라붙는데 오류는 안 난다. 그것을 지키는 시험이
+                     tests/app-header-responsive.test.ts ⑩ 에 있다.
+                  🔵 `aria-hidden` — 아무것도 그리지 않으므로 낭독기에 알릴 것이 없다.
+                  🔵 HeaderMenuDismiss 의 「안쪽을 누르면 접는다」 규칙은 `a, button` 만 본다 —
+                     칸막이는 링크도 단추도 아니라 거기 안 걸린다. 눌러도 아무 일이 없다(맞다).
+                  🔴 아래쪽 노치 여백은 **서랍 바깥 상자**(위 본체 div)에 그대로 있다. 칸막이가
+                     바닥까지 밀어 주는 것은 그 여백 **안쪽**까지다 — 그래서 맨 아래 단추가
+                     홈 인디케이터에 겹치지 않는다. 그 여백을 여기로 옮기지 마라.
+                */}
+                <div aria-hidden="true" className="grow" />
                 {/* 구분선 아래는 넓은 화면에서 오른쪽 끝에 서 있던 것들 — 차례도 그대로다. */}
                 <div className="mt-3 flex flex-col items-stretch gap-2 border-t border-zinc-200 pt-3">
                   <UserIdentity user={user} />
