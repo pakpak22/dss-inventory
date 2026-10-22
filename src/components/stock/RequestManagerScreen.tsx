@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { IssueApprovalTrail } from "./IssueApprovalTrail";
 import { RepairCaseInfo } from "./RepairCaseInfo";
 import { RequestActions, type RequestActionLine, type RequestActionStatus } from "./RequestActions";
@@ -365,6 +365,83 @@ function RequestItems({ lines }: { lines: readonly ManagerRequestLine[] }) {
   );
 }
 
+/* ------------------------------------------------------------------ */
+/* 🔴 줄 하나가 그릴 것 — **표와 카드가 이 한 벌을 함께 본다** (2026-10-22) */
+/* ------------------------------------------------------------------ */
+/**
+ * 📱 **좁은 화면(`lg` 미만)에서는 줄 하나가 카드 한 장이 된다** (2026-10-22 쓰는 분 요청:
+ * 「부품 요청 관리 목록을 휴대폰에서 읽을 수 있게」). 이 표는 `min-w-[64rem]`(=1024px)에 가로
+ * 스크롤이라, 폭 360px 짜리 휴대폰에서는 **첫 서너 칸만 보이고 나머지는 화면 밖**이다.
+ *
+ * 🔴 **겹치는 것은 배치뿐이다** — 1024px 이상에서는 아래 표가 **지금 그대로** 선다.
+ * 🔴 **칸 목록을 두 번 적지 않는다.** 여기 넷(종류 · 무엇에 · 신청자 · 상태 배지)과 화면 안쪽의
+ *    둘(`statusNotes` · `rowActions`)을 표와 카드가 **같이 부른다.** 베껴 두면 언젠가 한쪽만
+ *    고쳐지는데 그 어긋남은 오류를 내지 않는다 — 특히 단추 쪽은 **승인 절차를 조용히 건너뛴다.**
+ * 🔵 재고 현황(`parts/PartsList.tsx`)이 같은 날 같은 방식으로 먼저 바뀌었다 — 낱말도 짝도 그쪽 것이다.
+ */
+/**
+ * 종류와 그 날짜. 🔵 **날짜의 꼴만** 부르는 쪽이 정한다 — 표는 칸이 좁아 제 줄에 세우고(`block`),
+ *    카드는 종류 바로 옆에 잇는다. 그 밖에는 두 자리가 한 글자도 다르지 않다.
+ */
+function typeCell(r: ManagerRequestRow, dayClass: string): ReactNode {
+  return (
+    <>
+      {ENTRY_TYPE_LABEL[r.type]}
+      <span className={dayClass}>{r.occurredOn}</span>
+    </>
+  );
+}
+
+/**
+ * 「무엇에」 — 인수번호(또는 빌려준 곳·사유) 아래로 수리 건 정보와 요청 비고가 따라붙는다.
+ *
+ * 🔴 **둘이 한 덩어리로 읽히지 않게 줄을 가른다** (2026-10-22) — 위는 인수번호(또는
+ *    빌려준 곳·사유), 아래는 이름표를 단 요청 비고다. 🔵 비고가 없으면 아랫줄 자체가 없어
+ *    지금까지와 한 글자도 다르지 않다.
+ * 🔵 **수리 건 정보가 인수번호 바로 밑**이다 (2026-10-22) — 그 번호가 가리키는 건이
+ *    무엇인지를 푸는 값이라, 번호에서 눈을 떼지 않고 읽히는 자리가 여기다. 🔴 요청 비고는
+ *    그 **아래로 민다**: 저것은 사람이 쓴 말이고 이것은 A/S 에서 받아 온 사실이라, 사실 둘
+ *    사이에 말이 끼면 인수번호와 그 풀이가 끊긴다. 🔵 둘 다 비면 아랫줄 자체가 없어
+ *    지금까지와 한 글자도 다르지 않다.
+ * 🔴 **카드에서도 `-` 를 그대로 둔다** (2026-10-22) — 이것은 이름표를 단 쌍이 아니라 그 줄의
+ *    **머리글자**라, 비었을 때 아무것도 안 그리면 종류만 덩그러니 남아 카드가 고장 난 것처럼
+ *    보인다. 빈 칸을 지우는 규칙은 이름표+값 쌍에만 건다(`RepairCaseInfo` · `RequestNote` 가
+ *    저희 안에서 이미 그렇게 한다).
+ */
+function aboutCell(r: ManagerRequestRow): ReactNode {
+  return (
+    <>
+      {aboutOf(r) || <span className="text-zinc-400">-</span>}
+      <RepairCaseInfo repairCase={r.repairCase} />
+      <RequestNote note={r.note} />
+    </>
+  );
+}
+
+/**
+ * 신청자와 출처 표식.
+ * 🔵 다른 데서 올라온 신청에만 표식을 붙인다 — 거의 전부가 재고 관리에서 직접 올린 것이라,
+ *    줄마다 출처가 붙으면 눈에 띄어야 할 「A/S」가 묻힌다(`REQUEST_SOURCE_LABEL`).
+ */
+function requesterCell(r: ManagerRequestRow): ReactNode {
+  return (
+    <>
+      {r.requestedByName}
+      {REQUEST_SOURCE_LABEL[r.source] ? <span className={`${BADGE} ml-1 bg-zinc-100 text-zinc-600`}>{REQUEST_SOURCE_LABEL[r.source]}</span> : null}
+    </>
+  );
+}
+
+/**
+ * 상태 배지 하나.
+ * 🔴 마감된 신청은 「확인됨」이 아니라 「마감」, 결재가 끝나 실행만 남았으면 「결재 중」이 아니라 그 다음 말이다.
+ *    가르는 자리는 화면이 아니라 `codes.ts` 의 그 한 곳이고, 여기서는 **받은 값을 넘기기만** 한다.
+ * 🔵 **카드에서는 이 배지가 맨 윗줄에 선다** — 좁은 화면에서 먼저 읽혀야 하는 것이 「지금 어떤 상태인가」다.
+ */
+function statusBadge(r: ManagerRequestRow, issueLock: PartIssueLock | null): ReactNode {
+  return <span className={`${BADGE} ${requestStatusBadge(r.status, r.closed, issueLock)}`}>{requestStatusLabel(r.status, r.closed, issueLock)}</span>;
+}
+
 /**
  * @param isAdmin 확인·반려·마감·보류 단추를 그릴지 (2026-10-15 사용자 결정: 신청자는 **보고 거두기만** 한다).
  * @param currentUserId 지금 보는 사람. **본인이 낸 대기 신청**에만 [신청 취소]를 그리려고 받는다 (2026-10-15).
@@ -449,6 +526,73 @@ export function RequestManagerScreen({
    */
   const someApprovalRequired = filtered.some((r) => approvalRequired[r.id] ?? false);
 
+  /**
+   * 「이 줄이 왜 이 상태인가」를 말하는 상자들 — 결재선 그림 · 보류 사유 · 결정 사유.
+   * 🔴 **표와 카드가 이 하나를 함께 본다**(위 묶음의 까닭 그대로). 🔵 셋 다 그릴 것이 없으면
+   *    아무것도 안 그린다 — 받는 조각들이 저희 안에서 `null` 을 돌려준다.
+   * 🔵 **카드에서는 상태 배지와 떨어져 아래쪽에 선다** — 배지는 맨 위에서 「무엇인가」를 먼저
+   *    말하고, 까닭을 적은 상자들은 읽을 것을 다 읽은 자리에 모인다.
+   */
+  const statusNotes = (r: ManagerRequestRow): ReactNode => {
+    // 🔵 잠긴 신청에만 들어 있다(서버가 잠금과 **같은 묶음**에서 만든다). 없으면 이 줄은 지금까지와 한 글자도 다르지 않다.
+    const issueTrail = issueTrails[r.id];
+    return (
+      <>
+        {/* 🔵 결재가 걸린 줄에만 그린다 — 결재가 없는 줄에는 그릴 것이 없고, 전체 신청 목록이라 모든 줄에 그리면 표가 길어진다.
+            🔵 폭을 묶어 둔다: 상자가 늘어나도 **이 칸 안에서만** 밀린다(그림 자신이 가로 스크롤을 들고 있다). */}
+        {issueTrail ? (
+          <div className="mt-0.5 max-w-72">
+            <IssueApprovalTrail status={issueTrail.status} currentStep={issueTrail.currentStep} steps={issueTrail.steps} />
+          </div>
+        ) : null}
+        <HoldReason hold={r.hold} />
+        {/* 🔵 보류 상자 **바로 아래**에 둔다 — 둘 다 「이 줄이 왜 이 상태인가」를 말하는 상자라
+            같은 자리에 모여 있어야 한다. 둘이 한 줄에 함께 서는 일은 지금 생기지 않지만
+            (사유가 적히는 반려·마감은 보류로 돌아가지 않는다) 그 전제를 코드에 박지 않는다. */}
+        {/* 🔵 결재에서 반려된 줄에만 값이 있다 — 아니면 `null` 이라 지금까지와 한 글자도 다르지 않다. */}
+        <DecisionNote request={r} decidedVia={decisionActors[r.id] ?? null} />
+      </>
+    );
+  };
+
+  /**
+   * 그 줄에 세울 **단추 묶음**(또는 그 자리를 대신하는 말).
+   *
+   * 🔴 **조건이 적힌 자리는 여기 하나다.** 표와 카드가 이 함수를 함께 부른다 — 베껴 두면
+   *    「어떤 줄은 [불출 신청], 어떤 줄은 [확인]」을 가르는 `approvalRequired[r.id]` 같은 값이
+   *    한쪽에서만 틀어져도 **승인 절차를 건너뛰는 단추**가 생기고, 그것은 조용히 생긴다.
+   * 🔴 그릴 것이 **하나라도** 있을 때만 단추 묶음을 쓴다 — 관리자가 아니고 내 대기 신청도 아니면
+   *    `RequestActions` 는 빈 상자만 그린다. 「처리할 것 없음」은 처리하는 사람(관리자)에게만 뜻이 있는 말이라
+   *    신청자에게는 빈 칸으로 둔다.
+   */
+  const rowActions = (r: ManagerRequestRow): ReactNode => {
+    const actionStatus = actionStatusOf(r.status);
+    const canCancel = canCancelOf(r);
+    // 🔵 **잠긴 신청에만** 들어 있다. 없으면 `null` 이고 그때 [확인] 자리는 지금까지 그대로다.
+    const issueLock = issueLocks[r.id] ?? null;
+    return actionStatus !== null && (isAdmin || canCancel) ? (
+      <RequestActions
+        requestId={r.id}
+        status={actionStatus}
+        lines={r.lines}
+        /* 🔵 목록의 「무엇에」 칸이 그리는 것과 **같은 값**이다(위 `RequestNote`) — 상자를
+           열었다고 다른 글이 보이면 안 된다. 뽑는 자리는 신청 줄 하나다. */
+        requestNote={r.note}
+        canDecide={isAdmin}
+        canCancel={canCancel}
+        /* 🔴 **이 줄의 값**이다 (2026-10-22) — 같은 목록에서도 수리 건 종류에 따라 어떤 줄은
+           [불출 신청]이고 어떤 줄은 [확인]이다. 🔵 없는 열쇠는 거짓(= 지금까지 그대로). */
+        approvalRequired={approvalRequired[r.id] ?? false}
+        issueLock={issueLock}
+      />
+    ) : issueLock ? (
+      /* 🔵 결재가 그 신청을 붙들고 있으면 단추는 없어도 **갈 곳은 말해 준다**(위 `IssueLockNotice`). */
+      <IssueLockNotice lock={issueLock} />
+    ) : isAdmin ? (
+      <span className="text-xs text-zinc-400">처리할 것 없음</span>
+    ) : null;
+  };
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3">
@@ -507,7 +651,59 @@ export function RequestManagerScreen({
         <p className="rounded-lg border border-zinc-200 bg-white p-8 text-center text-sm text-zinc-500">해당하는 요청이 없습니다.</p>
       ) : (
         <section className="rounded-lg border border-zinc-200 bg-white">
-          <div className="overflow-x-auto">
+          {/*
+            ── 📱 **좁은 화면(lg 미만)은 줄 하나가 카드 한 장이다** (2026-10-22 쓰는 분 요청) ──
+            차례는 「이 신청이 무엇이고 내가 뭘 해야 하나」를 먼저 읽히게 짰다:
+              ① 상태 배지 · 신청 일시(작게) → ② 종류 · 인수번호 · 수리 건 · 요청 비고
+              → ③ 신청자 → ④ 신청 항목 → ⑤ 결재선·보류·반려 상자 → 🔴 ⑥ **맨 아래에 단추**
+            🔴 단추가 맨 아래인 까닭: 엄지로 닿는 자리이고, **읽고 나서 누르는** 차례다.
+            🔵 비는 것은 그리지 않는다 — 받는 조각들이 저희 안에서 이미 `null` 을 돌려준다.
+
+            🔴 **인쇄는 언제나 표다**(`no-print` · 아래 표의 `print:block`). 이 화면에는 전용 인쇄
+               화면이 없어 사람이 Ctrl+P 로 그대로 뽑는다. A4 가로는 CSS 로 약 1047px 이라
+               `lg`(1024px) 경계에 아슬아슬하게 걸린다 — 여백·배율에 따라 1024px 아래로 떨어지면
+               종이에 카드가 나간다. 운에 맡기지 않고 못 박아 둔다
+               (`tests/request-manager-cards.test.ts` 가 이 두 글자를 잰다).
+          */}
+          <ul className="no-print divide-y divide-zinc-200 lg:hidden">
+            {filtered.map((r) => {
+              const issueLock = issueLocks[r.id] ?? null;
+              return (
+                <li key={r.id} className="flex flex-col gap-1.5 px-3 py-3">
+                  {/* ① 먼저 읽혀야 하는 것 — 지금 어떤 상태인가, 그리고 언제 올라왔나 */}
+                  <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+                    {statusBadge(r, issueLock)}
+                    <span title={fullAt(r.requestedAt)} className="tabular text-xs whitespace-nowrap text-zinc-500">
+                      {formatRequestedAt(r.requestedAt)}
+                    </span>
+                  </div>
+                  {/* ② 무엇에 쓰려는 신청인가 — 🔵 종류+날짜는 **한 쌍으로 붙어 다닌다**(`RepairCaseInfo` 방식). */}
+                  <div className="text-sm break-keep text-zinc-800">
+                    <span className="mr-1 inline-block text-xs whitespace-nowrap text-zinc-500">{typeCell(r, "tabular ml-1")}</span>
+                    {aboutCell(r)}
+                  </div>
+                  {/* ③ 신청자 */}
+                  <div className="text-xs text-zinc-600">
+                    <span className="inline-block whitespace-nowrap">
+                      <span className="text-zinc-400">신청자 </span>
+                      {requesterCell(r)}
+                    </span>
+                  </div>
+                  {/* ④ 판단 근거 — 표와 **같은 조각**이 그린다(숫자는 `.tabular` 로 세로가 맞는다) */}
+                  <RequestItems lines={r.lines} />
+                  {/* ⑤ 왜 이 상태인가 — 🔵 그릴 상자가 하나도 없으면 이 묶음 자체가 안 보인다 */}
+                  <div className="flex flex-col gap-1 empty:hidden">{statusNotes(r)}</div>
+                  {/* 🔴 ⑥ 단추는 **맨 아래** — 엄지로 닿는 자리이고, 읽고 나서 누르는 차례다.
+                      🔴 **표의 단추 열과 같은 값으로 가린다**(`showActions`) — 카드에서만 보이는 단추를
+                         만들지 않는다. 🔵 그릴 것이 없으면 이 자리 자체가 사라진다. */}
+                  <div className="pt-1 empty:hidden">{showActions ? rowActions(r) : null}</div>
+                </li>
+              );
+            })}
+          </ul>
+          {/* 🔴 1024px 이상은 **지금 표 그대로**다 — 겹치는 것은 배치뿐이고 내용을 만드는 함수는 하나다.
+              🔴 `print:block` 이 `hidden` 을 이긴다 — 없으면 인쇄 폭이 1024px 아래로 떨어질 때 표도 카드도 없는 빈 종이가 나온다. */}
+          <div className="hidden overflow-x-auto lg:block print:block">
             <table className="w-full min-w-[64rem] border-collapse text-sm">
               <thead>
                 <tr className="bg-zinc-50 text-left text-xs text-zinc-500">
@@ -536,91 +732,27 @@ export function RequestManagerScreen({
               </thead>
               <tbody>
                 {filtered.map((r) => {
-                  const actionStatus = actionStatusOf(r.status);
-                  const canCancel = canCancelOf(r);
-                  // 🔵 둘 다 **잠긴 신청에만** 들어 있다(서버가 같은 묶음에서 만든다). 없으면 이 줄은 지금까지와 한 글자도 다르지 않다.
+                  // 🔵 **잠긴 신청에만** 들어 있다(서버가 만든다). 없으면 이 줄은 지금까지와 한 글자도 다르지 않다.
                   const issueLock = issueLocks[r.id] ?? null;
-                  const issueTrail = issueTrails[r.id];
                   return (
                     <tr key={r.id} className="border-t border-zinc-200 align-top hover:bg-zinc-50">
                       <td title={fullAt(r.requestedAt)} className={`${TD} tabular text-xs whitespace-nowrap text-zinc-600`}>
                         {formatRequestedAt(r.requestedAt)}
                       </td>
-                      <td className={`${TD} whitespace-nowrap text-zinc-700`}>
-                        {ENTRY_TYPE_LABEL[r.type]}
-                        <span className="tabular block text-xs text-zinc-500">{r.occurredOn}</span>
-                      </td>
-                      {/* 🔴 **둘이 한 덩어리로 읽히지 않게 줄을 가른다** (2026-10-22) — 위는 인수번호(또는
-                          빌려준 곳·사유), 아래는 이름표를 단 요청 비고다. 🔵 비고가 없으면 아랫줄 자체가 없어
-                          지금까지와 한 글자도 다르지 않다. */}
-                      {/* 🔵 **수리 건 정보가 인수번호 바로 밑**이다 (2026-10-22) — 그 번호가 가리키는 건이
-                          무엇인지를 푸는 값이라, 번호에서 눈을 떼지 않고 읽히는 자리가 여기다. 🔴 요청 비고는
-                          그 **아래로 민다**: 저것은 사람이 쓴 말이고 이것은 A/S 에서 받아 온 사실이라, 사실 둘
-                          사이에 말이 끼면 인수번호와 그 풀이가 끊긴다. 🔵 둘 다 비면 아랫줄 자체가 없어
-                          지금까지와 한 글자도 다르지 않다. */}
-                      <td className={`${TD} max-w-64 text-zinc-700`}>
-                        {aboutOf(r) || <span className="text-zinc-400">-</span>}
-                        <RepairCaseInfo repairCase={r.repairCase} />
-                        <RequestNote note={r.note} />
-                      </td>
-                      {/* 🔵 다른 데서 올라온 신청에만 표식을 붙인다 — 거의 전부가 재고 관리에서 직접 올린 것이라,
-                          줄마다 출처가 붙으면 눈에 띄어야 할 「A/S」가 묻힌다(`REQUEST_SOURCE_LABEL`). */}
-                      <td className={`${TD} whitespace-nowrap text-zinc-700`}>
-                        {r.requestedByName}
-                        {REQUEST_SOURCE_LABEL[r.source] ? <span className={`${BADGE} ml-1 bg-zinc-100 text-zinc-600`}>{REQUEST_SOURCE_LABEL[r.source]}</span> : null}
-                      </td>
+                      {/* 🔵 아래 다섯 칸의 **내용은 카드와 같은 함수**가 만든다(위 묶음) — 여기 남은 것은 칸의 꼴뿐이다. */}
+                      <td className={`${TD} whitespace-nowrap text-zinc-700`}>{typeCell(r, "tabular block text-xs text-zinc-500")}</td>
+                      <td className={`${TD} max-w-64 text-zinc-700`}>{aboutCell(r)}</td>
+                      <td className={`${TD} whitespace-nowrap text-zinc-700`}>{requesterCell(r)}</td>
                       <td className={`${TD} w-[24rem]`}>
                         <RequestItems lines={r.lines} />
                       </td>
                       <td className={TD}>
                         <div className="flex flex-col gap-1">
-                          {/* 🔴 마감된 신청은 「확인됨」이 아니라 「마감」, 결재가 끝나 실행만 남았으면 「결재 중」이 아니라 「실행 대기」다.
-                              가르는 자리는 화면이 아니라 `codes.ts` 의 그 한 곳이고, 여기서는 **받은 값을 넘기기만** 한다. */}
-                          <span className={`${BADGE} ${requestStatusBadge(r.status, r.closed, issueLock)}`}>{requestStatusLabel(r.status, r.closed, issueLock)}</span>
-                          {/* 🔵 결재가 걸린 줄에만 그린다 — 결재가 없는 줄에는 그릴 것이 없고, 전체 신청 목록이라 모든 줄에 그리면 표가 길어진다.
-                              🔵 폭을 묶어 둔다: 상자가 늘어나도 **이 칸 안에서만** 밀린다(그림 자신이 가로 스크롤을 들고 있다). */}
-                          {issueTrail ? (
-                            <div className="mt-0.5 max-w-72">
-                              <IssueApprovalTrail status={issueTrail.status} currentStep={issueTrail.currentStep} steps={issueTrail.steps} />
-                            </div>
-                          ) : null}
-                          <HoldReason hold={r.hold} />
-                          {/* 🔵 보류 상자 **바로 아래**에 둔다 — 둘 다 「이 줄이 왜 이 상태인가」를 말하는 상자라
-                              같은 자리에 모여 있어야 한다. 둘이 한 줄에 함께 서는 일은 지금 생기지 않지만
-                              (사유가 적히는 반려·마감은 보류로 돌아가지 않는다) 그 전제를 코드에 박지 않는다. */}
-                          {/* 🔵 결재에서 반려된 줄에만 값이 있다 — 아니면 `null` 이라 지금까지와 한 글자도 다르지 않다. */}
-                          <DecisionNote request={r} decidedVia={decisionActors[r.id] ?? null} />
+                          {statusBadge(r, issueLock)}
+                          {statusNotes(r)}
                         </div>
                       </td>
-                      {showActions ? (
-                        <td className={`${TD} no-print`}>
-                          {/* 🔴 그릴 것이 **하나라도** 있을 때만 단추 묶음을 쓴다 — 관리자가 아니고 내 대기 신청도 아니면
-                              `RequestActions` 는 빈 상자만 그린다. 「처리할 것 없음」은 처리하는 사람(관리자)에게만 뜻이 있는 말이라
-                              신청자에게는 빈 칸으로 둔다. */}
-                          {actionStatus !== null && (isAdmin || canCancel) ? (
-                            /* 🔵 잠금은 **잠긴 신청만** 내려온다 — 없으면 `null` 이고 그때 [확인] 자리는 지금까지 그대로다. */
-                            <RequestActions
-                              requestId={r.id}
-                              status={actionStatus}
-                              lines={r.lines}
-                              /* 🔵 목록의 「무엇에」 칸이 그리는 것과 **같은 값**이다(위 `RequestNote`) — 상자를
-                                 열었다고 다른 글이 보이면 안 된다. 뽑는 자리는 신청 줄 하나다. */
-                              requestNote={r.note}
-                              canDecide={isAdmin}
-                              canCancel={canCancel}
-                              /* 🔴 **이 줄의 값**이다 (2026-10-22) — 같은 목록에서도 수리 건 종류에 따라 어떤 줄은
-                                 [불출 신청]이고 어떤 줄은 [확인]이다. 🔵 없는 열쇠는 거짓(= 지금까지 그대로). */
-                              approvalRequired={approvalRequired[r.id] ?? false}
-                              issueLock={issueLock}
-                            />
-                          ) : issueLock ? (
-                            /* 🔵 결재가 그 신청을 붙들고 있으면 단추는 없어도 **갈 곳은 말해 준다**(위 `IssueLockNotice`). */
-                            <IssueLockNotice lock={issueLock} />
-                          ) : isAdmin ? (
-                            <span className="text-xs text-zinc-400">처리할 것 없음</span>
-                          ) : null}
-                        </td>
-                      ) : null}
+                      {showActions ? <td className={`${TD} no-print`}>{rowActions(r)}</td> : null}
                     </tr>
                   );
                 })}
