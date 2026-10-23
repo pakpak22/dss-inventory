@@ -482,3 +482,113 @@ export async function acknowledgePortalNotification(subject: string, key: string
 
   return true;
 }
+
+/* ========================================================================== */
+/* 「이 사람에게 결재가 생겼다」 — 포털을 한 번 쿡 찌른다 (2026-10-24)         */
+/*                                                                           */
+/* 포털(dss-auth)이 결재 알림 메일을 보낸다. 그런데 포털은 **주기적으로 물어** */
+/* 보는 방식이라, 결재가 생긴 순간이 아니라 그 다음 차례에 메일이 나간다 —    */
+/* 쓰는 분이 「결재건이 생기자마자 메일이 보내졌으면 좋겠다」고 했다          */
+/* (2026-10-24). 이 통로가 그 틈을 메운다.                                    */
+/*                                                                           */
+/* ── 🔴 보내는 것은 **「누구에게 생겼다」 하나뿐**이다 ────────────────────── */
+/* 신청 번호도·품명도·갈래도 싣지 않는다. 포털은 이 번호를 받고 **제 통로로   */
+/* 다시 물어**(= 위 ② 방향, `/api/integration/approvals`) 안 보낸 것에만 메일을 */
+/* 띄운다. 그래서 ① 이 시스템이 거짓을 보내도 메일 내용이 흔들리지 않고       */
+/* ② 포털의 「보낸 기록」이 중복을 막는다. 🔴 내용을 실어 보내기 시작하면 그   */
+/* 두 성질이 **동시에** 무너진다 — 칸을 늘리지 마라.                          */
+/*                                                                           */
+/* ── 🔴 **실패가 정상 동작의 일부다** ────────────────────────────────────── */
+/* 이 함수는 **결재가 이미 저장된 뒤**에 불린다(`src/lib/approval/part-issue.ts` */
+/* 의 두 자리, 트랜잭션 **밖**이다). 포털이 404·500·타임아웃으로 답해도 사람  */
+/* 에게는 아무 일도 일어나지 않아야 한다 — 신청은 이미 저장됐다. 그래서 읽는 */
+/* 쪽·지움 쪽·확인 쪽과 같은 약속으로 **어떤 일이 있어도 던지지 않는다.**      */
+/* 🔵 못 보냈어도 **포털의 주기 작업이 줍는다.** 그것이 이 설계의 뒷받침이고, */
+/*    그래서 여기서 다시 보내기를 하지 않는다(사람을 기다리게 할 뿐이다).     */
+/* 🔵 통로가 아직 없는 동안에는 **404 가 정상**이다 — 다른 조각이 포털에 그    */
+/*    통로를 낸다. 그때까지 로그에 404 한 줄이 쌓일 뿐 기능은 멀쩡하다.        */
+/* ========================================================================== */
+
+/**
+ * 이 찌르기를 얼마나 기다릴지. 🔴 **위 셋(2초)보다 짧다.**
+ *
+ * 까닭이 둘이다:
+ *  · **사람이 단추를 누르고 기다리는 자리**다. 종은 화면을 그리는 길이라 2초를 기다려도
+ *    「느린 화면」이지만, 이쪽은 [불출 신청]·[승인]을 누른 사람이 그만큼 더 서 있는다.
+ *  · 🔴 **버릴 답이 없다.** 종의 상한을 1.5초로 줄이지 못하는 것은 포털이 각 시스템에 묻는
+ *    상한이 1.5초라 「한 곳이 빠졌다」는 **정상 응답을 도착 직전에 버리게** 되기 때문인데
+ *    (`PORTAL_NOTIFICATIONS_TIMEOUT_MS` 주석), 이 통로가 받는 것은 「받았다」 한 마디뿐이다.
+ *    늦게 도착한 그 한 마디를 버려도 잃는 것이 없다 — 포털은 이미 일을 시작했고, 못 받았으면
+ *    주기 작업이 줍는다.
+ */
+export const PORTAL_APPROVAL_PING_TIMEOUT_MS = 1500;
+
+/**
+ * 「이 사람들에게 결재할 건이 생겼다」를 포털에 알린다. 🔴 **어떤 일이 있어도 던지지 않는다.**
+ *
+ * @param approverSubs 그 결재를 할 사람들의 **포털 번호**(`users.auth_sub` · 세션의 `sub`).
+ *   🔴 이 시스템의 `users.id` 나 A/S 번호를 넘기면 포털이 **모르는 사람**으로 보고 조용히
+ *   넘긴다 — 오류가 나지 않는다(이 저장소에서 2026-10-15 에 실제로 난 결함과 같은 모양).
+ *   🔵 여럿인 까닭은 **결재권 위임** 때문이다(`notifications/approval-created-ping.ts`).
+ *
+ * 🔴 **한 번에 보낸다**(사람마다 따로 부르지 않는다). 사람을 기다리게 하는 자리라 상한이
+ *    사람 수만큼 곱해지면 안 되고, 포털의 인증 실패 세는 통에 봉우리를 만들지도 않는다
+ *    (지움 쪽이 묶음을 차례로 보내는 것과 같은 고민이다 — `DISMISSALS_PER_REQUEST` 주석).
+ * 🔴 **차례에 뜻이 있다**: 맨 앞이 그 단계에 적힌 결재자이고 뒤가 대리인들이다. 포털이 칸을
+ *    하나만 읽는 구현이어도 **적힌 결재자에게는 간다.**
+ *
+ * @returns 알렸는가. 🔵 거짓이어도 부르는 쪽은 아무것도 하지 않는다 — 돌려주는 것은 시험이
+ *          들여다보기 위한 값이다.
+ */
+export async function notifyPortalApprovalCreated(approverSubs: readonly string[]): Promise<boolean> {
+  // 🔵 같은 번호가 두 번 실려 와도 한 번만 보낸다(맡긴 사람이 제 대리인인 경우는 표의
+  //    CHECK 가 막지만, 대리인이 둘에게서 위임받은 꼴은 가능하다). 차례는 그대로 둔다.
+  const wanted = Array.from(new Set(approverSubs.filter((sub): sub is string => typeof sub === "string" && sub !== "")));
+
+  /**
+   * 🔴 **포털 번호가 없는 사람은 부르지 않고 로그에 남긴다.** 빈 몸통을 보내면 포털이 400 으로
+   *    거절할 뿐이고, 더 나쁜 것은 「보냈다」고 믿는 것이다 — 그 사람에게는 메일이 영영 안 간다.
+   * 🔵 **번호를 로그에 찍지 않는다**(이 파일의 다른 통로와 같은 규칙). 사람을 가리키는 값이고,
+   *    여기서 알아야 할 것은 「알릴 사람이 하나도 없었다」는 사실뿐이다.
+   */
+  if (wanted.length === 0) {
+    console.warn("[approvals] 포털 번호가 없어 결재 생김을 알리지 못했습니다(알릴 사람 0명). 메일은 포털의 주기 작업이 보냅니다.");
+    return false;
+  }
+
+  let response: Response;
+  try {
+    // env 의 getter 는 값이 없으면 던진다 — 그래서 try 안에서 읽는다. 설정이 빠진 것 때문에
+    // **이미 저장된 결재**가 실패로 보이면 안 된다.
+    const credentials = `${encodeURIComponent(env.ssoClientId)}:${encodeURIComponent(env.ssoClientSecret)}`;
+
+    // 🔴 칸은 `approverSub` **하나뿐**이고, 여럿이면 **같은 이름으로 거듭** 싣는다(머리말).
+    const body = new URLSearchParams();
+    for (const sub of wanted) body.append("approverSub", sub);
+
+    response = await fetch(`${env.ssoIssuer}/api/integration/approval-created`, {
+      method: "POST",
+      headers: {
+        authorization: `Basic ${Buffer.from(credentials, "utf8").toString("base64")}`,
+        "content-type": "application/x-www-form-urlencoded",
+        accept: "application/json",
+      },
+      body: body.toString(),
+      cache: "no-store",
+      signal: AbortSignal.timeout(PORTAL_APPROVAL_PING_TIMEOUT_MS),
+    });
+  } catch (e) {
+    // 🔴 남기는 것은 오류의 **종류**뿐이다(TimeoutError · TypeError …). 주소도 자격증명도
+    //    포털 번호도 싣지 않는다.
+    console.error("[approvals] 포털에 결재 생김을 알리지 못했습니다:", { name: e instanceof Error ? e.name : "unknown" });
+    return false;
+  }
+
+  if (!response.ok) {
+    // 🔵 **통로가 아직 없는 동안의 404 가 여기로 온다** — 결함이 아니다(머리말).
+    console.error("[approvals] 포털 결재 알림 통로 거절:", response.status);
+    return false;
+  }
+
+  return true;
+}

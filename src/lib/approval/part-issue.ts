@@ -7,6 +7,9 @@ import { auditLogs } from "@/db/schema/audit-logs";
 import { stockIssueApprovalSteps, stockIssueApprovals } from "@/db/schema/stock-issue-approvals";
 import { stockRequests } from "@/db/schema/stock-requests";
 import { auditValues } from "@/lib/audit";
+// 🔴 **커밋이 끝난 뒤에만** 부른다(두 자리, 아래). 알리는 일은 저장을 막지 않는다 — 그 약속이
+//    적힌 곳은 `@/lib/notifications/approval-created-ping` 머리말이다.
+import { pingPortalApprovalCreated } from "@/lib/notifications/approval-created-ping";
 import { DECIDED_ISSUE_APPROVAL_STATUSES, type DecidedIssueApprovalStatus } from "@/lib/notifications/bell-items";
 import { CLAIMABLE_REQUEST_STATUSES, isClaimableRequest } from "@/lib/stock/codes";
 import type { IssueQuantity } from "@/lib/stock/issue";
@@ -191,8 +194,9 @@ export async function requestPartIssueApproval(
     return { ok: false, code: "ROUTE_MISSING_SUB", message: plan.message };
   }
 
+  let result: RequestPartIssueResult;
   try {
-    return await db().transaction(async (tx): Promise<RequestPartIssueResult> => {
+    result = await db().transaction(async (tx): Promise<RequestPartIssueResult> => {
       // 3. 반출 신청이 아직 담당자가 손댈 차례인가. 🔴 묶음은 `CLAIMABLE_REQUEST_STATUSES`
       //    (PENDING·PARTIAL) — 확인·반려·마감·보류가 보는 것과 **같은 묶음**이다.
       const [request] = await tx
@@ -306,6 +310,21 @@ export async function requestPartIssueApproval(
     }
     throw e;
   }
+
+  /**
+   * 🔴 **여기는 커밋이 끝난 뒤다** (2026-10-24, 결재 생김 알림). 위 `try` 가 닫힌 자리이므로
+   *    결재건과 첫 단계는 이미 DB 에 들어가 있다.
+   * 🔴 **트랜잭션 안에서 부르면 안 된다** — 포털이 멎었을 때 **신청 자체가 실패**한다. 그래서
+   *    `return await …` 이던 것을 변수로 받아 두고 여기서 알린다(그 한 줄이 이 조각의 전부다).
+   * 🔵 **못 보내도 아무 일도 일어나지 않는다**: 부르는 함수가 모든 실패를 삼키고, 메일은 포털의
+   *    주기 작업이 줍는다(`notifications/approval-created-ping.ts` 머리말).
+   * 🔵 **자동 승인(`AUTO_APPROVED`)에는 알리지 않는다** — 결재할 사람이 하나도 없어 단계 줄이
+   *    서지 않았고, 그 건은 곧바로 「실행할 건」으로 간다. 알릴 차례가 애초에 없다.
+   */
+  if (result.ok && plan.kind === "NEEDS_APPROVAL") {
+    await pingPortalApprovalCreated(plan.steps[0].approverSub);
+  }
+  return result;
 }
 
 /* ------------------------------------------------------------------ */
@@ -353,7 +372,19 @@ export async function decidePartIssueApproval(
     if (!gate.ok) return { ok: false, message: gate.message };
   }
 
-  return db().transaction(async (tx): Promise<DecidePartIssueResult> => {
+  /**
+   * 🔴 **커밋이 끝난 뒤에 알릴 사람** (2026-10-24, 결재 생김 알림). 한 단계가 승인되면 다음
+   *    단계가 **새로** 서고, 그 사람에게는 방금 결재할 차례가 생긴 것이다 — 올릴 때의 첫 단계와
+   *    똑같이 알려야 한다.
+   * 🔴 **트랜잭션 안에서 부르지 않으려고** 이 자리에 둔다: 안에서 부르면 포털이 멎었을 때
+   *    **결재가 통째로 되돌아간다.** 아래 트랜잭션은 여기에 번호를 적어만 두고, 알리는 일은
+   *    커밋이 끝난 뒤 맨 아래에서 한다.
+   * 🔵 값이 `null` 로 남는 길이 셋이다 — 반려 · 마지막 단계(승인 끝) · 집지 못함. 셋 다 새로
+   *    생긴 차례가 없으므로 알릴 것도 없다.
+   */
+  let nextApproverSub: string | null = null;
+
+  const result = await db().transaction(async (tx): Promise<DecidePartIssueResult> => {
     /**
      * 🔴 **한 순간으로 판정하고 그 순간을 적는다** (2026-10-21, 결재권 위임). 아래에서 위임이
      *    살아 있나를 재는 시각과 단계 줄에 적히는 `decided_at` 이 **같은 값**이어야 한다. 갈리면
@@ -478,6 +509,8 @@ export async function decidePartIssueApproval(
           approverName: next.approverName,
           approverRole: next.approverRole,
         });
+        // 🔴 **적어만 둔다.** 포털을 부르는 일은 커밋이 끝난 뒤 이 함수 맨 아래에서 한다(위 주석).
+        nextApproverSub = next.approverSub;
       } else {
         // 마지막 단계였다 → 결재 끝. 🔴 그래도 재고는 아직 나가지 않는다(머리말).
         await tx.update(stockIssueApprovals).set({ status: "APPROVED" }).where(eq(stockIssueApprovals.id, approvalId));
@@ -498,6 +531,17 @@ export async function decidePartIssueApproval(
 
     return { ok: true, status: nextStatus, stepOrder: step.stepOrder };
   });
+
+  /**
+   * 🔴 **여기는 커밋이 끝난 뒤다** — 다음 단계 줄은 이미 DB 에 들어가 있다. 포털이 404·500·
+   *    타임아웃으로 답해도 결재는 그대로 남는다(부르는 함수가 모든 실패를 삼킨다).
+   * 🔵 `result.ok` 를 함께 보는 까닭: 트랜잭션 콜백이 거절로 돌아오는 길에서는 번호가 적히지
+   *    않지만, 한 자리에서 둘을 다 보면 뒷날 길이 하나 늘어도 이 울타리가 먼저 선다.
+   */
+  if (result.ok && nextApproverSub !== null) {
+    await pingPortalApprovalCreated(nextApproverSub);
+  }
+  return result;
 }
 
 /* ------------------------------------------------------------------ */

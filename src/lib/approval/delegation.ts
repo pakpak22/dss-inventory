@@ -113,6 +113,48 @@ export function delegatorSubsFor(
 }
 
 /**
+ * 바로 위 `delegatorSubsFor` 를 **거꾸로** 본 것 — 이 결재권자의 자리를 **지금 대신 누를 수
+ * 있는 사람들**의 포털 번호 (2026-10-24, 결재 생김 알림).
+ *
+ * ── 🔴 왜 거꾸로 보는 함수가 필요한가 ──────────────────────────────────
+ * 결재가 하나 생기면 그 차례는 **두 사람 이상의 목록에 뜬다**: 단계에 적힌 결재권자 본인과,
+ * 지금 그를 대신할 수 있는 대리인들이다(`listPartIssueApprovalsToDecide` 가
+ * `actingApproverSubs` 로 그렇게 펼친다). 「결재가 생겼다」를 포털에 알릴 때 **적힌 사람에게만**
+ * 알리면, 자리를 비운 사람에게 메일이 가고 **실제로 눌러야 할 대리인은 주기 작업을 기다리게
+ * 된다** — 위임이 바로 그 기다림을 없애려고 있는 기능인데 말이다.
+ *
+ * 🔴 **판정을 새로 짓는 것이 아니다.** 위 둘과 **같은 `isActiveDelegation`** 으로 거르고, 같은
+ * 반열린 구간을 본다. 다른 것은 「어느 칸으로 찾는가」 하나다(`delegate_sub` ↔ `delegator_sub`).
+ *
+ * 🔴 **여기서도 이어 붙이지 않는다** — A→B 와 B→C 가 살아 있어도 A 의 알림은 C 에게 가지
+ * 않는다. 까닭은 위 `delegatorSubsFor` 의 두 가지 그대로이고, 두 함수가 **같은 넓이**를 봐야
+ * 「알림은 왔는데 눌러 보니 내 차례가 아니다」가 생기지 않는다.
+ *
+ * 🔵 **알림에만 쓴다.** 이 목록은 「누를 수 있나」를 가르는 데 쓰이지 않는다 — 그 판정은 지금도
+ * 앞으로도 `actingApproverSubs` 한 자리다.
+ *
+ * @param delegations 볼 위임 줄들. 상관없는 줄이 섞여 있어도 된다(위 함수와 같은 약속).
+ * @param delegatorSub 자리의 주인 — **결재선 단계에 적힌 결재자의 포털 번호**.
+ * @param now 지금 시각.
+ */
+export function delegateSubsFor(
+  delegations: readonly ApprovalDelegationPeriod[],
+  delegatorSub: string,
+  now: Date,
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const delegation of delegations) {
+    if (delegation.delegatorSub !== delegatorSub) continue;
+    if (!isActiveDelegation(delegation, now)) continue;
+    if (seen.has(delegation.delegateSub)) continue;
+    seen.add(delegation.delegateSub);
+    out.push(delegation.delegateSub);
+  }
+  return out;
+}
+
+/**
  * 「지금 이 사람의 자격으로 누를 수 있는 결재자 번호」 전부.
  *
  * 🔴 **빈 적이 없다** — 맨 앞은 언제나 본인이다. 그래서 타입이 **빈 목록을 허락하지 않는

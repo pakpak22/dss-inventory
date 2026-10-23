@@ -2,7 +2,7 @@ import "server-only";
 import { and, desc, eq, gt, isNull } from "drizzle-orm";
 import { db } from "@/db/client";
 import { approvalDelegations } from "@/db/schema/approval-delegations";
-import { actingApproverSubs, isActiveDelegation, type ActingApproverSubs } from "./delegation";
+import { actingApproverSubs, delegateSubsFor, isActiveDelegation, type ActingApproverSubs } from "./delegation";
 import { seoulDateText, seoulEndDateText } from "./delegation-input";
 import { canRevokeDelegation, delegationState, type DelegationRowView } from "./delegation-screen";
 
@@ -69,6 +69,45 @@ export async function actingApproverSubsFor(
   //    부르는 쪽에 떠넘기지 않는 것이 그 함수의 약속이고, 여기서 빼면 그 약속에 기대는 다른
   //    부르는 쪽이 생겼을 때 조용히 갈린다.
   return actingApproverSubs(rows, actorSub, now);
+}
+
+/**
+ * 바로 위를 **거꾸로** — 이 결재권자의 자리를 지금 대신 누를 수 있는 사람들의 포털 번호
+ * (2026-10-24, 결재 생김 알림).
+ *
+ * 🔴 **알림에만 쓴다.** 「누를 수 있나」를 가르는 자리는 지금도 앞으로도 위
+ * `actingApproverSubsFor` 하나다 — 까닭은 `./delegation.ts` 의 `delegateSubsFor` 머리말.
+ * 거르는 규칙(되돌림·반열린 구간)은 그 순수 함수가 **위 둘과 똑같이** 쥔다.
+ *
+ * 🔴 **이 조회에는 색인이 없다.** 표의 색인은 받는 쪽(`delegate_sub`)으로 깔려 있다
+ * (`listDelegationsIMade` 와 같은 사정). 🔵 그래도 여기 두는 까닭: 이 조회는 **결재가 한 건
+ * 생길 때 한 번**만 돈다 — 모든 화면에 딸려 오는 알림 종의 길이 아니다. 한 사람이 맡기는 줄은
+ * 몇 줄이고 표 전체도 아직 두 자릿수다. 늘어나면 `(delegator_sub, …)` 색인을 더해야 하고,
+ * 그것은 스키마 변경이라 이 조각의 일이 아니다.
+ *
+ * 🔴 **`starts_at` 은 WHERE 에 넣지 않는다** — 위 둘과 같은 까닭이고(색인에 없다), 아직
+ * 시작하지 않은 줄은 순수 함수가 거른다. 여기 조건을 손으로 적으면 반열린 구간이 세 벌이 된다.
+ */
+export async function activeDelegateSubsFor(delegatorSub: string, now: Date = new Date()): Promise<string[]> {
+  const rows = await db()
+    .select({
+      delegatorSub: approvalDelegations.delegatorSub,
+      delegateSub: approvalDelegations.delegateSub,
+      startsAt: approvalDelegations.startsAt,
+      endsAt: approvalDelegations.endsAt,
+      revokedAt: approvalDelegations.revokedAt,
+    })
+    .from(approvalDelegations)
+    .where(
+      and(
+        eq(approvalDelegations.delegatorSub, delegatorSub),
+        isNull(approvalDelegations.revokedAt),
+        gt(approvalDelegations.endsAt, now),
+      ),
+    );
+
+  // 🔵 `delegator_sub` 로 이미 좁혔지만 그 조건을 순수 함수에 **다시 맡긴다**(위와 같은 약속).
+  return delegateSubsFor(rows, delegatorSub, now);
 }
 
 /* ------------------------------------------------------------------ */
