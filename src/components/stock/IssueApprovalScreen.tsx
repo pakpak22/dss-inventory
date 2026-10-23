@@ -188,7 +188,10 @@ function IssueLines({ lines, checks }: { lines: readonly IssueApprovalLine[]; ch
 function ApprovalCard({ card, actions, error, lineChecks }: { card: IssueApprovalCard; actions: ReactNode; error: string | null; lineChecks?: LineChecks }) {
   const badge = partIssueStatusBadge(card.status);
   return (
-    <li className="flex flex-col gap-2 rounded-lg border border-zinc-200 bg-white p-3">
+    // 🔴 id 는 통합 승인함(dss-approvals)의 href 가 쓰는 조각(#approval-{id})이다
+    //    (notifications/portal-approvals.ts 머리말의 href 절). 이 화면에는 결재건별
+    //    상세 주소가 없어, 이 카드까지 바로 스크롤되는 것이 지금 가능한 가장 좁은 주소다.
+    <li id={`approval-${card.id}`} className="flex flex-col gap-2 rounded-lg border border-zinc-200 bg-white p-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="flex flex-col gap-0.5">
           {/* 🔵 반출 신청의 **요약 글자 그대로**다(`buildRequestSummary`) — 종류·날짜·인수번호/빌려준 곳/사유·부품이 그 안에 있다. */}
