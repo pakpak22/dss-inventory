@@ -43,9 +43,10 @@ const screen = src("src/components/stock/RequestManagerScreen.tsx");
 const code = stripComments(screen);
 
 /** 카드 묶음(좁은 화면)의 바깥 상자. 🔴 모양이 바뀌었으면 이 시험도 함께 고쳐라. */
-const CARD_WRAPPER = '<ul className="no-print divide-y divide-zinc-200 lg:hidden">';
+const CARD_WRAPPER = '<ul className="no-print flex flex-col gap-2 lg:hidden">';
 /** 표를 감싼 상자 — 그 안의 class 를 뽑는다. */
-const TABLE_WRAPPER = /<div className="([^"]*)">\s*<table className="w-full min-w-\[64rem\] border-collapse text-sm">/;
+const TABLE_WRAPPER =
+  /<div className="([^"]*)">\s*<table className="w-full min-w-\[64rem\] border-separate border-spacing-x-0 border-spacing-y-2 text-sm">/;
 
 const cardAt = code.indexOf(CARD_WRAPPER);
 const wrapper = TABLE_WRAPPER.exec(code);
@@ -234,5 +235,60 @@ describe("카드 한 장의 차례 (2026-10-22)", () => {
   it("🔵 신청 일시는 맨 윗줄에 **작게** 선다 — 정확한 값은 손을 올렸을 때", () => {
     assert.ok(card.includes("title={fullAt(r.requestedAt)}"), "카드에서 정확한 시각을 볼 길이 사라졌다");
     assert.ok(card.includes("formatRequestedAt(r.requestedAt)"), "카드에 신청 일시가 없다");
+  });
+});
+
+/*
+ * ─────────────────────────────────────────────────────────────────────────────
+ * 🔴 신청 건 하나 = 네모 하나 (2026-10-23 쓰는 분 요청)
+ *
+ * 「신청 건별로의 구분감이 확실하지 않다. 개별로 네모 박스를 쳐 달라」가 요청 그대로다.
+ * 그 전에는 가는 선 하나로만 갈랐는데(`divide-y` · `border-t`), 한 건이 여러 줄인 이
+ * 화면에서는 — 항목 표 · 결재선 · 보류/반려 상자 · 단추가 다 한 건 안에 들어간다 —
+ * 어디까지가 한 건인지 읽히지 않았다.
+ *
+ * 🔴 **모양을 재는 시험이라 눈 확인을 대신하지 못한다.** 여기서 재는 것은 「테두리를
+ *    두르는 글자가 아직 있는가」뿐이다. 실제로 네모로 보이는지는 띄워 봐야 안다.
+ *    그래도 적어 두는 까닭은, 이 글자들이 **지워져도 오류가 안 나서** 그렇다 —
+ *    화면은 조용히 2026-10-22 이전으로 돌아가고 아무도 신고하지 않는다.
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+describe("건별 구분 — 신청 건 하나가 네모 하나다 (2026-10-23)", () => {
+  it("🔴 폰 카드는 저마다 테두리를 두른다", () => {
+    assert.ok(code.includes("const CARD_BOX ="), "CARD_BOX 가 사라졌다 — 카드마다 두르던 테두리가 없어졌다");
+    const box = /const CARD_BOX = "([^"]*)"/.exec(code);
+    assert.ok(box, "CARD_BOX 의 값을 못 읽었다");
+    for (const cls of ["rounded-lg", "border", "bg-white"]) {
+      assert.ok(box[1].includes(cls), `카드 상자에서 ${cls} 가 사라졌다 — 네모가 안 그려진다`);
+    }
+    assert.ok(card.includes("className={CARD_BOX}"), "카드 <li> 가 CARD_BOX 를 안 쓴다");
+  });
+
+  it("🔴 카드 사이에 간격이 있다 — 붙어 있으면 네모를 쳐도 한 덩어리로 보인다", () => {
+    assert.ok(CARD_WRAPPER.includes("gap-2"), "카드 묶음에서 사이 간격이 사라졌다");
+    assert.ok(!CARD_WRAPPER.includes("divide-y"), "가는 선 가르기(divide-y)가 돌아왔다 — 네모와 겹쳐 선이 두 겹으로 보인다");
+  });
+
+  it("🔴 표도 줄 하나가 네모 하나다", () => {
+    assert.ok(code.includes("const ROW_BOX ="), "ROW_BOX 가 사라졌다 — 표의 줄마다 두르던 테두리가 없어졌다");
+    const box = /const ROW_BOX = \[([\s\S]*?)\]\.join\(" "\)/.exec(code);
+    assert.ok(box, "ROW_BOX 의 값을 못 읽었다");
+    // 🔴 좌우 테두리가 **첫 칸·끝 칸에만** 있어야 줄 전체가 하나의 네모가 된다.
+    //    모든 칸에 두르면 칸마다 네모가 되어 그냥 격자다.
+    for (const cls of ["[&>td]:border-y", "[&>td:first-child]:border-l", "[&>td:last-child]:border-r"]) {
+      assert.ok(box[1].includes(cls), `표의 줄 상자에서 ${cls} 가 사라졌다`);
+    }
+    assert.ok(table.includes("className={ROW_BOX}"), "표의 <tr> 이 ROW_BOX 를 안 쓴다");
+  });
+
+  it("🔴 표는 `border-separate` 다 — `border-collapse` 로는 네모가 안 그려진다", () => {
+    // 이웃한 줄의 선이 하나로 합쳐져 격자가 되고, 줄 사이 간격도 줄 수 없다.
+    assert.ok(wrapper, "표를 감싼 상자를 못 찾았다");
+    assert.ok(!/border-collapse/.test(table.slice(0, 400)), "표가 border-collapse 로 돌아갔다 — 줄마다 네모가 안 그려진다");
+    assert.ok(/border-spacing-y-\d/.test(table.slice(0, 400)), "표의 줄 사이 간격이 사라졌다 — 네모들이 붙어 한 덩어리로 보인다");
+  });
+
+  it("🔵 바깥 흰 패널은 걷었다 — 네모 안에 네모가 되면 구분감이 오히려 묻힌다", () => {
+    assert.ok(!/<section className="rounded-lg border border-zinc-200 bg-white">/.test(code), "바깥 패널이 돌아왔다 — 건별 네모와 이중 상자가 된다");
   });
 });

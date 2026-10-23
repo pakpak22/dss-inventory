@@ -119,6 +119,27 @@ export interface ManagerRequestRow {
 const BADGE = "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap";
 const TH = "px-3 py-2 font-medium whitespace-nowrap";
 const TD = "px-3 py-2 align-top";
+/**
+ * 🔴 **신청 건 하나 = 네모 하나** (2026-10-23 쓰는 분 요청). 그 전에는 가는 선 하나로만
+ *    갈랐는데(`divide-y` · `border-t`), 한 건이 여러 줄인 이 화면에서는 — 항목 표 · 결재선 ·
+ *    보류/반려 상자 · 단추가 다 한 건 안에 들어간다 — **어디까지가 한 건인지** 읽히지 않았다.
+ *
+ * 🔴 표에서는 `border-collapse` 로 칸마다 테두리를 둘러도 **네모가 안 된다** — 이웃한 줄의
+ *    선이 하나로 합쳐져 그냥 격자가 된다. 그래서 표를 `border-separate` 로 바꾸고 줄 사이에
+ *    간격을 준다(`border-spacing-y-2`). 칸이 아니라 **줄**이 상자가 되게 하려고, 테두리는
+ *    위아래를 모든 칸에 두르고 **좌우는 첫 칸·끝 칸에만** 둔다.
+ * 🔵 `[&:hover>td]` 인 까닭: 상자 색이 칸(`td`)에 있으므로 줄에 `hover:bg-…` 를 걸면 칸 색에
+ *    덮여 아무 일도 안 일어난다.
+ */
+const ROW_BOX = [
+  "align-top",
+  "[&>td]:border-y [&>td]:border-zinc-200 [&>td]:bg-white",
+  "[&>td:first-child]:rounded-l-lg [&>td:first-child]:border-l",
+  "[&>td:last-child]:rounded-r-lg [&>td:last-child]:border-r",
+  "[&:hover>td]:bg-zinc-50",
+].join(" ");
+/** 좁은 화면의 카드 한 장. 🔵 위 `ROW_BOX` 와 **같은 테두리·같은 둥글기**여야 한 시스템으로 보인다. */
+const CARD_BOX = "flex flex-col gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-3";
 /** 돌아온 자리에서 보여 주는 한 줄. 🔵 모양은 기록 내역의 같은 자리와 맞춘다 — 회색은 알림, 주황은 **아직 남은 것이 있다**는 뜻. */
 const NOTICE: Record<RequestNotice["tone"], string> = {
   info: "rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700",
@@ -650,7 +671,9 @@ export function RequestManagerScreen({
       {filtered.length === 0 ? (
         <p className="rounded-lg border border-zinc-200 bg-white p-8 text-center text-sm text-zinc-500">해당하는 요청이 없습니다.</p>
       ) : (
-        <section className="rounded-lg border border-zinc-200 bg-white">
+        <section>
+          {/* 🔴 바깥 흰 패널을 **걷었다** (2026-10-23). 건마다 네모를 치는데 그 전부를 다시 한 겹
+              감싸면 이중 상자가 되어, 늘리려던 건별 구분감이 오히려 묻힌다. */}
           {/*
             ── 📱 **좁은 화면(lg 미만)은 줄 하나가 카드 한 장이다** (2026-10-22 쓰는 분 요청) ──
             차례는 「이 신청이 무엇이고 내가 뭘 해야 하나」를 먼저 읽히게 짰다:
@@ -665,11 +688,11 @@ export function RequestManagerScreen({
                종이에 카드가 나간다. 운에 맡기지 않고 못 박아 둔다
                (`tests/request-manager-cards.test.ts` 가 이 두 글자를 잰다).
           */}
-          <ul className="no-print divide-y divide-zinc-200 lg:hidden">
+          <ul className="no-print flex flex-col gap-2 lg:hidden">
             {filtered.map((r) => {
               const issueLock = issueLocks[r.id] ?? null;
               return (
-                <li key={r.id} className="flex flex-col gap-1.5 px-3 py-3">
+                <li key={r.id} className={CARD_BOX}>
                   {/* ① 먼저 읽혀야 하는 것 — 지금 어떤 상태인가, 그리고 언제 올라왔나 */}
                   <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
                     {statusBadge(r, issueLock)}
@@ -702,11 +725,15 @@ export function RequestManagerScreen({
             })}
           </ul>
           {/* 🔴 1024px 이상은 **지금 표 그대로**다 — 겹치는 것은 배치뿐이고 내용을 만드는 함수는 하나다.
-              🔴 `print:block` 이 `hidden` 을 이긴다 — 없으면 인쇄 폭이 1024px 아래로 떨어질 때 표도 카드도 없는 빈 종이가 나온다. */}
+              🔴 `print:block` 이 `hidden` 을 이긴다 — 없으면 인쇄 폭이 1024px 아래로 떨어질 때 표도 카드도 없는 빈 종이가 나온다.
+              🔴 표는 `border-separate` 다 — 줄 하나가 **네모 하나**가 되려면 그래야 한다(위 `ROW_BOX` 주석).
+              🔴 **이 주석과 `<table>` 사이에 아무것도 끼우지 마라** — `tests/request-manager-cards.test.ts` 가
+                 「`<div>` 바로 다음에 `<table>`」로 상자를 찾는다. 주석을 떼면 `{}` 가 남아 그 사이가 끊긴다. */}
           <div className="hidden overflow-x-auto lg:block print:block">
-            <table className="w-full min-w-[64rem] border-collapse text-sm">
+            <table className="w-full min-w-[64rem] border-separate border-spacing-x-0 border-spacing-y-2 text-sm">
               <thead>
-                <tr className="bg-zinc-50 text-left text-xs text-zinc-500">
+                {/* 🔵 바깥 패널을 걷었으므로 머리글 줄도 제 모서리를 가져야 떠 보이지 않는다. */}
+                <tr className="bg-zinc-50 text-left text-xs text-zinc-500 [&>th:first-child]:rounded-l-lg [&>th:last-child]:rounded-r-lg">
                   <th scope="col" className={TH}>
                     신청 일시
                   </th>
@@ -735,7 +762,7 @@ export function RequestManagerScreen({
                   // 🔵 **잠긴 신청에만** 들어 있다(서버가 만든다). 없으면 이 줄은 지금까지와 한 글자도 다르지 않다.
                   const issueLock = issueLocks[r.id] ?? null;
                   return (
-                    <tr key={r.id} className="border-t border-zinc-200 align-top hover:bg-zinc-50">
+                    <tr key={r.id} className={ROW_BOX}>
                       <td title={fullAt(r.requestedAt)} className={`${TD} tabular text-xs whitespace-nowrap text-zinc-600`}>
                         {formatRequestedAt(r.requestedAt)}
                       </td>
