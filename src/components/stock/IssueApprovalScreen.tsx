@@ -96,7 +96,30 @@ type Draft = { kind: "REJECT"; id: string } | { kind: "REJECT_EXECUTION"; id: st
  *    봐야 하는 값들**이다 — 어느 재고에서 빠지는지(소유)와 **청구가 따라붙는지**(유상/무상). 열을 늘리지
  *    않는 까닭은 위와 같고, 딱지 모양과 「없으면 안 그린다」도 전부 그 조각 한 곳에 있다.
  */
-function IssueLines({ lines }: { lines: readonly IssueApprovalLine[] }) {
+/**
+ * 한 줄을 사람이 부르는 이름. 🔴 **한 자리다** — 아래 `IssueLines`(결재건 카드)와
+ * `ExecuteDraft`(실행 전 부품별 확인)가 같은 것을 가리켜야 한다. 두 벌로 적어 두면
+ * 한쪽만 고쳐지는 날이 오고, **확인한 부품과 내주는 부품의 이름이 달라 보인다.**
+ */
+function partLabel(l: IssueApprovalLine): string {
+  return l.partNo !== null ? `No. ${l.partNo} ${l.partName}` : l.partName;
+}
+
+/** 확인 두 걸음. 🔴 차례가 있다 — **꺼내는 것이 먼저고 다시 보는 것이 나중이다.** */
+type IssueCheck = { tookOut: boolean; rechecked: boolean };
+const NO_CHECK: IssueCheck = { tookOut: false, rechecked: false };
+/** 지금 어느 걸음인가. `tookOut` 을 다 채워야 `rechecked` 로 넘어간다. */
+type ExecuteStep = keyof IssueCheck;
+/** 걸음마다 품목 옆에 적는 글. 🔵 짧아야 품명 옆에 들어간다. */
+const STEP_LABEL: Record<ExecuteStep, string> = { tookOut: "꺼냄", rechecked: "품명·개수 다시 확인" };
+
+/**
+ * 줄별 확인을 **품목 칸 안에서** 그리는 데 필요한 것. 🔵 `undefined` 면 확인 칸을 안 그린다 —
+ * 결재건 카드는 평소에 읽는 자리이고, 체크는 [실행]을 펼친 동안에만 뜬다.
+ */
+type LineChecks = { step: ExecuteStep; checkOf: (partId: string) => IssueCheck; onMark: (partId: string, step: ExecuteStep, on: boolean) => void };
+
+function IssueLines({ lines, checks }: { lines: readonly IssueApprovalLine[]; checks?: LineChecks }) {
   return (
     <table className="w-full text-xs">
       <thead>
@@ -118,7 +141,31 @@ function IssueLines({ lines }: { lines: readonly IssueApprovalLine[] }) {
           return (
             <tr key={l.partId} className="border-t border-zinc-100 align-top">
               <td className="py-1 pr-2 text-zinc-800">
-                {l.partNo !== null ? `No. ${l.partNo} ${l.partName}` : l.partName}
+                {/* 🔴 **제목 옆의 ✓** (2026-10-23 쓰는 분 요청) — 지금 걸음에서 그 품목을 끝냈다는 표시다.
+                    🔵 자리를 늘 차지하게 둔다(안 끝났으면 빈 칸). 글자가 좌우로 들썩이면 목록을 훑기 어렵다. */}
+                {checks ? (
+                  <span aria-hidden="true" className={`mr-1 inline-block w-3 text-center ${checks.checkOf(l.partId)[checks.step] ? "font-bold text-emerald-600" : "text-transparent"}`}>
+                    ✓
+                  </span>
+                ) : null}
+                {partLabel(l)}
+                {/* 🔴 확인 칸은 **품목 바로 옆**이다 (2026-10-23 쓰는 분 요청). 열을 따로 세우지 않는
+                    까닭은 이 표의 다른 값들과 같다(머리말) — 결재건 카드는 좁은 상자라 네 번째 열을
+                    세우면 수량과 재고가 밀려난다.
+                    🔴 **지금 걸음의 칸 하나만** 그린다. 둘을 함께 내밀면 사람은 한 줄에서 둘을 잇따라
+                       누르고 넘어가, 「꺼낸 뒤 **다시** 본다」는 두 번째 걸음이 첫 번째와 같은 순간이
+                       되어 버린다 — 그 걸음을 둔 뜻이 사라진다. */}
+                {checks ? (
+                  <label className="ml-2 inline-flex items-center gap-1 align-middle whitespace-nowrap text-amber-800">
+                    <input
+                      type="checkbox"
+                      checked={checks.checkOf(l.partId)[checks.step]}
+                      onChange={(e) => checks.onMark(l.partId, checks.step, e.target.checked)}
+                      className="size-3.5 shrink-0 accent-zinc-900"
+                    />
+                    {STEP_LABEL[checks.step]}
+                  </label>
+                ) : null}
                 {/* 🔵 값이 있는 칸만 선다 — 지워진 부품은 넷도 소유구분도 비어 있어 저절로 아무것도 안 그린다. */}
                 <RequestItemDetails item={l} />
               </td>
@@ -138,7 +185,7 @@ function IssueLines({ lines }: { lines: readonly IssueApprovalLine[] }) {
 }
 
 /** 결재건 한 장 — 무엇을 얼마나 · 누가 왜 올렸나 · 결재선 진행 · 단추. */
-function ApprovalCard({ card, actions, error }: { card: IssueApprovalCard; actions: ReactNode; error: string | null }) {
+function ApprovalCard({ card, actions, error, lineChecks }: { card: IssueApprovalCard; actions: ReactNode; error: string | null; lineChecks?: LineChecks }) {
   const badge = partIssueStatusBadge(card.status);
   return (
     <li className="flex flex-col gap-2 rounded-lg border border-zinc-200 bg-white p-3">
@@ -191,7 +238,7 @@ function ApprovalCard({ card, actions, error }: { card: IssueApprovalCard; actio
         </p>
       ) : null}
 
-      <IssueLines lines={card.lines} />
+      <IssueLines lines={card.lines} checks={lineChecks} />
       <IssueApprovalTrail status={card.status} currentStep={card.currentStep} steps={card.trail} />
 
       {actions ? <div className="flex flex-wrap items-center gap-1.5">{actions}</div> : null}
@@ -211,6 +258,124 @@ function Section({ title, count, hint, empty, children }: { title: string; count
       {hint ? <p className="text-xs text-zinc-500">{hint}</p> : null}
       {count === 0 ? <p className={EMPTY_BOX}>{empty}</p> : <ul className="flex flex-col gap-3">{children}</ul>}
     </section>
+  );
+}
+
+/**
+ * [실행] 칸의 속 — 🔴 **여기서 실제로 부품이 나간다.**
+ *
+ * 🔴 **확인은 부품마다 두 번이다** (2026-10-23 쓰는 분 요청): ① 그 부품을 창고에서 꺼낼 때,
+ *    ② 꺼낸 뒤 그 부품의 **품명과 개수**를 적힌 것과 다시 맞춰 볼 때. **줄 하나라도 둘을 다
+ *    채우지 않으면 [실행]이 눌리지 않는다.**
+ *
+ * 🔴 **건 단위로 묶지 않는 까닭**이 요점이다. 한 결재건에 부품이 여럿인데 건에 체크 둘만
+ *    두면, 사람은 **목록 전체를 한 번 훑고** 두 번 누른다 — 가운데 줄 하나를 빠뜨려도
+ *    체크는 채워진다. 줄마다 두면 손이 **줄 수만큼** 멈춘다. 잘못 내주면 원장에 기록이
+ *    남고 재고가 줄어든 뒤라, 되돌리는 길이 신청자의 새 신청뿐이다.
+ *
+ * 🔵 **따로 선 컴포넌트인 까닭은 체크가 저절로 풀리게 하려고다.** 부르는 쪽이 `key` 를
+ *    `EXECUTE:<건 id>` 로 주므로, 다른 건을 펼치면 React 가 이것을 **새로 만든다** — 앞 건에서
+ *    켜 둔 체크가 따라오지 않는다. 바깥 컴포넌트의 `useState` 로 두면 손으로 꺼야 하고, 한 번
+ *    빠뜨리면 **체크 없이 눌리는 건**이 생기는데 오류가 안 나서 아무도 모른다.
+ *
+ * 🔴 체크 값은 **서버로 안 보낸다**(`name` 을 안 준다). 서버가 믿을 값이 아니라 **사람이
+ *    멈추는 자리**다. 보내면 「그 칸이 참이면 통과」로 읽혀, 창고에서 실제로 무슨 일이
+ *    있었는지와 무관한 울타리가 생긴 것처럼 보인다.
+ */
+function ExecuteDraft({
+  step,
+  total,
+  done,
+  busy,
+  executing,
+  onNext,
+  onPrev,
+  onSubmit,
+  onBack,
+}: {
+  /** 지금 어느 걸음인가. */
+  step: ExecuteStep;
+  /** 이 건의 부품 줄 수. */
+  total: number;
+  /** 그중 **지금 걸음**을 끝낸 줄 수. */
+  done: number;
+  busy: boolean;
+  executing: boolean;
+  onNext: () => void;
+  onPrev: () => void;
+  onSubmit: (fd: FormData) => void;
+  onBack: () => void;
+}) {
+  /**
+   * 🔴 **`total > 0` 을 함께 본다.** 줄이 없으면 `done === total` 이 `0 === 0` 으로 참이라,
+   *    확인 칸이 하나도 안 보이는 채로 단추가 켜진다. 그런 건은 없어야 하지만, 없어야
+   *    하는 것을 전제로 단추를 여는 대신 **닫는 쪽으로** 둔다.
+   */
+  const ready = total > 0 && done === total;
+  const first = step === "tookOut";
+  return (
+    <form
+      className="flex w-full flex-col gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSubmit(new FormData(e.currentTarget));
+      }}
+    >
+      {/* 🔴 확인 칸은 **위 품목 표 안**에 있다(`IssueLines` 의 `checks`). 여기에 목록을 다시
+          그리지 않는 까닭: 같은 부품이 한 화면에 두 번 적히면 **어느 쪽을 보고 세는지**가
+          흐려지고, 둘이 어긋나는 날이 온다. 여기서는 **지금 걸음과 남은 수만** 말한다. */}
+      <p className="text-xs break-keep text-zinc-700">
+        <span className="tabular mr-1 whitespace-nowrap rounded-sm bg-zinc-900 px-1.5 py-0.5 text-white">{first ? "1 / 2" : "2 / 2"}</span>
+        {first ? (
+          <>
+            위 품목을 창고에서 꺼내면서 <strong className="font-semibold">꺼냄</strong>을 하나씩 체크해 주세요.
+          </>
+        ) : (
+          <>
+            꺼낸 부품을 손에 두고, 위에 적힌 <strong className="font-semibold">품명과 개수</strong>를 다시 맞춰 보며 체크해 주세요. 내주면 원장에 기록이 남고 재고가 줄어듭니다.
+          </>
+        )}{" "}
+        <span className="tabular whitespace-nowrap text-amber-800">
+          ({done}/{total})
+        </span>
+      </p>
+      {/* 🔵 한마디는 **둘째 걸음에만** 적는다 — 첫 걸음에서 적어 두면 [다음]을 누를 때
+          사라진 것처럼 보이고(실은 남아 있다), 어차피 보내는 것은 둘째 걸음이다. */}
+      {first ? null : (
+        <label className="flex flex-col gap-1 text-xs text-zinc-500">
+          이번 회차에 남길 말 (선택)
+          <input name="note" maxLength={500} className={FIELD} placeholder="예: 2개는 다음 주에" />
+        </label>
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        {first ? (
+          /* 🔴 `type="button"` 이다 — `submit` 이면 첫 걸음에서 그대로 내줘 버린다. */
+          <button type="button" className={BTN_P} disabled={busy || !ready} onClick={onNext}>
+            다음
+          </button>
+        ) : (
+          <button type="submit" className={BTN_P} disabled={busy || !ready}>
+            {executing ? "내주는 중" : "실행"}
+          </button>
+        )}
+        {/* 🔵 둘째 걸음에서 **되돌아갈 길**을 둔다 — 잘못 넘어왔을 때 [돌아가기]로 칸을 닫으면
+            첫 걸음의 체크까지 다 풀린다. 🔵 첫 걸음의 체크는 그대로 남는다(지우지 않는다). */}
+        {first ? null : (
+          <button type="button" className={BTN} disabled={busy} onClick={onPrev}>
+            이전
+          </button>
+        )}
+        <button type="button" className={BTN} disabled={busy} onClick={onBack}>
+          돌아가기
+        </button>
+        {/* 🔵 **왜 안 눌리는지, 그리고 몇 개가 남았는지 적어 준다** — 흐린 단추만 있으면 고장으로 읽힌다. */}
+        {ready ? null : (
+          <span className="text-xs break-keep text-amber-800">
+            부품 {total - done}개가 남아 [{first ? "다음" : "실행"}]이 아직 안 눌립니다.
+          </span>
+        )}
+      </div>
+    </form>
   );
 }
 
@@ -237,6 +402,14 @@ export function IssueApprovalScreen({
   /** 🔴 [실행]과 **따로** 쥔다 — 한 상태에 묶으면 「내주는 중」과 「반려 중」이 같은 글자로 보인다. */
   const [stopState, stop, stopping] = useActionState<PartIssueActionState, FormData>(rejectExecutionPartIssueAction, EMPTY_STATE);
   const [draft, setDraft] = useState<Draft | null>(null);
+  /**
+   * 🔴 **실행 전 부품별 확인** (2026-10-23 쓰는 분 요청). 열쇠는 `partId` 다.
+   * 🔴 **여기(화면)에 두는 까닭**: 체크 칸이 [실행] 칸이 아니라 **위 품목 표 안**에 그려진다.
+   *    그 표(`IssueLines`)는 `ApprovalCard` 가 그리므로, 상태가 그 둘보다 위에 있어야 한다.
+   */
+  const [checks, setChecks] = useState<Record<string, IssueCheck>>({});
+  /** 지금 어느 걸음인가 — ① 전부 꺼냄 → [다음] → ② 전부 품명·개수 다시 확인 → [실행]. */
+  const [step, setStep] = useState<ExecuteStep>("tookOut");
   /** 🔴 방금 누른 카드 — 실패 문구를 **그 카드에만** 싣는다. 없으면 같은 글이 모든 카드에 찍힌다. */
   const [actedId, setActedId] = useState<string | null>(null);
 
@@ -244,6 +417,22 @@ export function IssueApprovalScreen({
   const error = decideState.error ?? executeState.error ?? cancelState.error ?? stopState.error;
   const errorOf = (id: string) => (actedId === id ? error : null);
   const draftOn = (kind: Draft["kind"], id: string) => draft !== null && draft.kind === kind && draft.id === id;
+
+  /**
+   * 🔴 **칸을 열거나 닫을 때마다 확인을 비운다.** 안 그러면 앞 건에서 켜 둔 체크가 다음 건에
+   *    따라오고, 아무것도 안 보고도 [실행]이 켜진 채로 열린다 — 오류가 안 나서 아무도 모른다.
+   *    `setDraft` 를 바로 부르지 않고 이 문 하나로 모은 까닭이 그것이다.
+   */
+  function openDraft(next: Draft | null) {
+    setChecks({});
+    setStep("tookOut");
+    setDraft(next);
+  }
+  const checkOf = (partId: string): IssueCheck => checks[partId] ?? NO_CHECK;
+  const markCheck = (partId: string, which: ExecuteStep, on: boolean) => setChecks((prev) => ({ ...prev, [partId]: { ...(prev[partId] ?? NO_CHECK), [which]: on } }));
+  /** 지금 걸음을 끝낸 줄 수. 🔵 `ExecuteDraft` 가 이 값만 보고 단추를 연다. */
+  const doneCount = (lines: readonly IssueApprovalLine[]): number => lines.filter((l) => checkOf(l.partId)[step]).length;
+  const lineChecksFor = (card: IssueApprovalCard): LineChecks | undefined => (draftOn("EXECUTE", card.id) ? { step, checkOf, onMark: markCheck } : undefined);
 
   /** 🔵 성공하면 서버 액션이 돌려보내므로 이 자리에는 실패만 남는다. 칸은 그대로 열어 둔다(사유를 다시 적지 않게). */
   function send(action: (fd: FormData) => void, id: string, fd: FormData) {
@@ -280,7 +469,7 @@ export function IssueApprovalScreen({
           <button type="submit" className={BTN_R} disabled={busy}>
             {deciding ? "처리 중" : "반려 확정"}
           </button>
-          <button type="button" className={BTN} disabled={busy} onClick={() => setDraft(null)}>
+          <button type="button" className={BTN} disabled={busy} onClick={() => openDraft(null)}>
             돌아가기
           </button>
         </div>
@@ -309,31 +498,25 @@ export function IssueApprovalScreen({
     );
   }
 
-  /** [실행] 칸 — 🔴 **여기서 실제로 부품이 나간다.** 한 번 더 묻고, 한마디는 선택이다. */
+  /**
+   * [실행] 칸 — 🔴 **여기서 실제로 부품이 나간다.** 한 번 더 묻고, 한마디는 선택이다.
+   * 🔴 속은 위의 `ExecuteDraft` 에 있다. **`key` 를 여기서 주는 것이 핵심이다** — 다른 건을
+   *    펼치면 그 조각이 새로 만들어져 **확인 체크가 저절로 풀린다**(그쪽 주석).
+   */
   function executeDraft(card: IssueApprovalCard) {
     return (
-      <form
+      <ExecuteDraft
         key={`EXECUTE:${card.id}`}
-        className="flex w-full flex-col gap-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          send(execute, card.id, new FormData(e.currentTarget));
-        }}
-      >
-        <p className="text-xs text-zinc-700">위에 적힌 수량대로 부품을 내줍니다. 원장에 기록이 남고 재고가 줄어듭니다.</p>
-        <label className="flex flex-col gap-1 text-xs text-zinc-500">
-          이번 회차에 남길 말 (선택)
-          <input name="note" maxLength={500} className={FIELD} placeholder="예: 2개는 다음 주에" />
-        </label>
-        <div className="flex gap-2">
-          <button type="submit" className={BTN_P} disabled={busy}>
-            {executing ? "내주는 중" : "실행"}
-          </button>
-          <button type="button" className={BTN} disabled={busy} onClick={() => setDraft(null)}>
-            돌아가기
-          </button>
-        </div>
-      </form>
+        step={step}
+        total={card.lines.length}
+        done={doneCount(card.lines)}
+        busy={busy}
+        executing={executing}
+        onNext={() => setStep("rechecked")}
+        onPrev={() => setStep("tookOut")}
+        onSubmit={(fd) => send(execute, card.id, fd)}
+        onBack={() => openDraft(null)}
+      />
     );
   }
 
@@ -367,7 +550,7 @@ export function IssueApprovalScreen({
           <button type="submit" className={BTN_R} disabled={busy}>
             {stopping ? "처리 중" : "반려 확정"}
           </button>
-          <button type="button" className={BTN} disabled={busy} onClick={() => setDraft(null)}>
+          <button type="button" className={BTN} disabled={busy} onClick={() => openDraft(null)}>
             돌아가기
           </button>
         </div>
@@ -407,7 +590,7 @@ export function IssueApprovalScreen({
               ) : (
                 <>
                   {approveButton(card)}
-                  <button type="button" className={BTN_R} disabled={busy} onClick={() => setDraft({ kind: "REJECT", id: card.id })}>
+                  <button type="button" className={BTN_R} disabled={busy} onClick={() => openDraft({ kind: "REJECT", id: card.id })}>
                     반려
                   </button>
                 </>
@@ -425,6 +608,8 @@ export function IssueApprovalScreen({
               key={card.id}
               card={card}
               error={errorOf(card.id)}
+              /* 🔴 [실행] 칸을 펼친 **그 카드에만** 확인 칸이 뜬다 — 옆 카드의 품목 표는 평소 그대로다. */
+              lineChecks={lineChecksFor(card)}
               actions={
                 /* 🔴 펼침 상자가 열리는 길이 **둘**이다 — [실행]과 [반려]. 한 번에 하나만 열린다(`draft` 가 하나다). */
                 draftOn("EXECUTE", card.id) ? (
@@ -433,12 +618,12 @@ export function IssueApprovalScreen({
                   rejectExecutionDraft(card)
                 ) : (
                   <>
-                    <button type="button" className={BTN_P} disabled={busy} onClick={() => setDraft({ kind: "EXECUTE", id: card.id })}>
+                    <button type="button" className={BTN_P} disabled={busy} onClick={() => openDraft({ kind: "EXECUTE", id: card.id })}>
                       실행
                     </button>
                     {/* 🔴 **[실행]을 멈출 수 있는 유일한 자리다**(2026-10-21). 이 단추가 없으면 결재가 다 끝난 건은
                         아무도 닫지 못해 이 목록에 영원히 떠 있는다 — 결재가 도는 동안은 담당자의 [반려]가 닫혀 있다. */}
-                    <button type="button" className={BTN_R} disabled={busy} onClick={() => setDraft({ kind: "REJECT_EXECUTION", id: card.id })}>
+                    <button type="button" className={BTN_R} disabled={busy} onClick={() => openDraft({ kind: "REJECT_EXECUTION", id: card.id })}>
                       반려
                     </button>
                   </>

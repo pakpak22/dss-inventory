@@ -545,3 +545,100 @@ describe("대리 결재가 **그림에 실제로 그려진다** (2026-10-22)", (
     assert.ok(!/대리\)?`|대리"/.test(trail), "화면이 대리 글자를 손으로 적는다 — 순수 함수와 두 벌이 된다");
   });
 });
+
+
+
+/*
+ * ============================================================================
+ * 🔴 [실행]은 **품목별 확인 두 걸음**을 거쳐야 눌린다 (2026-10-23 쓰는 분 요청)
+ * ============================================================================
+ * ① 품목마다 「꺼냄」을 체크 → 전부 차면 [다음]
+ * ② 품목마다 「품명·개수 다시 확인」을 체크 → 전부 차면 [실행]
+ * 체크 칸은 **품목 바로 옆**에 뜨고, 끝낸 품목은 **제목 앞에 ✓** 가 붙는다.
+ *
+ * 🔴 **걸음을 둘로 나눈 것이 이 설계의 전부다.** 두 체크를 한 줄에 나란히 내밀면 사람은
+ *    한 품목에서 둘을 잇따라 누르고 넘어간다 — 「꺼낸 **뒤** 다시 본다」가 꺼내는 순간과
+ *    같은 순간이 되어, 두 번째 걸음을 둔 뜻이 사라진다. 한 걸음씩 목록을 **두 번 훑게** 한다.
+ *
+ * 🔴 **건 단위로 묶어도 안 된다.** 건에 체크 둘만 두면 목록 전체를 한 번 훑고 두 번 누르게
+ *    되어, 가운데 품목 하나를 빠뜨려도 체크가 채워진다.
+ *
+ * 🔴 여기가 **재고가 실제로 나가는 자리**다. 잘못 내주면 원장에 기록이 남고 재고가 줄어든
+ *    뒤라, 되돌리는 길이 신청자의 새 신청뿐이다(`rejectExecutionDraft` 주석).
+ *
+ * 🔴 **이 시험은 글자로 잰다** — 이 저장소에는 화면 렌더 시험이 없다. 「체크가 꺼져 있을 때
+ *    정말 안 눌리는가」는 **눌러 봐야** 안다. 여기서 막는 것은 다른 것이다: 울타리를 짓는
+ *    글자가 **지워져도 오류가 안 나는 것.** 화면은 조용히 예전으로 돌아가고 아무도 신고하지 않는다.
+ * ============================================================================
+ */
+describe("🔴 [실행]은 품목별 확인 두 걸음을 거쳐야 눌린다 (2026-10-23)", () => {
+  /**
+   * 🔴 **주석을 떼고 잰다.** 처음 쓴 판은 `setChecks({})` 를 `// setChecks({})` 로 주석
+   * 처리해도 그대로 통과했다 — 글자로 재는 시험은 주석까지 긁는다. 「있어야 한다」 쪽
+   * 단언은 주석만 남아도 영영 통과하므로 특히 위험하다
+   * (같은 처방이 `tests/request-manager-cards.test.ts` 에도 있다).
+   */
+  const stripComments = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  const screen = stripComments(src("src/components/stock/IssueApprovalScreen.tsx"));
+  const lines = screen.slice(screen.indexOf("function IssueLines("), screen.indexOf("function ApprovalCard("));
+  const draft = screen.slice(screen.indexOf("function ExecuteDraft("), screen.indexOf("export function IssueApprovalScreen"));
+
+  it("🔴 확인 칸은 **품목 표 안**에 뜬다 — 같은 목록을 두 번 그리지 않는다", () => {
+    assert.ok(lines.length > 0 && draft.length > 0, "조각을 못 찾았다 — 모양이 바뀌었으면 이 시험도 함께 고쳐라");
+    assert.equal([...lines.matchAll(/type="checkbox"/g)].length, 1, "품목 표의 확인 칸이 하나가 아니다 — 걸음마다 하나만 떠야 한다");
+    assert.equal([...draft.matchAll(/type="checkbox"/g)].length, 0, "[실행] 칸이 확인 목록을 또 그린다 — 어느 쪽을 보고 세는지 흐려진다");
+    assert.ok(/checks\.onMark\(l\.partId, checks\.step/.test(lines), "확인이 그 줄의 부품·그 걸음을 가리키지 않는다");
+    assert.ok(/checked=\{checks\.checkOf\(l\.partId\)\[checks\.step\]\}/.test(lines), "확인 상태가 줄별로 읽히지 않는다 — 하나를 켜면 전부 켜진다");
+  });
+
+  it("🔴 **지금 걸음의 칸 하나만** 그린다 — 둘을 나란히 내밀면 걸음을 나눈 뜻이 사라진다", () => {
+    assert.ok(/STEP_LABEL\[checks\.step\]/.test(lines), "걸음에 따라 글자가 바뀌지 않는다 — 두 체크를 함께 내밀고 있을 수 있다");
+    assert.ok(!/"tookOut"/.test(lines) && !/"rechecked"/.test(lines), "품목 표가 걸음 이름을 직접 적는다 — 두 칸을 함께 그리는 모양으로 돌아갔을 수 있다");
+  });
+
+  it("🔴 품목 제목 옆에 ✓ 가 뜬다", () => {
+    assert.ok(/✓/.test(lines), "제목 옆 체크 표시가 사라졌다");
+    assert.ok(/checks\.checkOf\(l\.partId\)\[checks\.step\] \? /.test(lines), "✓ 가 그 품목의 지금 걸음을 보지 않는다");
+  });
+
+  it("🔴 첫 걸음의 단추는 [다음]이고 **`submit` 이 아니다** — `submit` 이면 그대로 내준다", () => {
+    assert.ok(/const first = step === "tookOut"/.test(draft), "걸음을 가르는 값이 사라졌다");
+    assert.ok(/<button type="button" className=\{BTN_P\} disabled=\{busy \|\| !ready\} onClick=\{onNext\}>\s*다음/.test(draft), "[다음] 이 사라졌거나 submit 으로 바뀌었다 — 첫 걸음에서 바로 내주게 된다");
+    assert.ok(/<button type="submit" className=\{BTN_P\} disabled=\{busy \|\| !ready\}>/.test(draft), "[실행] 이 ready 를 안 본다");
+  });
+
+  it("🔴 **모든 품목**이 지금 걸음을 끝내야 단추가 켜진다", () => {
+    assert.ok(/const ready = total > 0 && done === total/.test(draft), "일부만 확인해도 눌린다 — 또는 줄이 없는 건에서 켜진다");
+    assert.ok(/checkOf\(l\.partId\)\[step\]/.test(screen), "끝낸 줄을 세는 자리가 지금 걸음을 안 본다");
+    assert.ok(/doneCount\(card\.lines\)/.test(screen), "[실행] 칸이 센 값을 안 받는다");
+  });
+
+  it("🔴 칸을 열거나 닫을 때 확인이 **비워진다** — 앞 건의 체크가 따라오면 안 된다", () => {
+    assert.ok(/function openDraft\([\s\S]{0,200}setChecks\(\{\}\)[\s\S]{0,80}setStep\("tookOut"\)/.test(screen), "openDraft 가 확인과 걸음을 안 비운다");
+    // 🔴 setDraft 를 직접 부르는 자리가 남아 있으면 그 길로는 안 비워진다.
+    assert.equal([...screen.matchAll(/setDraft\(/g)].length, 1, "setDraft 를 openDraft 밖에서도 부른다 — 그 길로 열면 앞 건의 체크가 남는다");
+  });
+
+  it("🔴 확인 칸은 **펼친 그 카드에만** 뜬다", () => {
+    assert.ok(/draftOn\("EXECUTE", card\.id\) \? \{ step, checkOf, onMark: markCheck \} : undefined/.test(screen), "다른 카드의 품목 표에도 확인 칸이 뜬다");
+  });
+
+  it("🔴 체크 값은 서버로 안 보낸다 — 사람이 멈추는 자리이지 서버가 믿을 값이 아니다", () => {
+    // 🔴 `[^>]*` 로 끊으면 안 된다 — onChange 의 화살표(`=>`)에 있는 `>` 에 걸려 토막이 잘린다.
+    const boxes = [...lines.matchAll(/<input\s+type="checkbox"[\s\S]*?\/>/g)].map((m) => m[0]);
+    assert.equal(boxes.length, 1, "확인 칸을 못 읽었다 — 모양이 바뀌었으면 이 시험도 함께 고쳐라");
+    assert.ok(!/\sname=/.test(boxes[0]), `확인 칸이 서버로 넘어간다 — ${boxes[0]}`);
+  });
+
+  it("🔴 부품 이름을 짓는 자리가 **하나**다", () => {
+    assert.equal([...screen.matchAll(/`No\. \$\{l\.partNo\} \$\{l\.partName\}`/g)].length, 1, "품명 짓는 글이 두 벌이다 — 한쪽만 고쳐지는 날이 온다");
+    assert.ok(/function partLabel\(/.test(screen), "partLabel 이 사라졌다");
+  });
+
+  it("🔵 남은 수와 빠져나갈 길을 적어 준다 — 흐린 단추만 있으면 고장으로 읽힌다", () => {
+    assert.ok(/\{done\}\/\{total\}/.test(draft), "확인한 개수를 보여 주지 않는다");
+    assert.ok(/total - done/.test(draft), "몇 개가 남았는지 적은 글이 사라졌다");
+    assert.ok(/onClick=\{onPrev\}/.test(draft), "둘째 걸음에서 [이전] 이 사라졌다 — 잘못 넘어오면 체크를 다 잃는다");
+    assert.ok(/disabled=\{busy\} onClick=\{onBack\}/.test(draft), "[돌아가기] 가 사라졌거나 확인에 묶였다");
+  });
+});
