@@ -44,6 +44,7 @@ import {
 import type { PartItemRow, PartRow } from "@/lib/parts/types";
 import { PartDetailDialog, type PartDetailData } from "./PartDetailDialog";
 import { ScrollSelect } from "./ScrollSelect";
+import { StockTotals } from "./StockTotals";
 
 /**
  * 재고 현황 목록 (DESIGN 2-1절, 예시 화면 그대로).
@@ -178,6 +179,59 @@ function Marked({ text, toks }: { text: string; toks: readonly string[] }) {
   );
 }
 
+/**
+ * 거르개 단추 하나 — 🔴 **넷이 같은 꼴이다** (2026-10-23 쓰는 분 요청: 「배치가 일관되게」·
+ * 「단추들을 가로로 나열해줘」). 「찾을 곳」·「자주 사용」·「연도별 사용 수량」·「부품 총 금액」.
+ *
+ * 그 전에는 넷이 제각각이었다: 단추 둘과 **체크박스 하나**, 체크박스에 딸린 또 다른 단추(기준),
+ * 그리고 늘 펼쳐져 있는 금액 상자. 폰에서는 줄마다 높이가 달라 무엇이 한 묶음인지 안 보였다.
+ *
+ * 🔴 **넷의 폭이 같다** — 좁은 화면은 두 칸 격자라 `w-full` 로 칸을 채우고, `sm` 이상은
+ *    `w-44` 로 고정한다. 글자만큼만 차지하게 둬 봤더니 폰에서 2×2 로 접히면서 **폭이 제각각**이
+ *    되어 들쭉날쭉했다(2026-10-23 눈 확인). 가장 긴 「연도별 사용 수량 ▾」이 176px 에 들어간다.
+ * 🔴 **옆에 상태 글을 안 적는 대신 켜 둔 단추를 까맣게 칠한다**(`active`). 글이 없으면 자리는
+ *    아끼지만 「품명만 켜 둔 것」을 잊게 되는데, 색 하나면 한눈에 보인다.
+ * 🔵 자세한 상태는 `title` 로 — 손을 올리면 뜨고 자리는 안 먹는다.
+ * 🔵 글자는 왼쪽, ▾ 는 오른쪽 끝(`justify-between`) — 폭이 같으니 화살표가 줄을 선다.
+ */
+function FilterToggle({
+  label,
+  open,
+  onToggle,
+  active = false,
+  title,
+  controls,
+}: {
+  label: string;
+  open: boolean;
+  onToggle: () => void;
+  /**
+   * 기본값이 아닌가 — 켜 둔 조건이 있는가. 🔴 **옆에 적던 상태 글을 걷어낸 대신**
+   * (2026-10-23 쓰는 분 요청: 「상태설명은 없어져도 될 것 같아」) 단추를 **까맣게** 칠해
+   * 한눈에 보이게 한다. 아무 표시도 없으면 「품명만 켜 둔 것」을 잊고 있는 부품을 못 찾는다.
+   */
+  active?: boolean;
+  /** 자세한 상태. 🔵 글자로 안 적는 대신 손을 올리면 보인다 — 자리를 안 차지한다. */
+  title?: string;
+  controls: string;
+}) {
+  return (
+    <button
+      type="button"
+      className={`inline-flex w-full items-center justify-between gap-1.5 rounded-md border px-3 py-1.5 text-sm sm:w-44 ${
+        active ? "border-zinc-900 bg-zinc-900 font-medium text-white hover:bg-zinc-800" : "border-zinc-300 text-zinc-700 hover:bg-zinc-100"
+      }`}
+      onClick={onToggle}
+      aria-expanded={open}
+      aria-controls={controls}
+      title={title}
+    >
+      <span className="whitespace-nowrap">{label}</span>
+      <span aria-hidden="true">{open ? "▴" : "▾"}</span>
+    </button>
+  );
+}
+
 export function PartsList({
   rows,
   items,
@@ -213,6 +267,19 @@ export function PartsList({
   }
   // 연도별 사용 수량 체크란은 접어 둔다(2026-10-07 사용자). 연도를 골라 둔 주소로 열면 펼친 채로.
   const [showYears, setShowYears] = useState(false);
+  /**
+   * 「찾을 곳」 체크란도 접어 둔다 (2026-10-23 쓰는 분 요청). 여섯 칸이라 폰에서 두 줄을
+   * 차지하는데, 기본값(여섯 곳 모두)에서는 건드릴 일이 거의 없다.
+   * 🔴 **접혀 있어도 지금 무엇을 찾는지는 글자로 보인다**(아래 `fieldSummary`) — 안 그러면
+   *    「품명만 켜 둔 것을 잊고」 못 찾겠다고 하게 된다. 「연도별」이 고른 해를 적는 것과 같다.
+   */
+  const [showFields, setShowFields] = useState(false);
+  /**
+   * 「부품 총 금액」도 **단추로 열고 닫는다** (2026-10-23 쓰는 분 요청). 그 전에는 거르개 오른쪽에
+   * 늘 떠 있었는데, 폰에서는 거르개 아래에 통째로 내려앉아 목록까지 한참 굴려야 했다.
+   * 🔵 기본은 접힘 — 부품을 찾으러 오는 화면이지 금액을 보러 오는 화면이 아니다.
+   */
+  const [showTotals, setShowTotals] = useState(false);
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const state = useMemo(() => parseListState(searchParams), [searchParams]);
@@ -293,6 +360,29 @@ export function PartsList({
   );
   const page = paginate(filtered, state);
   const activeFields = new Set<SearchFieldKey>(state.fields);
+  /**
+   * 접어 둔 「찾을 곳」 옆에 적는 글. 🔴 **전부 켜져 있을 때와 아닐 때를 가른다** — 여섯 곳을
+   * 줄줄이 적으면 접은 뜻이 없고, 그렇다고 아무 말도 안 하면 「품명만 켜 둔 것」을 잊는다.
+   * 🔵 `SEARCH_FIELDS` 차례 그대로 적는다(체크란과 같은 차례여야 눈이 안 헷갈린다).
+   */
+  const fieldSummary =
+    activeFields.size === SEARCH_FIELDS.length
+      ? `여섯 곳 모두`
+      : SEARCH_FIELDS.filter((f) => activeFields.has(f.key))
+          .map((f) => f.label)
+          .join(" · ");
+  /**
+   * 접어 둔 「자주 사용」 옆에 적는 글. 🔴 **꺼져 있으면 기준을 말하지 않는다** — 안 켠 설정의
+   * 기준을 적어 두면 지금 그 차례로 보이는 줄로 읽힌다.
+   */
+  const frequentSummary = state.frequent
+    ? `${frequentMap.size}개가 위로 · 최근 ${state.rule.months}개월 ${state.rule.mode === "n" ? `출납 ${state.rule.min}번 이상` : "사용 수량 많은 순"}`
+    : "끔";
+  /**
+   * 🔵 고른 해가 있으면 **저절로 펼쳐 둔다**(2026-10-07 부터의 동작 그대로). 켜 둔 칸을 접어
+   *    감추면 표에 열이 왜 늘었는지 알 수 없다.
+   */
+  const yearsOpen = showYears || state.years.length > 0;
   const tk = (key: SearchFieldKey) => (activeFields.has(key) ? toks : []);
 
   const detailPart =
@@ -447,8 +537,11 @@ export function PartsList({
 
       <section className="rounded-lg border border-zinc-200 bg-white">
         <div className="flex flex-col gap-3 p-4 no-print">
-          <div className="flex flex-wrap items-end gap-3">
-            <label className="flex min-w-0 flex-1 basis-80 flex-col gap-1 text-xs text-zinc-500">
+          {/* 🔴 **좁은 화면은 두 칸 격자** (2026-10-23 쓰는 분 요청: 「가지런하게」). 그냥 접히게 두면
+              칸마다 폭이 제각각이라 들쭉날쭉했다 — 「소유」는 좁고 「조건 지우기」는 넓은 식이다.
+              🔵 `sm` 이상은 **지금 그대로** 한 줄에 흐른다(`sm:flex`). 넓은 화면 모양은 안 건드린다. */}
+          <div className="grid grid-cols-2 items-end gap-3 sm:flex sm:flex-wrap">
+            <label className="col-span-2 flex min-w-0 flex-col gap-1 text-xs text-zinc-500 sm:flex-1 sm:basis-80">
               찾기
               <input
                 type="search"
@@ -459,50 +552,45 @@ export function PartsList({
                 autoComplete="off"
               />
             </label>
-            <label className="flex flex-col gap-1 text-xs text-zinc-500">
+            <label className="flex min-w-0 flex-col gap-1 text-xs text-zinc-500">
               항목
               {/* 19개라 네이티브 select 는 너무 길다 → 다섯 줄만 보이고 굴리는 상자 (2026-10-07) */}
               <ScrollSelect
                 ariaLabel="항목"
-                className="w-44"
+                className="w-full sm:w-44"
                 value={state.item}
                 onChange={(v) => update({ item: v, page: 1 })}
                 options={[{ value: "", label: "전체" }, ...items.map((it) => ({ value: it.code, label: `${it.name} (${itemCount.get(it.code) ?? 0})` }))]}
               />
             </label>
-            <label className="flex flex-col gap-1 text-xs text-zinc-500">
+            {/* 🔴 **분류·소유도 「항목」과 같은 상자다** (2026-10-23 쓰는 분 요청). 네이티브 `<select>` 는
+                안드로이드에서 **화면을 덮는 라디오 목록**으로 열려, 바로 옆의 「항목」과 여는 모습이
+                전혀 달랐다. 그리는 쪽이 브라우저라 CSS 로 맞출 길이 없다 — 상자를 바꾸는 수밖에 없다.
+                🔵 고를 것이 넷뿐이라 굴릴 일은 없지만, **같은 조각을 쓰는 것 자체가 값**이다. */}
+            <label className="flex min-w-0 flex-col gap-1 text-xs text-zinc-500">
               분류
-              <select
-                className={INPUT}
+              <ScrollSelect
+                ariaLabel="분류"
+                className="w-full sm:w-44"
                 value={state.category}
-                onChange={(e) => update({ category: e.target.value, page: 1 })}
-              >
-                <option value="">전체</option>
-                {CATEGORIES.map((c) => (
-                  <option key={c} value={c}>
-                    {CATEGORY_LABEL[c]} ({categoryCount.get(c) ?? 0})
-                  </option>
-                ))}
-              </select>
+                onChange={(v) => update({ category: v, page: 1 })}
+                options={[{ value: "", label: "전체" }, ...CATEGORIES.map((c) => ({ value: c, label: `${CATEGORY_LABEL[c]} (${categoryCount.get(c) ?? 0})` }))]}
+              />
             </label>
-            <label className="flex flex-col gap-1 text-xs text-zinc-500">
+            <label className="flex min-w-0 flex-col gap-1 text-xs text-zinc-500">
               소유
-              <select
-                className={INPUT}
+              <ScrollSelect
+                ariaLabel="소유"
+                className="w-full sm:w-44"
                 value={state.owner}
-                onChange={(e) => update({ owner: e.target.value, page: 1 })}
-              >
-                <option value="">전체</option>
-                {OWNERS.map((o) => (
-                  <option key={o} value={o}>
-                    {OWNER_LABEL[o]} ({ownerCount.get(o) ?? 0})
-                  </option>
-                ))}
-              </select>
+                onChange={(v) => update({ owner: v, page: 1 })}
+                options={[{ value: "", label: "전체" }, ...OWNERS.map((o) => ({ value: o, label: `${OWNER_LABEL[o]} (${ownerCount.get(o) ?? 0})` }))]}
+              />
             </label>
+            {/* 🔵 좁은 화면에서는 격자 칸을 채운다 — 혼자 좁게 서면 그 줄만 비뚤어 보인다. */}
             <button
               type="button"
-              className={BTN}
+              className={`${BTN} w-full sm:w-auto`}
               onClick={reset}
               disabled={
                 !hasFilter &&
@@ -514,62 +602,94 @@ export function PartsList({
               조건 지우기
             </button>
           </div>
-          <div
-            className="flex flex-wrap items-center gap-x-3 gap-y-1"
-            role="group"
-            aria-label="찾을 곳"
-          >
-            <span className="text-xs text-zinc-500">찾을 곳</span>
-            {SEARCH_FIELDS.map((f) => (
-              <label
-                key={f.key}
-                className="inline-flex cursor-pointer items-center gap-1.5 text-sm whitespace-nowrap text-zinc-700"
-              >
-                <input
-                  type="checkbox"
-                  checked={activeFields.has(f.key)}
-                  onChange={() => toggleField(f.key)}
-                />
-                {f.label}
-              </label>
-            ))}
+          {/* 🔴 **단추 넷을 가로로** (2026-10-23 쓰는 분 요청). 옆에 적던 상태 글도 걷어냈고,
+              대신 **켜 둔 것은 단추가 까맣게** 칠해진다(`active`). 자세한 것은 손을 올리면 뜬다.
+              🔵 펼침 상자는 이 줄 **아래**에 차례대로 선다 — 단추 옆이 아니라 아래여야 좁은 화면에서
+                 줄이 안 깨진다.
+              🔵 **부품 총 금액도 여기 들어왔다.** 그 전에는 거르개 오른쪽에 두 칸으로 나눠 늘 펼쳐
+                 두었는데, 폰에서는 거르개 아래로 통째로 내려앉아 목록까지 한참 굴려야 했다.
+              🔴 **폭을 맞춘다** (2026-10-23 눈 확인에서 다시 고침). 글자만큼만 차지하게 두었더니
+                 폰에서 2×2 로 접히면서 **넷의 폭이 제각각**이 되어 들쭉날쭉했다. 좁은 화면은
+                 **두 칸 격자**(칸마다 같은 폭), 넓은 화면은 **`w-44` 로 고정**해 한 줄에 선다.
+                 가장 긴 「연도별 사용 수량 ▾」이 `w-44`(176px)에 들어간다. */}
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+            <FilterToggle
+              label="찾을 곳"
+              open={showFields}
+              onToggle={() => setShowFields((v) => !v)}
+              active={activeFields.size !== SEARCH_FIELDS.length}
+              title={`찾을 곳: ${fieldSummary}`}
+              controls="search-fields"
+            />
+            <FilterToggle
+              label="자주 사용"
+              open={showRule}
+              onToggle={() => setShowRule((v) => !v)}
+              active={state.frequent}
+              title={`자주 사용: ${frequentSummary}`}
+              controls="frequent-rule"
+            />
+            <FilterToggle
+              label="연도별 사용 수량"
+              open={yearsOpen}
+              onToggle={() => setShowYears((v) => !v)}
+              active={state.years.length > 0}
+              title={state.years.length > 0 ? `${state.years.map((y) => `${y}년`).join(" · ")} 칸을 보는 중` : "안 보는 중"}
+              controls="yearly-usage"
+            />
+            {/* 🔵 이것만 **거르개가 아니라 보기**다 — 켜 둘 것이 없어 `active` 를 안 준다. */}
+            <FilterToggle
+              label="부품 총 금액"
+              open={showTotals}
+              onToggle={() => setShowTotals((v) => !v)}
+              title="지금 조건에 맞는 부품의 총 금액 (수량 × 금액)"
+              controls="stock-totals"
+            />
           </div>
-          {/* 위로 올리기 (2026-10-07): 즐겨찾기(별)는 항상 위, 자주 사용하는 부품은 체크했을 때 그다음. */}
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-            <label className="inline-flex cursor-pointer items-center gap-1.5 text-sm whitespace-nowrap text-zinc-700">
-              <input
-                type="checkbox"
-                checked={state.frequent}
-                onChange={() => update({ frequent: !state.frequent, page: 1 })}
-              />
-              자주 사용하는 부품 위로{" "}
-              <span className="text-xs text-zinc-500">
-                ({frequentMap.size}개 · 최근 {state.rule.months}개월{" "}
-                {state.rule.mode === "n"
-                  ? `출납 ${state.rule.min}번 이상`
-                  : "사용 수량 많은 순"}
-                )
-              </span>
-            </label>
-            <button
-              type="button"
-              className={BTN}
-              onClick={() => setShowRule((v) => !v)}
-              aria-expanded={showRule}
+          {showFields ? (
+            <div
+              id="search-fields"
+              className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-zinc-200 bg-zinc-50 p-3"
+              role="group"
+              aria-label="찾을 곳"
             >
-              기준 {showRule ? "▴" : "▾"}
-            </button>
-            <span className="text-xs text-zinc-500">
-              ★ 즐겨찾기 {favoriteSet.size}개는 항상 위에 보입니다. 줄의 별을
-              누르면 켜고 끕니다.
-            </span>
-          </div>
+              {SEARCH_FIELDS.map((f) => (
+                <label
+                  key={f.key}
+                  className="inline-flex cursor-pointer items-center gap-1.5 text-sm whitespace-nowrap text-zinc-700"
+                >
+                  <input
+                    type="checkbox"
+                    checked={activeFields.has(f.key)}
+                    onChange={() => toggleField(f.key)}
+                  />
+                  {f.label}
+                </label>
+              ))}
+            </div>
+          ) : null}
+          {/* 위로 올리기 (2026-10-07): 즐겨찾기(별)는 항상 위, 자주 사용하는 부품은 체크했을 때 그다음.
+              🔴 **체크박스와 [기준]을 한 묶음으로 합쳤다** (2026-10-23). 그 전에는 바깥 줄에 체크박스가
+                 있고 그 옆에 또 단추가 서서, 셋 중 이 줄만 꼴이 달랐다. 켜고 끄는 것과 그 기준은
+                 **같은 이야기**라 한 상자에 있는 편이 읽힌다. */}
           {showRule ? (
             <div
+              id="frequent-rule"
               className="flex flex-wrap items-end gap-x-6 gap-y-3 rounded-md border border-zinc-200 bg-zinc-50 p-3"
               role="group"
               aria-label="자주 사용 기준"
             >
+              {/* 🔴 **켜고 끄는 것이 맨 앞이다.** 기준을 아무리 맞춰도 이것을 안 켜면 아무 일도 안 난다. */}
+              <label className="flex w-full cursor-pointer items-center gap-1.5 text-sm text-zinc-800">
+                <input
+                  type="checkbox"
+                  checked={state.frequent}
+                  onChange={() => update({ frequent: !state.frequent, page: 1 })}
+                />
+                <span className="break-keep">
+                  자주 사용하는 부품을 위로 <span className="text-xs text-zinc-500">(지금 기준으로 {frequentMap.size}개)</span>
+                </span>
+              </label>
               <div className="flex flex-col gap-1 text-xs text-zinc-500">
                 재는 것
                 <div className="flex overflow-hidden rounded-md border border-zinc-300 text-sm">
@@ -628,35 +748,27 @@ export function PartsList({
                   />
                 </label>
               ) : null}
-              <span className="text-xs text-zinc-500">
+              <span className="text-xs break-keep text-zinc-500">
                 이번 달을 포함해 셉니다. 입고·반환·대여는 세지 않습니다.{" "}
                 {state.rule.mode === "n"
                   ? "출납 횟수는 사용 기록 줄 수이고, 기준 이상인 부품이 횟수 많은 순으로 올라갑니다."
-                  : "그 기간에 한 개라도 쓴 부품이 수량 많은 순으로 올라갑니다. 기준은 없습니다."}
+                  : "그 기간에 한 개라도 쓴 부품이 수량 많은 순으로 올라갑니다. 기준은 없습니다."}{" "}
+                {/* 🔵 ★ 안내를 **여기로 옮겼다** (2026-10-23). 줄 차례를 말하는 글이라 이 상자가
+                    제자리이고, 바깥 줄에 두면 접힌 단추 셋 사이에 긴 문장 하나가 끼어 어지럽다. */}
+                ★ 즐겨찾기 {favoriteSet.size}개는 이 설정과 상관없이 <b className="font-semibold text-zinc-700">항상</b> 맨 위에 있습니다. 줄의 별을 눌러 켜고 끕니다.
               </span>
             </div>
           ) : null}
-          {/* 연도별 사용 수량 (DESIGN 2-1절): 연도를 체크하면 그 해 사용 수량 칸이 생긴다. 이 숫자를 보고 주문한다. 체크란은 단추로 접어 둔다. */}
-          <div
-            className="flex flex-wrap items-center gap-x-3 gap-y-1"
-            role="group"
-            aria-label="연도별 사용 수량"
-          >
-            <button
-              type="button"
-              className={BTN}
-              onClick={() => setShowYears((v) => !v)}
-              aria-expanded={showYears || state.years.length > 0}
+          {/* 연도별 사용 수량 (DESIGN 2-1절): 연도를 체크하면 그 해 사용 수량 칸이 생긴다. 이 숫자를 보고 주문한다.
+              🔵 고른 해가 있으면 저절로 펼쳐 둔다 — 켜 둔 칸을 접어 감추면 왜 열이 늘었는지 알 수 없다. */}
+          {yearsOpen ? (
+            <div
+              id="yearly-usage"
+              className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-zinc-200 bg-zinc-50 p-3"
+              role="group"
+              aria-label="연도별 사용 수량"
             >
-              연도별 사용 수량 {showYears || state.years.length > 0 ? "▴" : "▾"}
-            </button>
-            {!showYears && state.years.length > 0 ? (
-              <span className="text-xs text-zinc-500">
-                {state.years.map((y) => `${y}년`).join(" · ")} 칸을 보는 중
-              </span>
-            ) : null}
-            {showYears || state.years.length > 0 ? (
-              yearly.years.length === 0 ? (
+              {yearly.years.length === 0 ? (
                 <span className="text-xs text-zinc-400">
                   아직 사용 기록이 없습니다.
                 </span>
@@ -674,17 +786,20 @@ export function PartsList({
                     {y}년
                   </label>
                 ))
-              )
-            ) : null}
-            {yearColumns.length > 0 && yearly.excludedLegacy > 0 ? (
-              <span
-                className="text-xs text-amber-800"
-                title="엑셀 과거 기록 중 소유가 맞지 않아 부품에만 붙여 둔 사용 기록. 연도별 수량에 넣지 않습니다."
-              >
-                확인되지 않은 과거 기록 {yearly.excludedLegacy}건 제외
-              </span>
-            ) : null}
-          </div>
+              )}
+              {yearColumns.length > 0 && yearly.excludedLegacy > 0 ? (
+                <span
+                  className="text-xs break-keep text-amber-800"
+                  title="엑셀 과거 기록 중 소유가 맞지 않아 부품에만 붙여 둔 사용 기록. 연도별 수량에 넣지 않습니다."
+                >
+                  확인되지 않은 과거 기록 {yearly.excludedLegacy}건 제외
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+      {/* 🔴 넘기는 것은 page.rows 가 아니라 **filtered** 다. 보고 있는 쪽만 세면
+          쪽을 넘길 때마다 총액이 달라지는데, 그것은 총액이 아니다. */}
+          {showTotals ? <StockTotals rows={filtered} /> : null}
         </div>
 
         {page.total === 0 ? (

@@ -28,11 +28,14 @@ export function ScrollSelect({ value, options, onChange, ariaLabel, className }:
 
   useEffect(() => {
     if (!open) return;
-    const onDown = (e: MouseEvent) => {
+    // 🔴 `pointerdown` 이다 — `mousedown` 은 손가락에서 **브라우저가 흉내 내 주는** 사건이라
+    //    늦게 오거나(옛 안드로이드) 안 오는 경우가 있다. 그러면 바깥을 눌러도 안 닫힌다.
+    //    이 집의 다른 바깥-닫기(머리말 ☰ 서랍)도 같은 까닭으로 `pointerdown` 을 쓴다.
+    const onDown = (e: PointerEvent) => {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
     };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
   }, [open]);
 
   useEffect(() => {
