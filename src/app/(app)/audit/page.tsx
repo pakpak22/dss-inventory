@@ -1,13 +1,12 @@
 import Link from "next/link";
-import type { ReactNode } from "react";
 import { SettingsNav } from "@/components/settings/SettingsNav";
-// 기간 글자는 위임 화면과 **같은 함수**로 만든다 — 두 곳이 따로 적으면 하루짜리 위임이 한쪽에서만 다르게 보인다.
-import { formatDelegationPeriod } from "@/lib/approval/delegation-screen";
-import { AUDIT_ACTIONS, AUDIT_ACTION_LABEL, PART_FIELD_LABEL, describeTarget, isAuditAction } from "@/lib/audit-labels";
+// 🔴 「내용」 칸 글자를 짓는 규칙은 **이 파일에 없다** — 순수 모듈 `@/lib/audit-detail` 하나가 쥐고 있고
+//    `tests/audit-detail.test.ts` 가 행위 전부를 돌려 본다. 까닭은 그 파일 머리말(분기를 빠뜨려도
+//    아무도 모르던 일이 실제로 있었다). 여기는 **그려 주기만** 한다.
+import { auditDetailLines, unknownAuditDetail, type AuditDetailLine } from "@/lib/audit-detail";
+import { AUDIT_ACTIONS, AUDIT_ACTION_LABEL, describeTarget, isAuditAction } from "@/lib/audit-labels";
 import { requireRole } from "@/lib/auth/session";
-import { formatFileSize } from "@/lib/file-size";
-import { CATEGORY_LABEL, OWNER_LABEL, isCategory, isOwner } from "@/lib/parts/codes";
-import { listAuditLogs, type AuditRow } from "@/lib/parts/queries";
+import { listAuditLogs } from "@/lib/parts/queries";
 import { entryNosByIds } from "@/lib/stock/queries";
 
 /**
@@ -37,209 +36,42 @@ const fmt = new Intl.DateTimeFormat("ko-KR", {
   hour12: false,
 });
 
-const CURRENCY_TEXT: Record<string, string> = { JPY: "¥ 엔", KRW: "₩ 원" };
-
 /**
- * 앞·뒤 값을 사람이 읽는 글자로. 금액에는 통화 기호를 붙인다 (2026-10-06 사용자 요청).
- * 견적가는 항상 원. 공급가는 그 기록에 남긴 통화(detail.supplyCurrency.before/after)를 따르고,
- * 그 값이 없는 옛 기록은 기본 통화(엔)로 본다.
+ * 「내용」 칸 한 줄을 표의 칸으로 그린다.
+ *
+ * 🔵 **색·`<code>` 같은 그리기를 아는 곳은 여기뿐이다** — 글자는 전부 `auditDetailLines` 가 짓는다
+ *    (그 파일 머리말의 「JSX 를 돌려주지 않는다」와 짝이다. 그래야 시험이 리액트 없이 돌아간다).
+ * 🔴 `unknown` 이면 아는 모양이 아니어서 **JSON 이 그대로** 들어 있다 — 날것임이 보이게 `<code>` 로
+ *    그린다. 숨기면 새 행위가 생겼을 때 원인을 못 찾는다.
  */
-function valueText(field: string, v: unknown, currency: string): string {
-  if (v === null || v === undefined || v === "") return "(없음)";
-  if (field === "owner" && isOwner(v)) return OWNER_LABEL[v];
-  if (field === "category" && isCategory(v)) return CATEGORY_LABEL[v];
-  if (field === "supplyCurrency") return CURRENCY_TEXT[String(v)] ?? String(v);
-  if (typeof v === "number") {
-    const n = v.toLocaleString("ko-KR");
-    if (field === "quotePrice") return `₩${n}`;
-    if (field === "supplyPrice") return `${currency === "KRW" ? "₩" : "¥"}${n}`;
-    return n;
+function DetailCells({ line, unknown }: { line: AuditDetailLine; unknown: boolean }) {
+  if (line.kind === "field") {
+    return (
+      <>
+        <td className={`${TD} whitespace-nowrap text-zinc-500`}>{line.field}</td>
+        <td className={`${TD} max-w-80 whitespace-pre-wrap text-zinc-500`}>{line.before}</td>
+        <td className={`${TD} max-w-80 whitespace-pre-wrap font-medium text-zinc-900`}>{line.after}</td>
+      </>
+    );
   }
-  return String(v);
-}
-
-/** 한 이력을 표의 줄들로. 부품 수정은 바뀐 칸마다 [칸, 전, 후], 나머지는 한 줄 설명. */
-type Line = { field: string; before: string; after: string } | { text: ReactNode };
-
-function linesOf(row: AuditRow, entryNos: Map<string, string>): Line[] {
-  const d = row.detail;
-  if (!d) return [{ text: "" }];
-  if (row.action === "PART_UPDATE" && d.changes && typeof d.changes === "object") {
-    const changes = d.changes as Record<string, { before: unknown; after: unknown }>;
-    const cur = (d.supplyCurrency ?? {}) as { before?: unknown; after?: unknown };
-    const curBefore = String(cur.before ?? changes.supplyCurrency?.before ?? "JPY");
-    const curAfter = String(cur.after ?? changes.supplyCurrency?.after ?? "JPY");
-    const lines: Line[] = Object.entries(changes).map(([field, c]) => ({
-      field: PART_FIELD_LABEL[field] ?? field,
-      before: valueText(field, c.before, curBefore),
-      after: valueText(field, c.after, curAfter),
-    }));
-    /**
-     * 🔴 **바깥에서 채운 것이면 누가 채웠는지를 함께 보인다** (2026-10-16, 고객사 품명 통로).
-     * 사람이 화면에서 고친 것과 A/S 통로로 들어온 것은 같은 행위(`PART_UPDATE`)로 남지만, 「이 이름
-     * 누가 넣었지?」에 답할 자리가 이력뿐이다. 🔵 이름은 겹칠 수 있어 **포털 번호**까지 적는다
-     * (반출 신청 취소에 「A/S 에서 거둠」을 적는 것과 같은 결). 옛 기록에는 이 칸이 없어 그대로 읽힌다.
-     */
-    const filledBy = d.filledBy as { sub?: unknown; name?: unknown } | undefined;
-    if (filledBy) lines.push({ text: `A/S 통로로 채움 · 보낸 이름 ${String(filledBy.name ?? "")} · 포털 번호 ${String(filledBy.sub ?? "")}` });
-    return lines.length > 0 ? lines : [{ text: "바뀐 칸 없음" }];
-  }
-  if (row.action === "PART_CREATE") {
-    return [
-      {
-        text: `${String(d.name ?? "")}${d.name2 ? ` · ${String(d.name2)}` : ""}${d.owner && isOwner(d.owner) ? ` · ${OWNER_LABEL[d.owner]}` : ""}`,
-      },
-    ];
-  }
-  if (row.action === "PART_DELETE") {
-    return [
-      {
-        text: (
-          <>
-            {String(d.name ?? "")} <span className="text-zinc-500">사유</span> {String(d.reason ?? "")}
-          </>
-        ),
-      },
-    ];
-  }
-  if ((row.action === "STOCK_ENTRY" || row.action === "STOCK_CORRECTION") && Array.isArray(d.lines)) {
-    // 수량 기록: 부품 줄마다 [부품, 전, 후]. 자세한 것(인수번호·사유)은 기록 내역에서.
-    const lines = (d.lines as Array<{ partNo?: unknown; delta?: unknown; before?: unknown; after?: unknown }>).map((l) => ({
-      field: `부품 No. ${String(l.partNo ?? "")} (${typeof l.delta === "number" ? (l.delta > 0 ? `+${l.delta}` : String(l.delta)) : ""})`,
-      before: `${String(l.before ?? "")}개`,
-      after: `${String(l.after ?? "")}개`,
-    }));
-    const head = `${String(d.occurredOn ?? "")}${d.intakeNumber ? ` · ${String(d.intakeNumber)}` : ""}${d.intakeUnverified ? " · 인수번호 확인 안 됨" : ""}`;
-    return [{ text: head }, ...lines];
-  }
-  if (row.action === "INTAKE_VERIFIED") return [{ text: `${String(d.intakeNumber ?? "")} → ${String(d.productModel ?? "")}` }];
-  // 반출 마감 — 🔴 반려와 **다르게** 읽혀야 한다(2026-10-14, 조각 4d). 준 것과 안 준 것을 숫자로 적는다.
-  if (row.action === "STOCK_REQUEST_CLOSED") {
-    const n = (v: unknown) => (typeof v === "number" ? v.toLocaleString("ko-KR") : String(v ?? 0));
-    return [
-      { text: `${String(d.summary ?? "")} (신청자 ${String(d.requestedBy ?? "")})` },
-      { text: `요청 ${n(d.requested)}개 중 ${n(d.issued)}개를 내주고, 남은 ${n(d.remaining)}개는 주지 않는 것으로 마감 · 사유: ${String(d.note ?? "")}` },
-    ];
-  }
-  // 반출 신청 취소 — 🔴 **어디서 거뒀는지**가 보여야 한다 (2026-10-16, A/S 가 제 신청을 거두는 통로).
-  // 화면에서 거둔 것과 A/S 통로로 거둔 것은 같은 행위(`STOCK_REQUEST_CANCELLED`)로 남지만, 「누가 접었나」를
-  // 나중에 가릴 자리가 이력뿐이다. 🔵 출처 칸이 없는 옛 기록(화면 취소)은 요약 한 줄 그대로 읽힌다.
-  if (row.action === "STOCK_REQUEST_CANCELLED") {
-    const fromAs = d.source === "AS" ? ` · A/S 에서 거둠 (요청 번호 ${String(d.externalKey ?? "")})` : "";
-    return [{ text: `${String(d.summary ?? "")}${fromAs}` }];
-  }
-  if (row.action === "PART_ITEM_CREATE") return [{ text: String(d.name ?? "") }];
-  if (row.action === "PART_ITEM_REORDER") return [{ text: `${d.direction === "up" ? "위로" : "아래로"} (${String(d.swappedWith ?? "")} 와 자리 바꿈)` }];
-  if (row.action === "LOGIN") return [{ text: `역할 ${String(d.role ?? "")}` }];
-  // 엑셀 한 벌 관련 셋 — 파일 이름·건수를 글자로 (2026-10-12 사용자 지적: 엑셀 기준 적용 이력이 JSON 그대로 보였다)
-  if (row.action === "WORKBOOK_PARKED") {
-    return [{ text: `수기입 파일을 「${String(d.parkedFile ?? "")}」 로 따로 보관하고 멈춤${typeof d.size === "number" ? ` · ${formatFileSize(d.size)}` : ""}` }];
-  }
-  if (row.action === "WORKBOOK_EXCEL_APPLIED") {
-    // 번호를 detail 에 남기기 전의 기록은 entryIds 로 번호를 찾아 보인다(entryNos 맵)
-    const nos = Array.isArray(d.entryNos) ? (d.entryNos as unknown[]).map(String) : Array.isArray(d.entryIds) ? (d.entryIds as unknown[]).map((id) => entryNos.get(String(id))).filter((v): v is string => typeof v === "string") : [];
-    const count = typeof d.entryCount === "number" ? d.entryCount : nos.length;
-    const skipped = typeof d.skippedCount === "number" ? d.skippedCount : 0;
-    return [
-      { text: `수기입 파일 「${String(d.parkedFile ?? "")}」 · 사유: ${String(d.reason ?? "")}` },
-      { text: String(d.summary ?? "") },
-      { text: `원장에 적은 기록 ${count.toLocaleString("ko-KR")}건${nos.length > 0 ? `: ${nos.join(", ")}` : ""} · 자동 반영하지 않은 줄 ${skipped.toLocaleString("ko-KR")}줄` },
-    ];
-  }
-  // 승인 절차(결재선) — 🔴 판 자체가 이력이라 전용 이력 표가 없다. 그러니 이 줄만 읽고도
-  // 「누가 누구를 몇 번째에 세웠나」가 보여야 한다(2026-10-12 사용자 지적: JSON 그대로는 안 된다).
-  if (row.action === "APPROVAL_ROUTE_SAVED") {
-    const names = (v: unknown) => {
-      if (!Array.isArray(v) || v.length === 0) return "(없음 — 절차를 쓰지 않음)";
-      return (v as Array<{ stepOrder?: unknown; approverName?: unknown }>)
-        .map((s) => `${String(s.stepOrder ?? "")}. ${String(s.approverName ?? "")}`)
-        .join(" ▶ ");
-    };
-    // 용도는 「대상」 칸이 한글로 말한다(describeTarget) — 여기서 코드를 또 내보내지 않는다.
-    const prev = typeof d.previousVersion === "number" ? `${d.previousVersion}번째 판` : "첫 판";
-    return [
-      { text: `${prev} → ${String(d.version ?? "")}번째 판` },
-      { field: "승인 단계", before: names(d.previousSteps), after: names(d.steps) },
-    ];
-  }
-  /**
-   * 결재권 위임 (2026-10-21, 조각 3) — 🔴 **이 줄만 읽고도 「누가 누구에게 언제까지 맡겼나」가
-   * 보여야 한다.** 표의 줄은 지워지지 않지만 그것을 보는 화면은 본인 것뿐이라, 나중에 「이 건은 왜
-   * 본인이 아닌 사람이 눌렀나」를 제3자가 되짚는 자리가 이력이다.
-   *
-   * 🔵 기간은 **사람이 적었던 날짜 그대로** 적는다 — `endsAt`(다음 날 0시)을 그리면 「26일까지
-   *    맡겼네」로 읽힌다(실제로 적은 것은 25일까지다). 그래서 쓰는 쪽이 날짜 두 칸을 함께 남긴다.
-   */
-  if (row.action === "APPROVAL_DELEGATION_CREATED") {
-    const lines: Line[] = [
-      { text: `${String(d.delegateName ?? "")} 님에게 ${formatDelegationPeriod(String(d.startDate ?? ""), String(d.endDate ?? ""))} 동안 내 결재권을 맡김` },
-    ];
-    // 사유는 선택이다 — 비면 줄을 그리지 않는다(「없음」을 지어내지 않는다).
-    if (d.reason) lines.push({ text: `사유: ${String(d.reason)}` });
-    return lines;
-  }
-  if (row.action === "APPROVAL_DELEGATION_REVOKED") {
-    return [{ text: `${String(d.delegateName ?? "")} 님에게 맡긴 위임(${String(d.endDate ?? "")}까지)을 되돌림` }];
-  }
-  if (row.action === "WORKBOOK_IMPORT") {
-    const legacy = (d.legacy ?? {}) as Record<string, unknown>;
-    const n = (v: unknown) => (typeof v === "number" ? v.toLocaleString("ko-KR") : String(v ?? 0));
-    return [
-      { text: `${String(d.file ?? "")} · 전환일 ${String(d.transitionDate ?? "")}` },
-      { text: `부품 ${n(d.parts)}개 · 처음 수량 줄 ${n(d.openingLines)}개` },
-      { text: `과거 기록: 확인 ${n(legacy.confirmed)} · 묶음 판정 ${n(legacy.groupDecided)} · 소유 불일치 ${n(legacy.ownerMismatch)} · 못 붙임 ${n(legacy.unmatched)}` },
-    ];
-  }
-  // O/H 부품 템플릿 (조각 8a) — 🔴 줄을 통째로 갈아 끼우는 저장이라, **이 줄만 읽고도 그때 무엇이
-  // 들어 있었는지** 보여야 한다. 지난 줄을 되찾을 다른 자리가 없다.
-  if (row.action === "OH_TEMPLATE_SAVED") {
-    const items = Array.isArray(d.items) ? (d.items as Array<{ displayOrder?: unknown; partNameText?: unknown; quantity?: unknown; linked?: unknown }>) : [];
-    const head = d.created
-      ? "새 템플릿"
-      : `${typeof d.previousVersion === "number" ? `${d.previousVersion}번째 판` : "이전 판"} → ${String(d.version ?? "")}번째 판`;
-    const lines: Line[] = [{ text: `${head} · 기종 ${String(d.code ?? "")} · ${String(d.name ?? "")}` }];
-    const previous = (d.previous ?? null) as { code?: unknown; name?: unknown } | null;
-    // 머리 칸이 바뀐 것만 앞·뒤로 보여 준다. 안 바뀐 칸까지 줄을 만들면 부품 목록이 묻힌다.
-    if (previous && String(previous.code ?? "") !== String(d.code ?? "")) {
-      lines.push({ field: "기종 코드", before: String(previous.code ?? ""), after: String(d.code ?? "") });
-    }
-    if (previous && String(previous.name ?? "") !== String(d.name ?? "")) {
-      lines.push({ field: "이름", before: String(previous.name ?? ""), after: String(d.name ?? "") });
-    }
-    lines.push({
-      text:
-        items.length === 0
-          ? "부품 0줄 (비어 있음)"
-          : `부품 ${items.length}줄: ${items
-              .map((i) => `${String(i.displayOrder ?? "")}. ${String(i.partNameText ?? "")} ${String(i.quantity ?? "")}개${i.linked ? "" : " (재고 미연결)"}`)
-              .join(" · ")}`,
-    });
-    return lines;
-  }
-  if (row.action === "OH_TEMPLATE_DELETED") {
-    return [
-      {
-        text: (
-          <>
-            기종 {String(d.code ?? "")} · {String(d.name ?? "")} <span className="text-zinc-500">사유</span> {String(d.reason ?? "")}
-          </>
-        ),
-      },
-    ];
-  }
-  if (row.action === "OH_TEMPLATE_MODEL_LINKED" || row.action === "OH_TEMPLATE_MODEL_UNLINKED") {
-    // 🔴 이름은 **그때 적어 둔 사본**이다. A/S 에서 이름이 바뀌어도 이 줄은 따라 바뀌지 않는다.
-    const linked = row.action === "OH_TEMPLATE_MODEL_LINKED";
-    return [{ text: `제품 모델 「${String(d.productModelName ?? "")}」 ${linked ? "연결" : "연결 해제"}` }];
-  }
-  if (row.action === "OH_PRICE_SET") {
-    // 🔴 「정하지 않음」과 「0원」을 **다르게** 적는다. 둘을 같은 글자로 보이면 나중에 「왜 견적서에
-    // 0원으로 나갔나」를 이력에서 가릴 수 없다(행이 없는 것과 0을 저장한 것은 다른 뜻이다).
-    const won = (v: unknown) => (typeof v === "number" ? `₩${v.toLocaleString("ko-KR")}` : "(정하지 않음)");
-    return [{ field: `O/H 단가 ${String(d.partName ?? "")}`, before: won(d.before), after: won(d.after) }];
-  }
-  // 모르는 모양은 JSON 그대로 (숨기면 원인을 못 찾는다)
-  return [{ text: <code className="font-mono text-xs break-all text-zinc-500">{JSON.stringify(d)}</code> }];
+  return (
+    <td colSpan={3} className={`${TD} text-zinc-700`}>
+      {unknown ? (
+        <code className="font-mono text-xs break-all text-zinc-500">{line.text}</code>
+      ) : (
+        <>
+          {line.text}
+          {/* 「사유」만 흐리게 — 부품 삭제·O/H 템플릿 삭제가 예전부터 그리던 꼴 그대로다. */}
+          {line.reason !== undefined ? (
+            <>
+              {" "}
+              <span className="text-zinc-500">사유</span> {line.reason}
+            </>
+          ) : null}
+        </>
+      )}
+    </td>
+  );
 }
 
 export default async function AuditPage({ searchParams }: { searchParams: Promise<{ page?: string; action?: string; part?: string }> }) {
@@ -329,7 +161,10 @@ export default async function AuditPage({ searchParams }: { searchParams: Promis
               </thead>
               <tbody>
                 {rows.map((r) => {
-                  const lines = linesOf(r, entryNos);
+                  // 🔵 `action` 은 글자 칸이라 글자표에 없는 값이 들어 있을 수 있다(옛 줄·손으로 넣은 줄).
+                  //    그때도 숨기지 않고 JSON 을 그대로 보인다 — 모르는 모양을 다루는 길이 하나뿐이어야 한다.
+                  const detail = isAuditAction(r.action) ? auditDetailLines(r.action, r.detail, { entryNos }) : unknownAuditDetail(r.detail);
+                  const lines = detail.lines;
                   const n = lines.length;
                   return lines.map((line, i) => (
                     <tr key={`${r.id}-${i}`} className={`${i === n - 1 ? "border-b border-zinc-200" : "border-b border-dashed border-zinc-100"} last:border-0 hover:bg-zinc-50`}>
@@ -355,17 +190,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Promis
                           </td>
                         </>
                       ) : null}
-                      {"field" in line ? (
-                        <>
-                          <td className={`${TD} whitespace-nowrap text-zinc-500`}>{line.field}</td>
-                          <td className={`${TD} max-w-80 whitespace-pre-wrap text-zinc-500`}>{line.before}</td>
-                          <td className={`${TD} max-w-80 whitespace-pre-wrap font-medium text-zinc-900`}>{line.after}</td>
-                        </>
-                      ) : (
-                        <td colSpan={3} className={`${TD} text-zinc-700`}>
-                          {line.text}
-                        </td>
-                      )}
+                      <DetailCells line={line} unknown={detail.unknown} />
                     </tr>
                   ));
                 })}

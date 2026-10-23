@@ -4,6 +4,8 @@ import { describe, it } from "node:test";
 import { customerNameDenial, parseApiCustomerName, parsePartNoParam, toApiCustomerNameResponse } from "../src/lib/api/part-customer-name";
 import { MAX_SUB } from "../src/lib/api/stock-requests";
 import { checkBearerToken } from "../src/lib/api/token-gate";
+// 🔵 변경 이력 화면이 그 칸을 **실제로** 푸는지 재려고 끌어온다(아래 「누가 채웠는지」 묶음).
+import { auditDetailLines } from "../src/lib/audit-detail";
 import { env } from "../src/lib/env";
 import { customerNameFillAudit, type CustomerNameFiller } from "../src/lib/parts/customer-name";
 import { CUSTOMER_NAME_MAX } from "../src/lib/parts/form";
@@ -180,10 +182,26 @@ describe("🔴 누가 채웠는지 이력에 남는다 (2026-10-16)", () => {
     assert.match(m, /customerNameFillAudit\(customerName, filler\)/, "fillCustomerName 이 이력을 손으로 빚고 있다");
   });
 
+  /**
+   * 🔴 2026-10-23 에 **재는 방식을 바꿨다.** 그 전에는 `audit/page.tsx` 의 **소스 글자**에 `filledBy`·
+   *    「포털 번호」가 들어 있는지만 봤다(약한 울타리 — 주석에만 적혀 있어도 통과한다). 같은 날 그
+   *    규칙이 순수 모듈 `src/lib/audit-detail.ts` 로 내려가면서 **돌려 볼 수 있게** 되었으므로,
+   *    이제 **실제로 나오는 글자**를 잰다. 단언을 약하게 한 것이 아니라 강하게 한 것이다.
+   * 🔵 화면이 그 모듈을 거치는지는 바로 아래 시험이 소스 글자로 본다 — 두 시험이 한 쌍이다.
+   */
   it("🔴 변경 이력 화면이 그 칸을 보여 준다 — 남기기만 하고 안 보이면 「누가 넣었지?」에 답할 수 없다", () => {
+    const detail = customerNameFillAudit("증폭기 조립품", filler({ id: "user-uuid", name: "정영빈", sentName: "홍길동" }));
+    const lines = auditDetailLines("PART_UPDATE", detail, { entryNos: new Map() });
+    assert.equal(lines.unknown, false, "JSON 그대로 나가면 안 된다");
+    const who = lines.lines.find((l) => l.kind === "text" && l.text.includes("A/S 통로로 채움"));
+    assert.ok(who && who.kind === "text", `「누가 채웠나」 줄이 없다: ${JSON.stringify(lines.lines)}`);
+    assert.match(who.text, /보낸 이름 홍길동/);
+    assert.match(who.text, /포털 번호 portal-sub-aaaa-1111/);
+  });
+
+  it("🔴 변경 이력 화면이 그 모듈을 거친다 — 화면이 제 글자를 따로 빚으면 위 시험이 헛돈다", () => {
     const page = src("src/app/(app)/audit/page.tsx");
-    assert.match(page, /filledBy/);
-    assert.match(page, /포털 번호/);
+    assert.match(page, /auditDetailLines\(r\.action, r\.detail/);
   });
 });
 
