@@ -458,7 +458,29 @@ describe("변경 이력 「내용」 칸 (audit-detail.ts)", () => {
     assert.ok(all.includes("1번째 판 → 2번째 판"), all);
     assert.ok(all.includes("이름 예시 O/H(옛 이름) 예시 O/H"), all);
     assert.ok(all.includes("부품 2줄: 1. 예시 PCB-001 2개 · 2. 예시 패킹 1개 (재고 미연결)"), all);
-    assert.equal(joined("OH_TEMPLATE_DELETED", SAMPLES.OH_TEMPLATE_DELETED), "기종  · 예시 O/H 사유 더 쓰지 않음");
+  });
+
+  /**
+   * 🔴 **기종 코드는 2026-10-15 에 없어졌다** — 쓰는 쪽이 그날부터 `code` 를 안 남긴다
+   *    (`src/lib/oh/mutations.ts` 의 SAVED·DELETED 둘 다). 그런데 읽는 쪽이 「기종 {code}」를
+   *    늘 붙여, 그 뒤로 쌓인 줄이 **「새 템플릿 · 기종  · 예시 O/H」** 로 보였다
+   *    (2026-10-23 쓰는 분 신고). 지금은 **값이 있을 때만** 붙인다.
+   *
+   * 🔵 **두 경우를 다 잰다.** 「지금 줄에 빈 「기종 」이 없다」만 재면, 글자를 통째로 지워도
+   *    통과한다 — 그러면 2026-10-15 **이전** 줄에 들어 있는 진짜 기종 코드까지 안 보이게 된다.
+   *    그 줄은 그때의 사실이라 보여야 한다.
+   */
+  it("🔴 기종 코드는 **있을 때만** 적는다 — 없는 줄에 빈 「기종 」이 끼지 않는다", () => {
+    // ① 지금 쌓이는 줄 — code 가 아예 없다.
+    const saved = joined("OH_TEMPLATE_SAVED", SAMPLES.OH_TEMPLATE_SAVED);
+    assert.ok(!saved.includes("기종"), `빈 「기종 」이 남아 있다: ${saved}`);
+    assert.equal(joined("OH_TEMPLATE_DELETED", SAMPLES.OH_TEMPLATE_DELETED), "예시 O/H 사유 더 쓰지 않음");
+
+    // ② 2026-10-15 이전에 쌓인 옛 줄 — code 가 들어 있다. 그대로 보여야 한다.
+    const old = joined("OH_TEMPLATE_DELETED", { name: "예시 O/H", code: "RFG-01", reason: "더 쓰지 않음" });
+    assert.equal(old, "기종 RFG-01 · 예시 O/H 사유 더 쓰지 않음");
+    const oldSaved = joined("OH_TEMPLATE_SAVED", { ...SAMPLES.OH_TEMPLATE_SAVED, code: "RFG-01" });
+    assert.ok(oldSaved.includes("기종 RFG-01 · 예시 O/H"), oldSaved);
   });
 
   it("🔵 엑셀 기준 적용 — 번호가 없는 옛 줄은 uuid 로 기록 번호를 찾아 보인다", () => {

@@ -143,6 +143,16 @@ function stepNames(v: unknown): string {
 
 const text = (t: string): AuditDetailLine => ({ kind: "text", text: t });
 
+/**
+ * O/H 템플릿 줄의 「기종 …」 토막. 🔴 **값이 있을 때만 돌려준다** — 없으면 빈 글자다.
+ *
+ * 기종 코드는 2026-10-15 에 없어져 그 뒤로 쌓인 줄에는 `code` 가 아예 없다. 그런데 글자를
+ * 늘 붙이면 **「새 템플릿 · 기종  · 예시 O/H」** 처럼 빈 「기종 」 이 끼어 보인다
+ * (2026-10-23 쓰는 분 신고). 🔵 그렇다고 글자를 지우면 **2026-10-15 이전 줄**에 들어 있는
+ * 진짜 기종 코드까지 안 보인다 — 그것은 그때의 사실이라 보여야 한다.
+ */
+const ohCodePart = (code: unknown): string => (s(code) === "" ? "" : `기종 ${s(code)}`);
+
 /** 아는 모양이 아닐 때. 🔴 JSON 을 **줄 하나에 담아** 돌려준다 — 화면이 `<code>` 로 그린다. */
 export function unknownAuditDetail(detail: Record<string, unknown> | null): AuditDetailResult {
   return { lines: [text(JSON.stringify(detail))], unknown: true };
@@ -479,10 +489,17 @@ export function auditDetailLines(action: AuditAction, detail: Record<string, unk
     /* ── O/H 템플릿 ────────────────────────────────────────────── */
     // O/H 부품 템플릿 (조각 8a) — 🔴 줄을 통째로 갈아 끼우는 저장이라, **이 줄만 읽고도 그때 무엇이
     // 들어 있었는지** 보여야 한다. 지난 줄을 되찾을 다른 자리가 없다.
+    //
+    // 🔴 **기종 코드는 2026-10-15 에 없어졌다** — 그날부터 쓰는 쪽이 `code` 를 안 남긴다
+    //    (`src/lib/oh/mutations.ts` 의 SAVED·DELETED 둘 다 `name`·`note`·`reason` 만 넣는다).
+    //    그런데 읽는 쪽은 「… · 기종 {code} · {이름}」을 그대로 적고 있어, 그 뒤로 쌓인 줄이
+    //    **「새 템플릿 · 기종  · 예시 O/H」** 처럼 **빈 「기종 」** 이 끼어 보였다(2026-10-23 쓰는 분 신고).
+    // 🔵 **옛 줄은 그대로 보여야 한다.** 2026-10-15 이전에 쌓인 줄에는 `code` 가 들어 있고, 그것은
+    //    그때의 사실이다. 그래서 글자를 지우는 것이 아니라 **값이 있을 때만 붙인다**(`ohCodePart`).
     case "OH_TEMPLATE_SAVED": {
       const items = Array.isArray(d.items) ? (d.items as Array<{ displayOrder?: unknown; partNameText?: unknown; quantity?: unknown; linked?: unknown }>) : [];
       const head = d.created ? "새 템플릿" : `${typeof d.previousVersion === "number" ? `${d.previousVersion}번째 판` : "이전 판"} → ${s(d.version)}번째 판`;
-      const lines: AuditDetailLine[] = [text(`${head} · 기종 ${s(d.code)} · ${s(d.name)}`)];
+      const lines: AuditDetailLine[] = [text([head, ohCodePart(d.code), s(d.name)].filter((p) => p !== "").join(" · "))];
       const previous = (d.previous ?? null) as { code?: unknown; name?: unknown } | null;
       // 머리 칸이 바뀐 것만 앞·뒤로 보여 준다. 안 바뀐 칸까지 줄을 만들면 부품 목록이 묻힌다.
       if (previous && s(previous.code) !== s(d.code)) lines.push({ kind: "field", field: "기종 코드", before: s(previous.code), after: s(d.code) });
@@ -497,7 +514,7 @@ export function auditDetailLines(action: AuditAction, detail: Record<string, unk
       return { lines, unknown: false };
     }
     case "OH_TEMPLATE_DELETED":
-      return { lines: [{ kind: "text", text: `기종 ${s(d.code)} · ${s(d.name)}`, reason: s(d.reason) }], unknown: false };
+      return { lines: [{ kind: "text", text: [ohCodePart(d.code), s(d.name)].filter((p) => p !== "").join(" · "), reason: s(d.reason) }], unknown: false };
     case "OH_TEMPLATE_MODEL_LINKED":
     case "OH_TEMPLATE_MODEL_UNLINKED": {
       // 🔴 이름은 **그때 적어 둔 사본**이다. A/S 에서 이름이 바뀌어도 이 줄은 따라 바뀌지 않는다.
