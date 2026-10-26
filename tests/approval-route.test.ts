@@ -16,6 +16,7 @@ import {
   moveRouteStepDown,
   moveRouteStepUp,
   removeRouteStep,
+  requesterSubsToSkip,
   stepOrderFromIndex,
   validateApprovalRouteSteps,
   WORKFLOW_KINDS,
@@ -177,17 +178,22 @@ describe("validateApprovalRouteSteps", () => {
 
 /**
  * ============================================================================
- * 🔴 요청자 본인 단계는 건너뛴다
+ * 🔴 신청한 사람의 단계는 건너뛴다
  * ============================================================================
- * 자기가 올린 것을 자기가 결재하는 칸을 없앤다. 요청 경로와 사슬 잇는 자리가 **같은 함수
+ * 자기가 신청한 것을 자기가 결재하는 칸을 없앤다. 올리는 경로와 사슬 잇는 자리가 **같은 함수
  * 하나**를 보므로, 여기서 못 박는 것이 곧 두 자리의 동작이다.
  *
+ * 🔴 **「신청한 사람」은 둘이다**(2026-10-26, `src/lib/approval/route.ts` 머리말) — 원래 신청을
+ * 올린 사람과 [불출 신청] 단추를 눌러 결재를 올린 사람. 아래 시험은 **판정 한 칸**을 재므로
+ * 대부분 한 사람만 알면 되는 자리이고(그래서 `only`), **둘이 섞이는 자리의 동작**은 바로 아래
+ * `requesterSubsToSkip` 묶음과 `tests/part-issue-requester-skip.test.ts` 가 잰다.
+ *
  * 여기서 지키는 것 넷:
- *  1. 요청자가 결재선에 없으면 **지금까지와 똑같이** 1단계부터다.
- *  2. 요청자인 단계는 처음이든 중간이든 마지막이든 건너뛴다.
+ *  1. 신청한 사람이 결재선에 없으면 **지금까지와 똑같이** 1단계부터다.
+ *  2. 신청한 사람의 단계는 처음이든 중간이든 마지막이든 건너뛴다.
  *  3. 🔴 **번호를 고쳐 적지 않는다** — 건너뛴 뒤의 실제 번호를 그대로 돌려준다. 1로 바꿔
  *     적으면 그 번호로 옛 판의 다음 단계를 찾을 때 어긋난다.
- *  4. 남는 단계가 없으면 `null` 이다. 그 뜻(요청 거절 / 사슬 끝)은 부르는 쪽이 정한다 —
+ *  4. 남는 단계가 없으면 `null` 이다. 그 뜻(그 자리에서 승인 / 사슬 끝)은 부르는 쪽이 정한다 —
  *     여기서 가르면 규칙 하나가 둘로 갈라진다.
  * ============================================================================
  */
@@ -208,60 +214,101 @@ function steps(approverSubs: Array<string | null>): Array<{ stepOrder: number; a
   }));
 }
 
+/**
+ * **건너뛸 사람을 한 사람만 아는** 목록 (2026-10-26). 결재를 올린 사람만 알고 원 신청자는 모르는
+ * 자리가 실제로 있다 — `stock_requests.requested_by` 가 비어 있고 포털 번호도 안 실려 온 신청.
+ *
+ * 🔴 **손으로 배열을 적지 않고 실제 목록 함수를 지난다.** 아래 시험들이 재는 것은 「한 사람만
+ * 알 때 예전과 똑같이 도는가」이고, 그 「한 사람」을 손으로 `[x]` 라고 적으면 목록을 만드는 규칙이
+ * 바뀌는 날(사람이 셋이 되는 날) 이 시험들은 **옛 모양 그대로 통과한다.**
+ */
+const only = (requesterSub: string | null) => requesterSubsToSkip(requesterSub, null);
+
 describe("isRouteStepSkippedForRequester", () => {
-  test("승인자가 요청자면 건너뛴다", () => {
-    assert.equal(isRouteStepSkippedForRequester(sub(1), sub(1)), true);
+  test("승인자가 신청한 사람이면 건너뛴다", () => {
+    assert.equal(isRouteStepSkippedForRequester(sub(1), only(sub(1))), true);
   });
 
   test("다른 사람이면 건너뛰지 않는다", () => {
-    assert.equal(isRouteStepSkippedForRequester(sub(1), sub(2)), false);
+    assert.equal(isRouteStepSkippedForRequester(sub(1), only(sub(2))), false);
   });
 
-  test("🔴 요청자를 모르면 건너뛰지 않는다 — 근거 없이 단계를 지우지 않는다", () => {
-    assert.equal(isRouteStepSkippedForRequester(sub(1), null), false);
+  test("🔴 신청한 사람을 모르면 건너뛰지 않는다 — 근거 없이 단계를 지우지 않는다", () => {
+    assert.equal(isRouteStepSkippedForRequester(sub(1), only(null)), false);
+    assert.equal(isRouteStepSkippedForRequester(sub(1), []), false, "빈 목록도 같다 — 건너뛸 사람이 없다");
   });
 
   test("🔴 단계에 포털 번호가 없으면(옛 판) 건너뛰지 않는다 — 빈 값끼리 같은 사람이 되면 안 된다", () => {
-    assert.equal(isRouteStepSkippedForRequester(null, sub(1)), false);
-    assert.equal(isRouteStepSkippedForRequester(null, null), false);
+    assert.equal(isRouteStepSkippedForRequester(null, only(sub(1))), false);
+    assert.equal(isRouteStepSkippedForRequester(null, only(null)), false);
+    // 🔴 목록에 `null` 이 섞여 있어도 마찬가지다 — 「모르는 사람」과 「번호 없는 단계」가 만나
+    //    조용히 같은 사람이 되면, 아무도 결재하지 않은 단계가 사라진다.
+    assert.equal(isRouteStepSkippedForRequester(null, [null, null]), false);
   });
 
   test("🔴 견주는 것은 포털 번호다 — A/S 번호를 넘기면 건너뛰지 않는다", () => {
     // 이 한 줄이 2026-10-15 결함의 울타리다: 같은 사람인데 번호가 달라 영영 안 맞는다.
-    assert.equal(isRouteStepSkippedForRequester(sub(1), approver(1)), false);
+    assert.equal(isRouteStepSkippedForRequester(sub(1), only(approver(1))), false);
+  });
+
+  // ─────────────────────────── 건너뛸 사람이 **둘**이 된 뒤 (2026-10-26)
+
+  test("🔴 목록의 **둘 중 하나라도** 같으면 건너뛴다", () => {
+    // 원 신청자(앞)와 결재를 올린 사람(뒤) 중 어느 쪽이 그 자리에 있어도 건너뛴다.
+    assert.equal(isRouteStepSkippedForRequester(sub(1), requesterSubsToSkip(sub(2), sub(1))), true);
+    assert.equal(isRouteStepSkippedForRequester(sub(2), requesterSubsToSkip(sub(2), sub(1))), true);
+    assert.equal(isRouteStepSkippedForRequester(sub(3), requesterSubsToSkip(sub(2), sub(1))), false);
+  });
+
+  test("같은 번호가 두 번 들어와도 그대로 돈다 — 담당자가 자기 몫을 직접 올린 신청", () => {
+    assert.equal(isRouteStepSkippedForRequester(sub(1), requesterSubsToSkip(sub(1), sub(1))), true);
+    assert.equal(isRouteStepSkippedForRequester(sub(2), requesterSubsToSkip(sub(1), sub(1))), false);
+  });
+});
+
+describe("requesterSubsToSkip — 「건너뛸 사람」을 묶는 한 자리 (2026-10-26)", () => {
+  test("🔴 둘을 **둘 다** 담는다 — 하나만 담으면 그쪽 단계가 그대로 선다", () => {
+    assert.deepEqual([...requesterSubsToSkip(sub(1), sub(2))], [sub(1), sub(2)]);
+  });
+
+  test("모르는 사람은 `null` 로 자리에 남는다 — 거르는 일은 판정이 한다", () => {
+    // 🔴 여기서 걸러 내면 거르는 규칙이 부르는 자리마다 한 벌씩 생긴다(그 함수 머리말).
+    assert.deepEqual([...requesterSubsToSkip(sub(1), null)], [sub(1), null]);
+    assert.deepEqual([...requesterSubsToSkip(null, sub(2))], [null, sub(2)]);
+    assert.deepEqual([...requesterSubsToSkip(null, null)], [null, null]);
   });
 });
 
 describe("findNextRouteStepToApprove", () => {
   // ────────────────────────────────── 요청자가 결재선에 없을 때 (어제와 같다)
 
-  test("🔴 요청자가 결재선에 없으면 1단계부터다 — 이 규칙이 생기기 전과 같다", () => {
-    const next = findNextRouteStepToApprove(steps([sub(1), sub(2)]), 0, sub(9));
+  test("🔴 신청한 사람이 결재선에 없으면 1단계부터다 — 이 규칙이 생기기 전과 같다", () => {
+    const next = findNextRouteStepToApprove(steps([sub(1), sub(2)]), 0, only(sub(9)));
     assert.deepEqual(next, { stepOrder: 1, approverSub: sub(1) });
   });
 
   test("사슬도 그대로 한 칸씩 나아간다", () => {
     const list = steps([sub(1), sub(2), sub(3)]);
-    assert.equal(findNextRouteStepToApprove(list, 1, sub(9))?.stepOrder, 2);
-    assert.equal(findNextRouteStepToApprove(list, 2, sub(9))?.stepOrder, 3);
-    assert.equal(findNextRouteStepToApprove(list, 3, sub(9)), null, "마지막 뒤에는 없다");
+    assert.equal(findNextRouteStepToApprove(list, 1, only(sub(9)))?.stepOrder, 2);
+    assert.equal(findNextRouteStepToApprove(list, 2, only(sub(9)))?.stepOrder, 3);
+    assert.equal(findNextRouteStepToApprove(list, 3, only(sub(9))), null, "마지막 뒤에는 없다");
   });
 
-  test("요청자를 모르면(null) 아무 단계도 건너뛰지 않는다", () => {
-    const next = findNextRouteStepToApprove(steps([sub(1), sub(2)]), 0, null);
+  test("건너뛸 사람을 하나도 모르면 아무 단계도 건너뛰지 않는다", () => {
+    const next = findNextRouteStepToApprove(steps([sub(1), sub(2)]), 0, only(null));
     assert.deepEqual(next, { stepOrder: 1, approverSub: sub(1) });
   });
 
-  test("🔴 신청자의 A/S 번호를 넘기면 아무 단계도 건너뛰지 않는다 — 열쇠는 포털 번호다", () => {
-    // 🔴 이 시험이 깨지면 「자기가 올린 것을 자기가 결재」가 다시 열린 것이다.
+  test("🔴 신청한 사람의 A/S 번호를 넘기면 아무 단계도 건너뛰지 않는다 — 열쇠는 포털 번호다", () => {
+    // 🔴 이 시험이 깨지면 「자기가 신청한 것을 자기가 결재」가 다시 열린 것이다.
     const list = steps([sub(1), sub(2)]);
-    assert.deepEqual(findNextRouteStepToApprove(list, 0, approver(1)), { stepOrder: 1, approverSub: sub(1) });
+    assert.deepEqual(findNextRouteStepToApprove(list, 0, only(approver(1))), { stepOrder: 1, approverSub: sub(1) });
   });
 
   // ────────────────────────────────────────────────── 건너뛰기
 
-  test("🔴 1단계가 요청자면 2단계 사람에게 간다 — 번호도 2다", () => {
-    const next = findNextRouteStepToApprove(steps([sub(1), sub(2), sub(3)]), 0, sub(1));
+  test("🔴 1단계가 신청한 사람이면 2단계 사람에게 간다 — 번호도 2다", () => {
+    const next = findNextRouteStepToApprove(steps([sub(1), sub(2), sub(3)]), 0, only(sub(1)));
     assert.deepEqual(
       next,
       { stepOrder: 2, approverSub: sub(2) },
@@ -269,34 +316,34 @@ describe("findNextRouteStepToApprove", () => {
     );
   });
 
-  test("🔴 중간 단계가 요청자면 사슬이 그 단계를 건너뛴다 — 1단계 다음은 3단계다", () => {
-    const next = findNextRouteStepToApprove(steps([sub(1), sub(2), sub(3)]), 1, sub(2));
+  test("🔴 중간 단계가 신청한 사람이면 사슬이 그 단계를 건너뛴다 — 1단계 다음은 3단계다", () => {
+    const next = findNextRouteStepToApprove(steps([sub(1), sub(2), sub(3)]), 1, only(sub(2)));
     assert.deepEqual(next, { stepOrder: 3, approverSub: sub(3) });
   });
 
-  test("요청자인 단계가 연달아 있어도 그 뒤까지 건너뛴다", () => {
-    const next = findNextRouteStepToApprove(steps([sub(1), sub(1), sub(3)]), 0, sub(1));
+  test("신청한 사람의 단계가 연달아 있어도 그 뒤까지 건너뛴다", () => {
+    const next = findNextRouteStepToApprove(steps([sub(1), sub(1), sub(3)]), 0, only(sub(1)));
     assert.deepEqual(next, { stepOrder: 3, approverSub: sub(3) });
   });
 
-  test("🔴 마지막 단계가 요청자면 null 이다 — 사슬이 거기서 끝난다", () => {
-    const next = findNextRouteStepToApprove(steps([sub(1), sub(2)]), 1, sub(2));
+  test("🔴 마지막 단계가 신청한 사람이면 null 이다 — 사슬이 거기서 끝난다", () => {
+    const next = findNextRouteStepToApprove(steps([sub(1), sub(2)]), 1, only(sub(2)));
     assert.equal(next, null);
   });
 
-  test("🔴 모든 단계가 요청자면 null 이다 — 요청 경로는 이때 거절한다", () => {
-    assert.equal(findNextRouteStepToApprove(steps([sub(1)]), 0, sub(1)), null);
-    assert.equal(findNextRouteStepToApprove(steps([sub(1), sub(1)]), 0, sub(1)), null);
+  test("🔴 모든 단계가 신청한 사람이면 null 이다 — 올리는 경로는 이때 그 자리에서 승인한다", () => {
+    assert.equal(findNextRouteStepToApprove(steps([sub(1)]), 0, only(sub(1))), null);
+    assert.equal(findNextRouteStepToApprove(steps([sub(1), sub(1)]), 0, only(sub(1))), null);
   });
 
   // ─────────────────────────────────────────────── 경계와 순수함
 
   test("단계가 0개면 null 이다 — 「절차를 쓰지 않겠다」는 뜻이다", () => {
-    assert.equal(findNextRouteStepToApprove([], 0, sub(1)), null);
+    assert.equal(findNextRouteStepToApprove([], 0, only(sub(1))), null);
   });
 
   test("🔴 지금까지 온 단계보다 뒤만 본다 — 이미 지나온 단계로 되돌아가지 않는다", () => {
-    const next = findNextRouteStepToApprove(steps([sub(1), sub(2), sub(3)]), 2, sub(9));
+    const next = findNextRouteStepToApprove(steps([sub(1), sub(2), sub(3)]), 2, only(sub(9)));
     assert.deepEqual(next, { stepOrder: 3, approverSub: sub(3) });
   });
 
@@ -307,11 +354,11 @@ describe("findNextRouteStepToApprove", () => {
       { stepOrder: 1, approverSub: sub(1) },
       { stepOrder: 2, approverSub: sub(2) },
     ];
-    assert.deepEqual(findNextRouteStepToApprove(shuffled, 0, sub(9)), {
+    assert.deepEqual(findNextRouteStepToApprove(shuffled, 0, only(sub(9))), {
       stepOrder: 1,
       approverSub: sub(1),
     });
-    assert.deepEqual(findNextRouteStepToApprove(shuffled, 1, sub(2)), {
+    assert.deepEqual(findNextRouteStepToApprove(shuffled, 1, only(sub(2))), {
       stepOrder: 3,
       approverSub: sub(3),
     });
@@ -320,14 +367,14 @@ describe("findNextRouteStepToApprove", () => {
   test("입력 배열을 바꾸지 않는다 — 순수 함수다", () => {
     const list = steps([sub(1), sub(2)]);
     const snapshot = JSON.stringify(list);
-    findNextRouteStepToApprove(list, 0, sub(1));
+    findNextRouteStepToApprove(list, 0, only(sub(1)));
     assert.equal(JSON.stringify(list), snapshot);
   });
 
   test("돌려주는 것은 그 단계 원본이다 — 부르는 쪽의 다른 칸이 붙어 있어도 살아 남는다", () => {
     // 표를 읽는 층은 단계에 칸을 더 실어 보낼 수 있다(승인자 이름·A/S 번호 등).
     const list = [{ stepOrder: 1, approverSub: sub(1), approverUserId: approver(1), approverName: "김철수" }];
-    const next = findNextRouteStepToApprove(list, 0, sub(9));
+    const next = findNextRouteStepToApprove(list, 0, only(sub(9)));
     assert.equal(next?.approverName, "김철수");
     assert.equal(next?.approverUserId, approver(1), "A/S 번호도 함께 돌아온다 — 표에 적어 둬야 한다");
   });

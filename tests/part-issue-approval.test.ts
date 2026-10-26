@@ -22,6 +22,7 @@ import {
   type PartIssueStatus,
 } from "../src/lib/approval/part-issue-rules";
 import { actingApproverSubs } from "../src/lib/approval/delegation";
+import { requesterSubsToSkip } from "../src/lib/approval/route";
 import { stockIssueApprovalStatusEnum, stockIssueApprovalStepStatusEnum } from "../src/db/schema/stock-issue-approvals";
 
 /**
@@ -72,14 +73,24 @@ const route = (...approvers: string[]) =>
 /** 포털 번호가 빠진 단계(옛 판). 🔴 그런 단계가 하나라도 있으면 결재건을 올릴 수 없다. */
 const withoutSub = <T extends { approverSub: string | null }>(step: T): T => ({ ...step, approverSub: null });
 
+/**
+ * **건너뛸 사람을 한 사람만 아는** 목록 (2026-10-26). 아래 묶음은 「그 한 사람의 단계가 빠지는가」를
+ * 재므로 한 사람이면 충분하다 — **둘이 섞이는 자리**(원 신청자 · 결재를 올린 사람)의 동작은
+ * `tests/part-issue-requester-skip.test.ts` 가 따로 잰다.
+ *
+ * 🔴 **손으로 `[x]` 라고 적지 않고 실제 목록 함수를 지난다.** 손으로 적으면 목록을 만드는 규칙이
+ * 바뀌는 날 이 묶음은 **옛 모양 그대로 통과한다**(바로 아래 ② 의 `alone` 과 같은 까닭).
+ */
+const only = (requesterSub: string) => requesterSubsToSkip(requesterSub, null);
+
 describe("① 결재선 단계 → 이 건이 밟을 단계 목록", () => {
   it("🔴 판이 없으면(단계 0개) 결재건을 만들지 않는다 — NO_ROUTE", () => {
-    const plan = planPartIssueApproval([], sub("kim"));
+    const plan = planPartIssueApproval([], only(sub("kim")));
     assert.equal(plan.kind, "NO_ROUTE", "여기서 결재건을 만들면 아무도 결재할 수 없는 건만 쌓여 재고가 잠긴다");
   });
 
   it("남이 올리면 단계가 그대로 다 남는다", () => {
-    const plan = planPartIssueApproval(route("kim", "lee", "park"), sub("cho"));
+    const plan = planPartIssueApproval(route("kim", "lee", "park"), only(sub("cho")));
     assert.equal(plan.kind, "NEEDS_APPROVAL");
     assert.deepEqual(
       plan.steps.map((s) => s.stepOrder),
@@ -87,8 +98,8 @@ describe("① 결재선 단계 → 이 건이 밟을 단계 목록", () => {
     );
   });
 
-  it("🔴 신청자가 결재선에 있으면 그 단계가 빠진다 — 포털 번호로 가린다", () => {
-    const plan = planPartIssueApproval(route("kim", "lee", "park"), sub("lee"));
+  it("🔴 신청한 사람이 결재선에 있으면 그 단계가 빠진다 — 포털 번호로 가린다", () => {
+    const plan = planPartIssueApproval(route("kim", "lee", "park"), only(sub("lee")));
     assert.equal(plan.kind, "NEEDS_APPROVAL");
     assert.deepEqual(
       plan.steps.map((s) => s.approverUserId),
@@ -102,9 +113,9 @@ describe("① 결재선 단계 → 이 건이 밟을 단계 목록", () => {
     );
   });
 
-  it("🔴 신청자의 A/S 번호를 넘기면 아무 단계도 안 빠진다 — 열쇠는 포털 번호다", () => {
+  it("🔴 신청한 사람의 A/S 번호를 넘기면 아무 단계도 안 빠진다 — 열쇠는 포털 번호다", () => {
     // 🔴 2026-10-15 결함의 울타리. 이 시험이 깨지면 열쇠가 다시 뒤바뀐 것이다.
-    const plan = planPartIssueApproval(route("kim", "lee", "park"), asId("lee"));
+    const plan = planPartIssueApproval(route("kim", "lee", "park"), only(asId("lee")));
     assert.equal(plan.kind, "NEEDS_APPROVAL");
     assert.deepEqual(
       plan.steps.map((s) => s.stepOrder),
@@ -115,7 +126,7 @@ describe("① 결재선 단계 → 이 건이 밟을 단계 목록", () => {
 
   it("단계가 뒤섞여 들어와도 번호가 작은 것부터 센다", () => {
     const shuffled = [route("kim", "lee", "park")[2], route("kim", "lee", "park")[0], route("kim", "lee", "park")[1]];
-    const plan = planPartIssueApproval(shuffled, sub("cho"));
+    const plan = planPartIssueApproval(shuffled, only(sub("cho")));
     assert.equal(plan.kind, "NEEDS_APPROVAL");
     assert.deepEqual(
       plan.steps.map((s) => s.stepOrder),
@@ -124,21 +135,21 @@ describe("① 결재선 단계 → 이 건이 밟을 단계 목록", () => {
   });
 
   it("🔴 건너뛰어서 남는 단계가 하나도 없으면 곧바로 승인 — 기다릴 사람이 없다", () => {
-    const plan = planPartIssueApproval(route("kim"), sub("kim"));
+    const plan = planPartIssueApproval(route("kim"), only(sub("kim")));
     assert.equal(plan.kind, "AUTO_APPROVED", "PENDING_APPROVAL 로 두면 아무도 누를 수 없는 건이 영영 남는다");
     assert.deepEqual(plan.steps, []);
   });
 
   it("🔵 「절차 없음」과 「전부 건너뜀」을 가른다 — 뒤쪽은 결재건이 남아야 한다", () => {
-    assert.equal(planPartIssueApproval([], sub("kim")).kind, "NO_ROUTE");
-    assert.equal(planPartIssueApproval(route("kim"), sub("kim")).kind, "AUTO_APPROVED");
+    assert.equal(planPartIssueApproval([], only(sub("kim"))).kind, "NO_ROUTE");
+    assert.equal(planPartIssueApproval(route("kim"), only(sub("kim"))).kind, "AUTO_APPROVED");
   });
 
   // ────────────────────────────── 포털 번호 없는 단계가 섞인 결재선 (2026-10-15)
 
   it("🔴 포털 번호 없는 단계가 하나라도 있으면 결재건을 올릴 수 없다", () => {
     const [first, second] = route("kim", "lee");
-    const plan = planPartIssueApproval([first, withoutSub(second)], sub("cho"));
+    const plan = planPartIssueApproval([first, withoutSub(second)], only(sub("cho")));
     assert.equal(plan.kind, "MISSING_SUB", "그 단계는 아무도 열 수 없는 문이다 — 올리면 영영 결재되지 않는 건이 남는다");
     assert.ok(plan.kind === "MISSING_SUB");
     assert.equal(plan.message, PART_ISSUE_ROUTE_MISSING_SUB_MESSAGE);
@@ -149,20 +160,20 @@ describe("① 결재선 단계 → 이 건이 밟을 단계 목록", () => {
     // 1단계는 멀쩡하고 번호 없는 것은 3단계뿐이다. 그래도 올리지 않는다 — 올리면 앞 둘이
     // 결재를 한 **뒤에** 멈춘다(그때는 되돌리기가 더 어렵다).
     const [kim, lee, park] = route("kim", "lee", "park");
-    const plan = planPartIssueApproval([kim, lee, withoutSub(park)], sub("cho"));
+    const plan = planPartIssueApproval([kim, lee, withoutSub(park)], only(sub("cho")));
     assert.equal(plan.kind, "MISSING_SUB");
   });
 
-  it("🔴 신청자 본인 단계라 어차피 건너뛸 자리여도 거절한다 — 판 전체를 본다", () => {
+  it("🔴 신청한 사람의 단계라 어차피 건너뛸 자리여도 거절한다 — 판 전체를 본다", () => {
     const [kim, lee] = route("kim", "lee");
-    const plan = planPartIssueApproval([kim, withoutSub(lee)], sub("lee"));
+    const plan = planPartIssueApproval([kim, withoutSub(lee)], only(sub("lee")));
     assert.equal(plan.kind, "MISSING_SUB", "번호 없는 줄을 건너뛰어 통과시키면 결재선이 고장 난 채 굳는다");
   });
 
   it("🔵 「절차 없음」과 **가른다** — 뭉개면 세워 둔 결재를 건너뛰고 부품이 나간다", () => {
     const [kim] = route("kim");
-    assert.equal(planPartIssueApproval([withoutSub(kim)], sub("cho")).kind, "MISSING_SUB");
-    assert.notEqual(planPartIssueApproval([withoutSub(kim)], sub("cho")).kind, "NO_ROUTE");
+    assert.equal(planPartIssueApproval([withoutSub(kim)], only(sub("cho"))).kind, "MISSING_SUB");
+    assert.notEqual(planPartIssueApproval([withoutSub(kim)], only(sub("cho"))).kind, "NO_ROUTE");
   });
 });
 

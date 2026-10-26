@@ -4,7 +4,7 @@ import type { IssueQuantity } from "@/lib/stock/issue";
 // 🔵 순수 → 순수 import 다. `./delegation.ts` 도 `server-only` 를 물지 않으므로 이 파일을
 //    끌어오는 화면 묶음의 빌드가 깨지지 않는다(머리말의 「화면이 쓰는 모양도 여기 둔다」).
 import type { ActingApproverSubs } from "./delegation";
-import { findNextRouteStepToApprove, type RouteStepAssignment } from "./route";
+import { findNextRouteStepToApprove, type RequesterSubs, type RouteStepAssignment } from "./route";
 
 /**
  * ============================================================================
@@ -20,10 +20,12 @@ import { findNextRouteStepToApprove, type RouteStepAssignment } from "./route";
  * `src/lib/db/mutations/inventory-part-issue-requests.ts` 다(2026-10-15, 조각 11a).
  *
  * ── 🔴 「다음에 결재할 단계」 규칙을 여기서 다시 적지 않는다 ──────────────
- * 신청자 본인 단계를 건너뛰는 규칙은 이미 `./route.ts` 의
+ * 신청한 사람의 단계를 건너뛰는 규칙은 이미 `./route.ts` 의
  * `isRouteStepSkippedForRequester` · `findNextRouteStepToApprove` 하나가 쥐고 있다. 아래
  * `planPartIssueApproval` 은 **그 함수를 반복해서 부를 뿐**이다 — 규칙을 두 벌 적으면 「올릴
- * 때는 건너뛰는데 사슬에서는 안 건너뛴다」가 되고, 그때 신청자가 자기 차례를 받는다.
+ * 때는 건너뛰는데 사슬에서는 안 건너뛴다」가 되고, 그때 신청한 사람이 자기 차례를 받는다.
+ * 🔵 **건너뛸 사람이 둘인 것**(원 신청자 · 결재를 올린 사람)도 저쪽 머리말에 적혀 있고, 목록을
+ *    만드는 자리는 `requesterSubsToSkip` 하나다 — 여기서 그 둘을 다시 세지 않는다.
  *
  * ── 🔴 화면이 쓰는 모양(View 타입)도 여기 둔다 ──────────────────────────
  * 읽는 쪽(`./part-issue.ts`)은 `server-only` 라 클라이언트 묶음이 끌어오면 빌드가 깨진다.
@@ -180,7 +182,7 @@ export type PartIssueRequestExit =
  * 두면, 결재건은 닫혔는데 신청은 아무 단추도 받지 않는 **완전한 교착**이 된다(결재건이 닫혀서
  * [실행]조차 없다). 아래 갈래가 `REJECTED` 로 **빠져나오는** 것이 그 경고를 지키는 자리다.
  *
- * - `ISSUE_REQUESTED` → **`IN_APPROVAL`.** 🔴 **자동 승인도 똑같다.** 결재선이 전부 신청자 본인이면 결재건은
+ * - `ISSUE_REQUESTED` → **`IN_APPROVAL`.** 🔴 **자동 승인도 똑같다.** 결재선이 전부 건너뛸 사람(신청한 사람·결재를 올린 사람)이면 결재건은
  *   그 자리에서 `APPROVED` 가 되지만(`planPartIssueApproval` 의 `AUTO_APPROVED`) **재고는 아직 안 나갔다** —
  *   나가는 것은 「승인 요청건」의 [실행]이다. 그때 신청을 `PENDING` 으로 두면 담당자가 [확인]으로 한 번 더
  *   내주고 [실행]으로 또 한 번 내준다. 갈래가 둘이라 **빠뜨리기 쉬운 자리**라서 글자로 못 박는다.
@@ -243,7 +245,8 @@ export function requestStatusAfterPartIssue(exit: PartIssueRequestExit, issuedTo
  * 🔴 **남는 단계만이 아니라 그 판의 단계 전부**를 본다. 뒤쪽 단계 하나에 번호가 없어도 사슬은
  * 거기까지 가서 멈춘다 — 그때는 이미 앞사람들이 결재를 한 뒤라 되돌리기가 더 어렵다.
  *
- * 🔴 `AUTO_APPROVED` 는 **단계는 있는데 전부 신청자 본인이라 남는 단계가 0개**인 경우다.
+ * 🔴 `AUTO_APPROVED` 는 **단계는 있는데 전부 건너뛸 사람이라 남는 단계가 0개**인 경우다(그 둘이
+ * 누구인지는 `./route.ts` 머리말 — 원래 신청을 올린 사람과 결재를 올린 사람).
  * 곧바로 `APPROVED` 로 만든다 — 결재할 사람이 아무도 없으니 **기다릴 것이 없고**, 그런데도
  * `PENDING_APPROVAL` 로 두면 아무도 누를 수 없는 건이 영영 남아 재고가 잠긴다(위 `NO_ROUTE`
  * 를 둔 까닭과 같은 위험이다). 🔵 `NO_ROUTE` 와 **일부러 가른다**: 저쪽은 「결재 제도를 쓰지
@@ -276,9 +279,13 @@ export const PART_ISSUE_ROUTE_MISSING_SUB_MESSAGE =
  * 그 판의 단계들 중 **이 신청이 실제로 밟을 단계**를 차례대로.
  *
  * @param routeSteps 현재 판의 단계들. 순서가 뒤섞여 있어도 된다.
- * @param requesterSub 결재건을 올리는 사람의 **포털 번호**. 그 사람의 단계는 건너뛴다.
- *   🔴 이름이 `…Sub` 인 까닭은 `./route.ts` 의 `RouteStepAssignment` 주석에 있다 — 여기에
+ * @param requesterSubs **건너뛸 사람들**의 포털 번호 — 원래 신청을 올린 사람과 [불출 신청]
+ *   단추를 눌러 결재를 올린 사람 **둘**이다(`./route.ts` 의 `requesterSubsToSkip`). 그 사람들의
+ *   단계는 건너뛴다.
+ *   🔴 이름이 `…Subs` 인 까닭은 `./route.ts` 의 `RouteStepAssignment` 주석에 있다 — 여기에
  *   `users.id`(이 시스템의 번호)나 A/S 번호를 넘기면 건너뛰기가 **조용히 꺼진다.**
+ *   🔴 **목록을 여기서 만들지 않는다**: 서버가 그 둘을 읽어 오는 자리는
+ *   `./requester-subs.ts` 하나이고, 사슬을 잇는 자리도 **같은 목록**을 받는다.
  *
  * 🔴 걸러 내는 일을 여기서 직접 하지 않고 `findNextRouteStepToApprove` 를 **되풀이해 부른다.**
  * 사슬이 나아갈 때 서버가 부르는 것도 같은 함수라, 「올릴 때 만든 목록」과 「나아가며 고르는
@@ -286,7 +293,7 @@ export const PART_ISSUE_ROUTE_MISSING_SUB_MESSAGE =
  */
 export function planPartIssueApproval<T extends RouteStepAssignment>(
   routeSteps: readonly T[],
-  requesterSub: string,
+  requesterSubs: RequesterSubs,
 ): PartIssueRoutePlan<T> {
   if (routeSteps.length === 0) return { kind: "NO_ROUTE" };
 
@@ -298,7 +305,7 @@ export function planPartIssueApproval<T extends RouteStepAssignment>(
   const steps: Array<RouteStepWithSub<T>> = [];
   let completedStepOrder = 0;
   for (;;) {
-    const next = findNextRouteStepToApprove(routeSteps, completedStepOrder, requesterSub);
+    const next = findNextRouteStepToApprove(routeSteps, completedStepOrder, requesterSubs);
     if (next === null) break;
     // 위에서 판 전체에 번호가 있는 것을 확인했다 — 그래서 여기서 다시 보지 않는다.
     steps.push(next as RouteStepWithSub<T>);

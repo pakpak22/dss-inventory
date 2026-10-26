@@ -301,19 +301,37 @@ export function validateApprovalRouteSteps(
 
 /**
  * ============================================================================
- * 🔴 요청자 본인 단계는 건너뛴다 — 「다음에 결재할 단계」 고르기
+ * 🔴 신청한 사람의 단계는 건너뛴다 — 「다음에 결재할 단계」 고르기
  * ============================================================================
- * 자기가 올린 것을 자기가 결재하는 칸을 없앤다. 결재선이 [김철수 · 이영희 · 박대표]인데
- * 이영희가 요청하면 1단계 김철수 → (2단계 건너뜀) → 3단계 박대표다.
+ * 자기가 신청한 것을 자기가 결재하는 칸을 없앤다. 결재선이 [김철수 · 이영희 · 박대표]인데
+ * 이영희가 신청하면 1단계 김철수 → (2단계 건너뜀) → 3단계 박대표다.
  *
- * 🔴 **처음 요청할 때만이 아니라 사슬이 나아갈 때마다 본다.** 그래서 규칙을 순수 함수 하나로
- * 내려 두고 **요청 경로와 사슬 잇는 자리가 같은 함수를 부른다.** 두 곳에 각자 적으면
- * 「요청할 때는 건너뛰는데 사슬에서는 안 건너뛴다」가 되고, 그때 요청자는 자기 차례를 받아
- * 자기가 올린 것을 결재하게 된다.
+ * ── 🔴 건너뛰는 사람은 **둘이다** (2026-10-26) ──────────────────────────
+ * 그 전까지 이 자리는 「신청자 본인」이라고만 적혀 있었고, 그 말이 **읽는 사람마다 다른 사람을
+ * 가리켰다.** 둘을 글자로 갈라 적는다:
+ *
+ *  1. **원래 신청을 올린 사람** — 부품이 필요해서 달라고 한 사람(`stock_requests` 의 신청자).
+ *     A/S 에서 올라온 신청이면 거기 실려 온 포털 번호(`requester_sub`), 재고 관리 화면에서 직접
+ *     올린 신청이면 `requested_by` 가 가리키는 사람이다.
+ *  2. **[불출 신청] 단추를 눌러 결재를 올린 사람** — 재고 담당자(ADMIN)다. 남의 신청을 결재에
+ *     태워 주는 자리라 **1번과 다른 사람인 것이 보통이다.**
+ *
+ * 🔴 **2번만 보던 때 실제로 있었던 일**(이 조각의 까닭): 어떤 분이 부품 불출을 신청했는데
+ * 「매쳐 부품 불출」 절차의 **1단계가 바로 그 분**이었다. 단추는 재고 담당자가 누르므로 2번은
+ * 담당자였고, 1단계는 그대로 서서 **자기가 달라고 한 것을 자기가 승인하는 칸**이 됐다.
+ * 🔵 둘 중 **하나라도** 그 단계의 승인자와 같으면 건너뛴다 — 목록을 만드는 자리는
+ * `requesterSubsToSkip` 하나다.
+ *
+ * 🔴 **처음 올릴 때만이 아니라 사슬이 나아갈 때마다 본다.** 그래서 규칙을 순수 함수 하나로
+ * 내려 두고 **올리는 경로와 사슬 잇는 자리가 같은 함수를 부른다.** 두 곳에 각자 적으면
+ * 「올릴 때는 건너뛰는데 사슬에서는 안 건너뛴다」가 되고, 그때 신청한 사람은 자기 차례를 받아
+ * 자기가 신청한 것을 결재하게 된다. 🔴 **목록을 만드는 자리도 마찬가지다** — 한쪽만 1번을
+ * 빼먹으면 올릴 때 사라졌던 단계가 사슬 중간에 되살아난다.
  *
  * 진행 미리보기(승인 카드)도 같은 판정을 봐야 한다 — 건너뛴 단계를 「완료」로 칠하면 아무도
- * 승인하지 않은 칸이 승인된 것처럼 보인다. 그래서 갈림 자체는 `isRouteStepSkippedForRequester`
- * 한 곳에 적고 셋이 그것을 부른다.
+ * 승인하지 않은 칸이 승인된 것처럼 보이고, 반대로 **건너뛴 줄 모르면** 영영 아무도 누르지 않을
+ * 칸이 「결재 대기」로 남아 있는 것처럼 보인다. 그래서 갈림 자체는
+ * `isRouteStepSkippedForRequester` 한 곳에 적고 셋이 그것을 부른다.
  * ============================================================================
  */
 
@@ -342,21 +360,57 @@ export type RouteStepAssignment = {
 };
 
 /**
- * 이 단계를 **건너뛰는가** — 그 단계의 승인자가 그 요청을 올린 사람인가.
+ * 「이 건에서 **건너뛸 사람들**」의 포털 번호. 위 머리말의 둘이 들어 있다.
  *
- * 🔴 견주는 것은 **포털 번호 둘**이다. 신청자 쪽은 이 시스템의 `users.auth_sub`, 단계 쪽은
- * 저장해 둔 `approver_sub` — 둘 다 포털이 준 같은 값이라야 같은 사람이 같은 사람으로 보인다.
- * A/S 번호로 견주면 건너뛰기가 **조용히 작동하지 않고**, 신청자가 자기 건을 결재하게 된다.
+ * 🔴 **`null` 과 중복이 섞여 있어도 된다.** 모르는 사람은 `null` 로 그 자리에 남고(아래 판정이
+ * 떨어뜨린다), 둘이 같은 사람이면 같은 번호가 두 번 들어온다 — 재고 담당자가 자기 몫으로 직접
+ * 올린 신청이 그렇다. 부르는 쪽에서 걸러 넘기게 하면 **거르는 규칙이 자리마다 한 벌씩** 생기고,
+ * 그중 하나가 빠지는 날 건너뛰기가 그 자리에서만 조용히 달라진다.
  *
- * 둘 중 하나라도 모르면(`null`) 언제나 거짓이다. 건너뛸 근거가 없으면 결재선은 예전 그대로
- * 도는 것이 맞다 — 여기서 참을 돌려주면 아무도 결재하지 않은 단계가 조용히 사라진다.
+ * 🔵 **글자 하나(`string`)를 그대로 넘기는 길은 타입이 막는다.** 막지 않으면
+ * `"sub-0001".includes("sub-000")` 가 **글자 조각 검사**로 돌아 남남을 같은 사람으로 보는 자리가
+ * 생긴다(`./delegation.ts` 의 `ActingApproverSubs` 가 같은 까닭으로 같은 모양이다).
  */
-export function isRouteStepSkippedForRequester(
-  approverSub: string | null,
-  requesterSub: string | null,
-): boolean {
-  if (requesterSub === null || approverSub === null) return false;
-  return approverSub === requesterSub;
+export type RequesterSubs = readonly (string | null)[];
+
+/**
+ * 🔴 **「누구를 건너뛰는가」가 적힌 유일한 자리.** 위 머리말의 둘을 한 목록으로 묶는다.
+ *
+ * 🔴 **부르는 자리마다 손으로 배열을 적지 않는다.** 지금 이 목록을 쓰는 자리가 셋이고(결재
+ * 올리기 · 사슬 잇기 · 진행 미리보기), 셋이 각자 적으면 그중 하나만 둘째 사람을 빠뜨리는 날이
+ * 온다 — 그때 생기는 결함은 **오류가 아니라 「그 화면에서만 단계 하나가 더 보임」**이거나
+ * 「올릴 때는 없던 단계가 사슬에서 되살아남」이라 아무도 신고하지 않는다.
+ * 🔵 서버가 이 둘을 **어디서 읽어 오는지**는 `./requester-subs.ts` 한 곳에 있다. 여기는 순수
+ *    함수라 DB 를 모르고, 그래서 `npm test` 가 네 갈래(둘 다 있음·앞만·뒤만·둘 다 모름)를
+ *    전부 돌려 본다.
+ *
+ * @param raisedBySub [불출 신청] 단추를 눌러 **결재를 올린 사람**의 포털 번호(머리말 2번).
+ * @param originalRequesterSub **원래 신청을 올린 사람**의 포털 번호(머리말 1번). 못 구하면
+ *   `null` — 그 사람 몫만 빠지고 나머지는 그대로 돈다(「모르면 건너뛰지 않는다」).
+ */
+export function requesterSubsToSkip(raisedBySub: string | null, originalRequesterSub: string | null): RequesterSubs {
+  return [raisedBySub, originalRequesterSub];
+}
+
+/**
+ * 이 단계를 **건너뛰는가** — 그 단계의 승인자가 **건너뛸 사람들** 중 하나인가(머리말의 둘).
+ *
+ * 🔴 견주는 것은 **포털 번호**다. 신청한 사람 쪽은 이 시스템의 `users.auth_sub`(또는 A/S 가
+ * 실어 보낸 `stock_requests.requester_sub` — 같은 값이다), 단계 쪽은 저장해 둔 `approver_sub`.
+ * 둘 다 포털이 준 같은 값이라야 같은 사람이 같은 사람으로 보인다. A/S 번호로 견주면 건너뛰기가
+ * **조용히 작동하지 않고**, 신청한 사람이 자기 건을 결재하게 된다.
+ * 🔴 **이름으로 견주지 않는다** — 동명이인이 섞인다(2026-10-15 결정, `./directory.ts` 머리말).
+ *
+ * 모르면(`null`) 언제나 거짓이다. 단계 쪽 번호가 없으면(옛 판) 그 단계는 아무와도 같지 않고,
+ * 목록 쪽 `null` 은 「그 사람이 누군지 모른다」라 **아무 단계와도 맞지 않아야 한다.** 건너뛸
+ * 근거가 없으면 결재선은 예전 그대로 도는 것이 맞다 — 여기서 참을 돌려주면 아무도 결재하지 않은
+ * 단계가 조용히 사라진다.
+ * 🔵 `approverSub` 가 `null` 인 자리에서 먼저 빠져나가므로, 목록에 `null` 이 들어 있어도
+ *    **빈 값끼리 같은 사람이 되는 일이 없다.**
+ */
+export function isRouteStepSkippedForRequester(approverSub: string | null, requesterSubs: RequesterSubs): boolean {
+  if (approverSub === null) return false;
+  return requesterSubs.includes(approverSub);
 }
 
 /**
@@ -366,9 +420,10 @@ export function isRouteStepSkippedForRequester(
  *   고르므로 부르는 쪽의 정렬에 기대지 않는다.
  * @param completedStepOrder 지금까지 온 단계 번호. **처음 요청이면 0** 이다(0보다 큰 번호만
  *   후보가 되므로 1단계부터 본다).
- * @param requesterSub 그 사슬을 시작한 사람의 **포털 번호**. 사슬이 나아가도 바뀌지 않는다 —
- *   방금 결재한 사람이 아니라 요청 행에 적힌 요청자다. 🔴 이름이 `…Sub` 인 까닭은 위
- *   `RouteStepAssignment` 주석에 있다(`users.id` 를 넘기면 건너뛰기가 조용히 꺼진다).
+ * @param requesterSubs **건너뛸 사람들**의 포털 번호(머리말의 둘, `requesterSubsToSkip`).
+ *   사슬이 나아가도 바뀌지 않는다 — 방금 결재한 사람이 아니라 **그 사슬을 시작한 사람들**이다.
+ *   🔴 이름이 `…Subs` 인 까닭은 위 `RouteStepAssignment` 주석에 있다(`users.id` 를 넘기면
+ *   건너뛰기가 조용히 꺼진다).
  *
  * 🔴 **돌려주는 단계의 번호를 1로 고쳐 적지 않는다.** 건너뛴 뒤의 실제 번호(예: 2)가 그대로
  * 표에 들어가야 한다 — 다음 단계를 찾을 때 그 번호로 옛 판을 이어 세기 때문이다.
@@ -384,12 +439,12 @@ export function isRouteStepSkippedForRequester(
 export function findNextRouteStepToApprove<T extends RouteStepAssignment>(
   steps: readonly T[],
   completedStepOrder: number,
-  requesterSub: string | null,
+  requesterSubs: RequesterSubs,
 ): T | null {
   let next: T | null = null;
   for (const step of steps) {
     if (step.stepOrder <= completedStepOrder) continue;
-    if (isRouteStepSkippedForRequester(step.approverSub, requesterSub)) continue;
+    if (isRouteStepSkippedForRequester(step.approverSub, requesterSubs)) continue;
     if (next === null || step.stepOrder < next.stepOrder) next = step;
   }
   return next;

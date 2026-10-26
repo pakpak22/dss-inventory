@@ -44,6 +44,9 @@ import { getCurrentApprovalRouteWithSubs } from "./queries";
 // 🔴 「이 신청은 어느 절차를 타는가」는 저장소에 한 자리에서만 정해진다 — [확인] 게이트도 같은
 //    함수를 부른다(그 파일 머리말에 우회 구멍의 모양이 적혀 있다).
 import { getApprovalRouteScopeForRequest } from "./request-scope";
+// 🔴 「이 건에서 건너뛸 사람은 누구누구인가」도 한 자리에서만 정해진다 — 아래 **두 자리**(결재
+//    올리기 · 사슬 잇기)가 같은 함수를 부른다. 갈리면 올릴 때 없던 단계가 사슬에서 되살아난다.
+import { requesterSubsToSkipFor } from "./requester-subs";
 import { APPROVAL_ROUTE_EMPTY_NOTICES, APPROVAL_ROUTE_SCOPE_LABELS, findNextRouteStepToApprove } from "./route";
 
 /**
@@ -164,6 +167,13 @@ export async function requestPartIssueApproval(
   //    🔴 건너뛰기 판정에 넘기는 것은 **포털 번호**다(`actor.sub`). `actor.id`(이 시스템의
   //    users.id)를 넘기면 결재선의 포털 번호와 영원히 안 맞아 **건너뛰기가 조용히 꺼진다.**
   //
+  //    ── 🔴 **건너뛸 사람은 둘이다** (2026-10-26) ──────────────────────────────
+  //    단추를 누른 사람(`actor.sub`)만 보면, 재고 담당자가 **남의 신청을** 결재에 태울 때 그
+  //    신청을 올린 당사자의 단계가 그대로 선다 — 어떤 분이 올린 신청의 1단계가 그 분인 채로
+  //    결재가 돌았다. 그 둘을 묶는 자리는 `./requester-subs.ts` 하나이고, **아래 사슬
+  //    잇는 자리도 같은 함수를 부른다**: 두 자리가 다른 목록을 보면 올릴 때 사라졌던 단계가
+  //    사슬 중간에 되살아난다(`./route.ts` 머리말).
+  //
   //    ── 🔴 **어느 용도의 판인지는 그 신청의 「수리 건 종류」가 정한다** (2026-10-22) ──
   //    매쳐·제너레이터·토탈 컨트롤러·모름의 네 갈래가 각각 어느 절차로 가는지는 순수 함수 한 곳에
   //    적혀 있고(`./route.ts`), 여기서는 **읽어서 쓰기만** 한다. 🔴 [확인] 게이트와 **같은 함수**를
@@ -172,7 +182,8 @@ export async function requestPartIssueApproval(
   //       않는다**(고치는 길이 코드에 없다).
   const scope = await getApprovalRouteScopeForRequest(requestId);
   const route = await getCurrentApprovalRouteWithSubs(scope);
-  const plan = planPartIssueApproval(route?.steps ?? [], actor.sub);
+  const requesterSubs = await requesterSubsToSkipFor(requestId, actor.sub);
+  const plan = planPartIssueApproval(route?.steps ?? [], requesterSubs);
   if (!route || plan.kind === "NO_ROUTE") {
     /**
      * 🔴 **그 용도의 이름으로 말한다** — 「부품 불출 절차가 없습니다」라고만 하면 매쳐 신청을 올린
@@ -430,12 +441,20 @@ export async function decidePartIssueApproval(
       return { ok: false, message: PART_ISSUE_ROUTE_MISSING_SUB_MESSAGE };
     }
 
-    //    (나) 🔴 **신청자의 포털 번호.** 건너뛰기는 결재선의 `approver_sub` 와 견주므로 신청자
-    //         쪽도 같은 열쇠여야 한다 — 결재건에 적힌 `requested_by` 는 이 시스템의 `users.id`
-    //         라서 그대로 넘기면 **건너뛰기가 조용히 꺼진다.** 올린 사람은 여기 로그인해서
-    //         올린 사람이므로 `users` 에 줄이 있다(없으면 `null` — 건너뛰지 않는다).
+    /**
+     *    (나) 🔴 **건너뛸 사람들의 포털 번호.** 건너뛰기는 결재선의 `approver_sub` 와 견주므로
+     *         이쪽도 같은 열쇠여야 한다 — 결재건에 적힌 `requested_by` 는 이 시스템의 `users.id`
+     *         라서 그대로 넘기면 **건너뛰기가 조용히 꺼진다.** 결재를 올린 사람은 여기 로그인해서
+     *         올린 사람이므로 `users` 에 줄이 있다(없으면 `null` — 그 몫만 빠진다).
+     *
+     * 🔴 **올리는 자리와 같은 함수를 부른다**(2026-10-26). 거기서 넘기는 `actor.sub` 가 여기서는
+     *    `requested_by` 를 되짚은 이 번호이고, **원래 신청을 올린 사람**은 양쪽 다
+     *    `requesterSubsToSkipFor` 가 신청 표에서 읽는다. 한쪽만 그 둘째 사람을 빠뜨리면 올릴 때
+     *    없던 단계가 사슬 중간에 되살아난다(`./route.ts` 머리말 · `./requester-subs.ts`).
+     * 🔵 **같은 트랜잭션(`tx`)으로 읽는다** — 결재건 행을 이미 `FOR UPDATE` 로 잡아 둔 뒤다.
+     */
     const [requester] = await tx.select({ sub: users.authSub }).from(users).where(eq(users.id, head.requestedBy));
-    const requesterSub = requester?.sub ?? null;
+    const requesterSubs = await requesterSubsToSkipFor(head.requestId, requester?.sub ?? null, tx);
 
     /**
      *    (다) 🔴 **지금 내 자격으로 누를 수 있는 결재자 번호 전부** — 본인 + 지금 대신할 수 있는
@@ -497,9 +516,9 @@ export async function decidePartIssueApproval(
         .returning({ id: stockRequests.id });
       requestRejected = rejectedRequest !== undefined;
     } else {
-      // 🔴 요청자는 **사슬을 시작한 사람**이다 — 방금 결재한 사람이 아니다. 건너뛰기 규칙이
-      //    사슬 내내 같은 사람을 봐야 한다(`findNextRouteStepToApprove` 주석).
-      const next = findNextRouteStepToApprove(usableRouteSteps, step.stepOrder, requesterSub);
+      // 🔴 건너뛸 사람은 **사슬을 시작한 쪽**이다 — 방금 결재한 사람이 아니다. 건너뛰기 규칙이
+      //    사슬 내내 같은 사람들을 봐야 한다(`findNextRouteStepToApprove` 주석).
+      const next = findNextRouteStepToApprove(usableRouteSteps, step.stepOrder, requesterSubs);
       if (next) {
         await tx.insert(stockIssueApprovalSteps).values({
           approvalId,

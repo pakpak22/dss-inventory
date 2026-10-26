@@ -18,7 +18,10 @@ import {
   type IssueApprovalTrailStep,
   type IssueApprovalTrailView,
 } from "./part-issue-screen";
-import { isRouteStepSkippedForRequester } from "./route";
+// 🔴 「원래 신청을 올린 사람이 누구인가」는 서버에 한 자리에서만 적혀 있다 — 결재를 올리는
+//    자리·사슬을 잇는 자리와 **같은 함수**를 부른다(그 파일 머리말). 갈리면 화면만 거짓말을 한다.
+import { originalRequesterSubsByRequest } from "./requester-subs";
+import { isRouteStepSkippedForRequester, requesterSubsToSkip } from "./route";
 
 /**
  * ============================================================================
@@ -30,7 +33,8 @@ import { isRouteStepSkippedForRequester } from "./route";
  *
  *  1. **줄별 부품 이름과 지금 재고** — 결재건에 적힌 것은 `{ partId, quantity }` 뿐이다.
  *  2. **이 건이 타고 있는 판의 단계들** — 결재선 그림의 상자들.
- *  3. **건너뛴 자리인가** — 포털 번호 둘을 견주는 판정. 🔴 번호는 **여기서 끝난다**.
+ *  3. **건너뛴 자리인가** — 단계의 포털 번호를 **건너뛸 사람 둘**(원래 신청을 올린 사람 · 결재를
+ *     올린 사람)과 견주는 판정. 🔴 번호는 **여기서 끝난다**.
  *  4. **그 자리를 실제로 누른 사람이 누구인가** (2026-10-22) — 본인 · 대리인 · 옛 줄 ·
  *     아직 안 누름. 🔴 **이것도 포털 번호 둘을 견주는 판정**이라 3번과 같은 자리에서 끝낸다.
  *
@@ -131,11 +135,15 @@ async function decisionStepsByApprovalId(approvalIds: readonly string[]) {
 }
 
 /**
- * 올린 사람들의 **포털 번호**(`users.auth_sub`). 건너뛰기는 포털 번호 둘을 견주므로 신청자 쪽도
+ * **결재를 올린 사람들**의 포털 번호(`users.auth_sub`). 건너뛰기는 포털 번호끼리 견주므로 이쪽도
  * 같은 열쇠여야 한다 — 결재건에 적힌 `requested_by` 는 이 시스템의 `users.id` 라서 그대로 쓰면
  * **건너뛰기가 조용히 꺼진다**(`part-issue.ts` 의 `decidePartIssueApproval` 이 같은 까닭으로
  * 같은 값을 읽는다).
  *
+ * 🔴 **건너뛸 사람의 반쪽이다**(2026-10-26). 나머지 반쪽인 **원래 신청을 올린 사람**은 결재건이
+ * 아니라 **신청 표**에서 오고(`originalRequesterSubsByRequest`), 둘을 묶는 자리는 순수 함수
+ * `requesterSubsToSkip` 하나다 — 여기서 한쪽만 보면 서버는 건너뛴 단계를 화면만 「결재 대기」로
+ * 그린다(아무도 누르지 않을 칸이 영영 남아 있는 것처럼 보인다).
  * 🔵 줄이 없으면 `null` 로 둔다 — 그때는 건너뛰지 않는 것이 맞다(`isRouteStepSkippedForRequester`).
  */
 async function subsByUserId(userIds: readonly string[]) {
@@ -190,8 +198,20 @@ function linesOf(view: PartIssueView, request: PendingRequestRow | undefined): I
 type RouteStepRows = ReadonlyMap<string, Array<{ stepOrder: number; approverSub: string | null; approverName: string }>>;
 type DecisionStepRows = ReadonlyMap<string, ReadonlyMap<number, ApprovalStepDecision>>;
 
-/** 그림 한 장을 그리는 데 필요한 **곁자료 셋**. 부르는 자리 둘이 같은 묶음을 넘긴다. */
-type TrailContext = { routeSteps: RouteStepRows; requesterSubs: ReadonlyMap<string, string>; decisionSteps: DecisionStepRows };
+/**
+ * 그림 한 장을 그리는 데 필요한 **곁자료 넷**. 부르는 자리 둘이 같은 묶음을 넘긴다.
+ *
+ * 🔴 **번호 묶음이 둘인 까닭**: 건너뛸 사람이 둘이고 **사는 표가 다르다**(2026-10-26).
+ *  · `raisedBySubs` — 결재를 올린 사람. 결재건의 `requested_by`(`users.id`)로 찾는다.
+ *  · `originalRequesterSubs` — 원래 신청을 올린 사람. **신청 id** 로 찾는다.
+ * 열쇠가 다르므로 한 Map 으로 합칠 수 없다 — 합치면 둘 중 하나가 남의 번호를 집는다.
+ */
+type TrailContext = {
+  routeSteps: RouteStepRows;
+  raisedBySubs: ReadonlyMap<string, string>;
+  originalRequesterSubs: ReadonlyMap<string, string>;
+  decisionSteps: DecisionStepRows;
+};
 
 /**
  * 이 건이 타고 있는 판의 단계들 → 그림의 상자들.
@@ -209,12 +229,21 @@ type TrailContext = { routeSteps: RouteStepRows; requesterSubs: ReadonlyMap<stri
  * 🔵 줄이 없는 자리는 `null` 이 그대로 넘어가 「아직 안 누름」이 된다 — 여기서 가리지 않는다.
  */
 function trailOf(view: PartIssueView, ctx: TrailContext): IssueApprovalTrailStep[] {
-  const requesterSub = ctx.requesterSubs.get(view.requestedBy) ?? null;
+  /**
+   * 🔴 **건너뛸 사람 둘을 묶는 자리는 순수 함수 하나다**(2026-10-26). 여기서 배열을 손으로 적으면
+   *    서버가 쓰는 목록과 화면이 그리는 목록이 **따로 바뀌는 날**이 오고, 그때 화면은 「결재
+   *    대기」인데 아무도 그 칸을 누를 수 없는 그림이 된다(오류는 나지 않는다).
+   * 🔵 둘 다 못 구해도 그대로 그린다 — 그때는 한 칸도 건너뛰지 않은 그림이 참말이다.
+   */
+  const requesterSubs = requesterSubsToSkip(
+    ctx.raisedBySubs.get(view.requestedBy) ?? null,
+    ctx.originalRequesterSubs.get(view.requestId) ?? null,
+  );
   const decisions = ctx.decisionSteps.get(view.id) ?? null;
   return (ctx.routeSteps.get(view.routeId) ?? []).map((step) => ({
     stepOrder: step.stepOrder,
     approverName: step.approverName,
-    skipped: isRouteStepSkippedForRequester(step.approverSub, requesterSub),
+    skipped: isRouteStepSkippedForRequester(step.approverSub, requesterSubs),
     decidedBy: approvalStepActor(decisions?.get(step.stepOrder) ?? null),
   }));
 }
@@ -286,15 +315,17 @@ export async function readPartIssueApprovalScreen(viewer: { userId: string; appr
   ]);
 
   const all = [...toDecideViews, ...toExecuteViews, ...mineViews];
-  const [requestRows, routeSteps, requesterSubs, decisionSteps] = await Promise.all([
+  const [requestRows, routeSteps, raisedBySubs, originalRequesterSubs, decisionSteps] = await Promise.all([
     all.length === 0 ? Promise.resolve([] as PendingRequestRow[]) : listAllRequests(),
     routeStepsByRouteId(all.map((v) => v.routeId)),
     subsByUserId(all.map((v) => v.requestedBy)),
+    // 🔵 **신청의 id 로** 읽는다 — 결재를 올린 사람과 열쇠가 다르다(`TrailContext` 주석).
+    originalRequesterSubsByRequest(all.map((v) => v.requestId)),
     // 🔵 **결재건의 id 로** 읽는다 — 판이 아니라 그 건이 실제로 돈 줄이다(`decisionStepsByApprovalId`).
     decisionStepsByApprovalId(all.map((v) => v.id)),
   ]);
   const requests = new Map(requestRows.map((r) => [r.id, r]));
-  const ctx = { viewerUserId: viewer.userId, requests, routeSteps, requesterSubs, decisionSteps };
+  const ctx = { viewerUserId: viewer.userId, requests, routeSteps, raisedBySubs, originalRequesterSubs, decisionSteps };
 
   const toExecute = toExecuteViews.map((v) => toCard(v, ctx));
   const mineAll = mineViews.map((v) => toCard(v, ctx));
@@ -320,9 +351,10 @@ export async function readPartIssueApprovalScreen(viewer: { userId: string; appr
  * 쓰는 길을 그대로 재사용한다 — 판은 결재건의 `route_id` 로 읽고, 「건너뛴 자리」는 포털 번호 둘을
  * 서버에서 견주어 끝낸다(머리말).
  *
- * 🔴 **질의 수가 신청 건수와 무관하다**(결재건 1 · 판 단계 1 · 포털 번호 1 = 셋). 신청마다 물으면
- * 목록 한 번 그리는 데 왕복이 줄 수만큼 는다 — 위 `readPartIssueApprovalScreen` 과 같은 까닭이다.
- * 🔵 **결재건이 하나도 없으면 뒤 둘을 아예 부르지 않는다**(빈 Map 으로 끝). 결재선을 안 쓰는 날의
+ * 🔴 **질의 수가 신청 건수와 무관하다**(결재건 1 · 판 단계 1 · 올린 사람 번호 1 · 원 신청자 번호 1 ·
+ * 결재 줄 1 = 다섯). 신청마다 물으면 목록 한 번 그리는 데 왕복이 줄 수만큼 는다 — 위
+ * `readPartIssueApprovalScreen` 과 같은 까닭이다.
+ * 🔵 **결재건이 하나도 없으면 뒤 넷을 아예 부르지 않는다**(빈 Map 으로 끝). 결재선을 안 쓰는 날의
  *    `/requests` 는 조회가 **한 번도 늘지 않는다.**
  */
 export async function readPartIssueTrailsByRequest(requestIds: readonly string[]): Promise<Map<string, IssueApprovalTrailView>> {
@@ -335,14 +367,15 @@ export async function readPartIssueTrailsByRequest(requestIds: readonly string[]
   }
   if (picked.length === 0) return new Map();
 
-  const [routeSteps, requesterSubs, decisionSteps] = await Promise.all([
+  const [routeSteps, raisedBySubs, originalRequesterSubs, decisionSteps] = await Promise.all([
     routeStepsByRouteId(picked.map(([, v]) => v.routeId)),
     subsByUserId(picked.map(([, v]) => v.requestedBy)),
-    // 🔴 「승인 요청건」과 **같은 곁자료 셋**을 넘긴다 — 한쪽만 빠뜨리면 같은 결재가 두 화면에서
-    //    다른 얼굴이 된다(대리 표시가 한 화면에만 뜬다).
+    originalRequesterSubsByRequest(picked.map(([requestId]) => requestId)),
+    // 🔴 「승인 요청건」과 **같은 곁자료 넷**을 넘긴다 — 한쪽만 빠뜨리면 같은 결재가 두 화면에서
+    //    다른 얼굴이 된다(대리 표시가 한 화면에만 뜬다 · 건너뛴 칸이 한 화면에만 점선이 된다).
     decisionStepsByApprovalId(picked.map(([, v]) => v.id)),
   ]);
-  const ctx = { routeSteps, requesterSubs, decisionSteps };
+  const ctx = { routeSteps, raisedBySubs, originalRequesterSubs, decisionSteps };
 
   return new Map(
     picked.map(([requestId, view]) => [
