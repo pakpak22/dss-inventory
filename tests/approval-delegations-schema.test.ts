@@ -73,9 +73,11 @@ describe("칸", () => {
     assert.equal(columnOf("reason")?.default, "");
   });
 
-  it("🔴 「누가 열었나」와 「누구의 권한인가」는 다른 물음이다 — 🔵 지금은 같은 값이어도 칸은 따로 둔다", () => {
-    // 2026-10-21 결정으로 **결재권자 본인만** 위임을 만든다 — 그래서 `created_by_sub` 는
-    // 당분간 `delegator_sub` 와 언제나 같은 값이다. 그래도 칸을 합치지 않는 까닭이 아래 메시지다.
+  it("🔴 「누가 열었나」와 「누구의 권한인가」는 다른 물음이다 — 🔴 2026-10-26 부터 **실제로 갈린다**", () => {
+    // 2026-10-21 에는 **결재권자 본인만** 위임을 만들어서 `created_by_sub` 가 `delegator_sub` 와
+    // 언제나 같은 값이었다. 2026-10-26 에 **관리자가 남의 결재권도** 맡길 수 있게 넓히면서 둘이
+    // 갈렸고, 「본인이 맡겼나, 관리자가 세웠나」는 **그 둘을 맞대야만** 나온다. 칸을 합치면 그
+    // 구분이 영영 사라진다 — 쓰는 쪽(mutations)이 여기 누른 사람을 적는다.
     assert.equal(columnOf("created_by_sub")?.notNull, true, "값이 같다고 지우면 둘이 갈리는 날 그때까지 쌓인 기록에는 과거에 답이 없다");
     assert.equal(columnOf("created_by_name")?.notNull, true);
   });
@@ -115,6 +117,13 @@ describe("🔴 DB 가 막는 것", () => {
     const q = checkSql("approval_delegations_not_self");
     assert.ok(q, "approval_delegations_not_self 가 없으면 「대리인이 눌렀다」 판정이 본인에 대해 참이 될 수 있다");
     assert.match(q.sql, /"delegate_sub"\s*<>\s*"[^"]*"\."delegator_sub"/);
+    /**
+     * 🔴 **「맡기는 사람 ≠ 대리인」이지 「누른 사람 ≠ 대리인」이 아니다.** 그래서 관리자가 A 의
+     *    결재권을 **자기에게** 맡기는 줄(A → 관리자)은 **원래 통과한다** — 2026-10-26 에 그것을
+     *    막지 않기로 했다(사용자 결정). `created_by_sub` 를 끌어들인 CHECK 가 생기면 그 결정이
+     *    조용히 뒤집히므로 여기서 막아 둔다.
+     */
+    assert.doesNotMatch(q.sql, /created_by_sub/, "관리자가 자기를 대리인으로 세우는 것을 DB 가 막기 시작했다");
   });
 
   it("🔴 CHECK 에 자리표시자가 없다 — `$1` 이 구워지면 그 마이그레이션은 **적용 때** 깨진다", () => {

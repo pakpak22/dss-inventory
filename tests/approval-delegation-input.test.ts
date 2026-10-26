@@ -190,11 +190,40 @@ describe("③ 거르는 것 — 거절하고 **까닭을 말한다**", () => {
     assert.equal(long.reason.length, 500);
   });
 
-  it("🔴 **입력에 맡기는 사람을 섞어 보내도 결과에 실리지 않는다** — 받는 칸이 없다", () => {
-    // 🔴 남의 결재권을 넘기는 요청을 손으로 만드는 길이 여기서 끊긴다. 서버는 세션의 번호만 적는다.
+  it("🔴 **입력에 포털 번호를 섞어 보내도 결과에 실리지 않는다** — 받는 칸이 없다", () => {
+    // 🔴 2026-10-26 에 「누구의 결재권인가」가 생겼지만 그것은 **A/S 사용자 id** 다. 포털
+    //    번호(`…Sub`)를 받는 칸은 여전히 **하나도 없다** — 번호를 그대로 받으면 손으로 만든
+    //    요청이 **명부에 없는 사람의 결재권까지** 넘길 수 있고, 그 줄은 아무도 설명 못 한다.
     const r = validateDelegationInput(input({ delegatorSub: "sub-victim", delegatorName: "피해자", createdBySub: "sub-victim" }));
     assert.ok(r.ok);
-    assert.deepEqual(Object.keys(r).sort(), ["delegateUserId", "endDate", "endsAt", "ok", "reason", "startDate", "startsAt"]);
+    assert.deepEqual(
+      Object.keys(r).sort(),
+      ["delegateUserId", "delegatorUserId", "endDate", "endsAt", "ok", "reason", "startDate", "startsAt"],
+    );
+    // 🔴 섞어 보낸 번호가 「누구의 결재권인가」 칸으로 **새지 않는다** — 안 보낸 것과 같다.
+    assert.equal(r.delegatorUserId, null);
+  });
+
+  it("🔴 「누구의 결재권」은 **비면 본인**이다 — 안 보낸 화면도 그대로 돌아야 한다", () => {
+    // 🔴 관리자가 아닌 사람의 화면에는 그 고르개가 **아예 없다**(잠긴 고르개를 두지 않는다).
+    //    그 폼이 보내는 요청에는 칸이 없거나 빈 글자이고, 거절하면 **지금 되던 일이 막힌다.**
+    for (const over of [{}, { delegatorUserId: "" }, { delegatorUserId: "   " }, { delegatorUserId: undefined }]) {
+      const r = validateDelegationInput(input(over));
+      assert.ok(r.ok, JSON.stringify(over));
+      assert.equal(r.delegatorUserId, null, JSON.stringify(over));
+    }
+  });
+
+  it("🔴 값이 **있는데 uuid 가 아니면** 거절한다 — 조용히 본인으로 되돌리지 않는다", () => {
+    // 🔴 되돌리면 「남의 결재권을 맡기려 했는데 내 것이 맡겨진」 줄이 오류 없이 하나 생긴다.
+    for (const bad of ["kim", "00000000", 42, {}]) {
+      const r = validateDelegationInput(input({ delegatorUserId: bad }));
+      assert.equal(r.ok, false, String(bad));
+      assert.equal(r.code, "INVALID_INPUT", String(bad));
+    }
+    const ok = validateDelegationInput(input({ delegatorUserId: uuid("9") }));
+    assert.ok(ok.ok);
+    assert.equal(ok.delegatorUserId, uuid("9"));
   });
 });
 

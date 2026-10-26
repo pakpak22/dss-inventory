@@ -5,6 +5,7 @@ import type { ApprovalDelegationPeriod } from "../src/lib/approval/delegation";
 import {
   canRevokeDelegation,
   delegationNotice,
+  delegationNoticeFlag,
   delegationState,
   delegationStateBadge,
   formatDelegationPeriod,
@@ -131,7 +132,30 @@ describe("⑤ 돌아왔을 때의 한 줄", () => {
     assert.match(n.text, /그대로 남습니다/);
   });
 
-  it("꼬리표가 없거나 `1` 이 아니면 아무 말도 하지 않는다", () => {
+  it("🔴 **남의 결재권**을 세우거나 거둔 뒤에는 다른 말을 한다 — 「내 차례」는 거짓말이다", () => {
+    // 🔴 2026-10-26 에 관리자가 남의 결재권도 맡길 수 있게 넓혔다. 문구를 하나로 두면 관리자가
+    //    남의 것을 세운 뒤 「내 차례를 그분이 대신 누른다」는 **틀린 말**을 읽는다.
+    const made = delegationNotice({ delegated: delegationNoticeFlag(true) });
+    assert.ok(made);
+    assert.match(made.text, /그 분의 결재권/);
+    // 🔴 세운 사람은 위의 두 목록 어디에도 안 들어간다 — 어디서 찾을지 일러 주지 않으면 못 찾는다.
+    assert.match(made.text, /모두의 결재권 위임/);
+    assert.doesNotMatch(made.text, /내 차례/, "남의 것을 세웠는데 「내 차례」라고 말한다");
+
+    const revoked = delegationNotice({ delegationRevoked: delegationNoticeFlag(true) });
+    assert.ok(revoked);
+    assert.match(revoked.text, /그 분의 위임을 되돌렸습니다/);
+    assert.doesNotMatch(revoked.text, /내 차례/);
+  });
+
+  it("🔵 **본인 것이면 꼬리표가 `1`** 이고, 그때 글자는 그대로다 — 가장 흔한 줄이 안 바뀌었다", () => {
+    assert.equal(delegationNoticeFlag(false), "1");
+    assert.equal(delegationNoticeFlag(true), "other");
+    assert.match(delegationNotice({ delegated: delegationNoticeFlag(false) })!.text, /내가 직접 누르는 길/);
+  });
+
+  it("꼬리표가 없거나 아는 값이 아니면 아무 말도 하지 않는다", () => {
+    assert.equal(delegationNotice({ delegated: "others" }), null, "아는 값만 받는다 — 비슷한 글자에 걸리지 않는다");
     assert.equal(delegationNotice({}), null);
     assert.equal(delegationNotice({ delegated: "0" }), null);
     assert.equal(delegationNotice({ delegated: ["1", "1"] }), null, "주소를 손으로 고쳐도 화면이 깨지지 않는다");

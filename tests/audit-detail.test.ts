@@ -191,17 +191,27 @@ const SAMPLES: Record<AuditAction, Record<string, unknown> | null> = {
     steps: [{ stepOrder: 1, approverUserId: "33333333-3333-4333-8333-333333333333", approverName: "김철수", approverRole: "ADMIN" }],
     previousSteps: [{ stepOrder: 1, approverUserId: "44444444-4444-4444-8444-444444444444", approverName: "이영희", approverRole: "ADMIN" }],
   },
-  // src/lib/approval/delegation-mutations.ts:116
+  // src/lib/approval/delegation-mutations.ts — 🔵 `delegatorName`·`onBehalf` 는 2026-10-26 에
+  // 더했다(관리자가 남의 결재권도 맡긴다). 본보기는 **본인이 맡긴 줄**이고, 관리자가 세운 줄은
+  // 아래 「누구 자리였나」 시험이 따로 본다.
   APPROVAL_DELEGATION_CREATED: {
     delegateName: "김철수",
+    delegatorName: "홍길동",
+    onBehalf: false,
     startDate: "2026-10-24",
     endDate: "2026-10-25",
     startsAt: "2026-10-23T15:00:00.000Z",
     endsAt: "2026-10-25T15:00:00.000Z",
     reason: "출장",
   },
-  // src/lib/approval/delegation-mutations.ts:185
-  APPROVAL_DELEGATION_REVOKED: { delegateName: "김철수", endDate: "2026-10-25", revokedAt: "2026-10-23T05:00:00.000Z" },
+  // src/lib/approval/delegation-mutations.ts
+  APPROVAL_DELEGATION_REVOKED: {
+    delegateName: "김철수",
+    delegatorName: "홍길동",
+    onBehalf: false,
+    endDate: "2026-10-25",
+    revokedAt: "2026-10-23T05:00:00.000Z",
+  },
   // src/lib/oh/mutations.ts:390 — 🔵 2026-10-15 에 기종 코드를 없애 `code` 칸이 **없다**
   OH_TEMPLATE_SAVED: {
     created: false,
@@ -437,6 +447,35 @@ describe("변경 이력 「내용」 칸 (audit-detail.ts)", () => {
     assert.equal(joined("OH_TEMPLATE_MODEL_LINKED", SAMPLES.OH_TEMPLATE_MODEL_LINKED), "제품 모델 「예시 기종」 연결");
     assert.equal(joined("OH_TEMPLATE_MODEL_UNLINKED", SAMPLES.OH_TEMPLATE_MODEL_UNLINKED), "제품 모델 「예시 기종」 연결 해제");
     assert.equal(joined("STOCK_REQUEST_CANCELLED", SAMPLES.STOCK_REQUEST_CANCELLED), "사용 · No. 61 예시 부품 ×1 · A/S 에서 거둠 (요청 번호 as-req-0001)");
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* 4-1. 🔴 결재권 위임 — 「누구 자리였나」 (2026-10-26)                */
+  /* ---------------------------------------------------------------- */
+  it("🔴 관리자가 **남의** 결재권을 맡긴 줄은 **누구 자리였는지**를 적는다", () => {
+    // 🔴 2026-10-26 에 「관리자가 남의 결재권도 맡긴다」로 넓혔다. 글자를 안 고치면 그 줄이
+    //    「내 결재권을 맡김」이라고 **거짓말을 한다** — 이력은 제3자가 되짚는 자리라 더 나쁘다.
+    assert.equal(
+      joined("APPROVAL_DELEGATION_CREATED", { ...SAMPLES.APPROVAL_DELEGATION_CREATED, onBehalf: true }),
+      ["홍길동 님의 결재권을 김철수 님에게 2026-10-24 ~ 2026-10-25 동안 맡김 (관리자 지정)", "사유: 출장"].join("\n"),
+    );
+    assert.equal(
+      joined("APPROVAL_DELEGATION_REVOKED", { ...SAMPLES.APPROVAL_DELEGATION_REVOKED, onBehalf: true }),
+      "홍길동 님이 김철수 님에게 맡긴 위임(2026-10-25까지)을 되돌림 (관리자)",
+    );
+  });
+
+  it("🔵 **옛 줄은 그때 참이던 말 그대로** 보인다 — 칸 둘이 없어도 글자가 안 깨진다", () => {
+    // 🔵 감사 로그는 고쳐 넣지 않는다(append-only). 2026-10-26 이전 줄에는 `delegatorName`
+    //    도 `onBehalf` 도 없고, 그때는 **본인만** 맡길 수 있었으니 「내 결재권」이 참이었다.
+    assert.equal(
+      joined("APPROVAL_DELEGATION_CREATED", { delegateName: "김철수", startDate: "2026-10-24", endDate: "2026-10-25", reason: "" }),
+      "김철수 님에게 2026-10-24 ~ 2026-10-25 동안 내 결재권을 맡김",
+    );
+    assert.equal(
+      joined("APPROVAL_DELEGATION_REVOKED", { delegateName: "김철수", endDate: "2026-10-25" }),
+      "김철수 님에게 맡긴 위임(2026-10-25까지)을 되돌림",
+    );
   });
 
   it("🔵 부품 수정은 바뀐 칸마다 한 줄이고 금액에 통화 기호가 붙는다", () => {

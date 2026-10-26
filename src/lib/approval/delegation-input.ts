@@ -107,14 +107,33 @@ export function seoulDateText(at: Date): string {
 /* ------------------------------------------------------------------ */
 
 /**
- * 화면이 보내는 값. 🔴 **「누구의 결재권인가」를 담는 칸이 없다** — 그 값은 서버가 세션에서
- * 꺼내 넣는다(`src/db/schema/approval-delegations.ts` 의 `created_by_sub` 주석). 칸이 없으면
- * 다음 사람이 화면 값을 믿어 넣을 수도 없고, 손으로 만든 요청이 남의 결재권을 넘길 길도 없다.
+ * 화면이 보내는 값.
  *
- * 🔵 대신할 사람은 **A/S 사용자 id** 로 온다. 포털 번호는 화면에 내려보내지 않으므로
+ * ── 🔴 2026-10-26: 「누구의 결재권인가」 칸이 생겼다 ────────────────────
+ * 그 전에는 이 타입에 그 칸이 **아예 없었고**, 서버가 세션에서 꺼내 넣었다. 자리를 갑자기
+ * 비우게 된 사람(병가·사고)은 본인이 설정할 수 없어서, **관리자가 남의 결재권도** 맡길 수
+ * 있게 넓혔다(사용자 결정. A/S 를 같은 날 같은 방식으로 바꿨다).
+ *
+ * 🔴 **그래도 포털 번호(`sub`)는 끝까지 화면에서 오지 않는다.** 여기 오는 것은 **A/S 사용자
+ * id** 이고, 번호로 푸는 일은 서버가 명부를 보고 한다(`resolveDelegatorFromDirectory`).
+ * 번호를 그대로 받는 칸을 두면 손으로 만든 요청이 **명부에 없는 사람의 결재권까지** 넘길 수
+ * 있다 — 그때는 아무도 그 줄을 설명할 수 없다.
+ * 🔴 **인가는 이 파일이 하지 않는다.** 「남의 것을 맡길 수 있나」는 역할 사다리로 가르고, 그
+ * 울타리는 `./delegation-mutations.ts` 안에 있다(서버 액션은 지금도 `requireSession` 이다).
+ *
+ * 🔵 대신할 사람도 **A/S 사용자 id** 로 온다. 포털 번호는 화면에 내려보내지 않으므로
  *    (`./directory.ts` 머리말) 번호로 푸는 일은 서버가 명부를 보고 한다.
  */
 export type DelegationFormInput = {
+  /**
+   * 🔴 **누구의 결재권인가** — A/S 사용자 id. **비었으면 본인**이다.
+   *
+   * 🔵 비움을 본인으로 읽는 까닭이 둘이다. ① 관리자가 아닌 사람의 화면에는 이 고르개가
+   *    **아예 그려지지 않는다**(잠긴 고르개를 두지 않는다) — 그 화면이 보내는 요청에는 이
+   *    칸이 없다. ② 세션에는 포털 번호만 있고 **그 사람의 A/S id 는 모른다.** 그래서
+   *    「본인」을 가리키는 A/S id 를 화면이 적어 보낼 방법이 애초에 없다.
+   */
+  delegatorUserId?: string;
   delegateUserId: string;
   /** `YYYY-MM-DD`. 그날 **한국 시각 0시**부터. */
   startDate: string;
@@ -135,6 +154,13 @@ export type DelegationInputIssueCode =
 export type ValidateDelegationInputResult =
   | {
       ok: true;
+      /**
+       * 🔴 **누구의 결재권인가** — A/S 사용자 id, 또는 `null`(= 본인).
+       *
+       * 🔴 여기 담기는 것은 **아직 아무 권한도 확인되지 않은 값**이다. 「그 사람이 명부에
+       *    있나」·「남의 것을 맡길 자격이 있나」는 `resolveDelegatorFromDirectory` 가 가른다.
+       */
+      delegatorUserId: string | null;
       delegateUserId: string;
       /** 사람이 적은 그대로 — 화면에 되돌려 보여 줄 때 쓴다. */
       startDate: string;
@@ -160,7 +186,21 @@ export function validateDelegationInput(input: unknown): ValidateDelegationInput
   if (typeof input !== "object" || input === null || Array.isArray(input)) {
     return { ok: false, code: "INVALID_INPUT", message: "위임 입력을 확인할 수 없습니다." };
   }
-  const { delegateUserId, startDate, endDate, reason } = input as Record<string, unknown>;
+  const { delegatorUserId, delegateUserId, startDate, endDate, reason } = input as Record<string, unknown>;
+
+  /**
+   * 🔴 **비었으면 본인이다** — 「안 골랐다」가 아니라 **기본값**이라 거절하지 않는다. 관리자가
+   *    아닌 사람의 화면에는 이 칸이 아예 없고(고르개를 그리지 않는다), 그 요청도 그대로 돌아야
+   *    한다. 🔴 값이 **있는데 uuid 가 아니면** 거절한다 — 조용히 본인으로 되돌리면 「남의
+   *    결재권을 맡기려 했는데 내 것이 맡겨진」 줄이 오류 없이 하나 생긴다.
+   */
+  const delegator =
+    delegatorUserId === undefined || delegatorUserId === null || (typeof delegatorUserId === "string" && delegatorUserId.trim() === "")
+      ? null
+      : delegatorUserId;
+  if (delegator !== null && !isUuidText(delegator)) {
+    return { ok: false, code: "INVALID_INPUT", message: "누구의 결재권인지 확인할 수 없습니다. 목록에서 다시 고르십시오." };
+  }
 
   if (typeof delegateUserId !== "string" || delegateUserId.trim() === "") {
     return { ok: false, code: "MISSING_DELEGATE", message: "대신할 분을 고르십시오." };
@@ -194,6 +234,7 @@ export function validateDelegationInput(input: unknown): ValidateDelegationInput
 
   return {
     ok: true,
+    delegatorUserId: delegator,
     delegateUserId,
     startDate: startDate as string,
     endDate: endDate as string,
@@ -202,6 +243,115 @@ export function validateDelegationInput(input: unknown): ValidateDelegationInput
     startsAt,
     endsAt,
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* 「누구의 결재권인가」를 명부에서 풀기 (2026-10-26)                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 🔴 **누구의 결재권을 맡기는가** — 포털 번호까지 확정된 결과.
+ *
+ * 🔵 `isSelf` 를 함께 돌려주는 까닭: 「본인이 맡겼나, 관리자가 대신 세웠나」는 표에서
+ *    `created_by_sub` 와 `delegator_sub` 를 맞대어야 나오는데, 그 판정을 쓰는 자리가 셋이다
+ *    (감사 기록 · 화면 글자 · 「자기 것이면 누구나」 울타리). 세 곳이 각자 번호를 견주면
+ *    그중 하나가 뒤집히는 날이 오고, 뒤집혀도 오류는 나지 않는다.
+ */
+export type ResolvedDelegator = { name: string; sub: string; isSelf: boolean };
+
+export type ResolveDelegatorResult =
+  | { ok: true; delegator: ResolvedDelegator }
+  | {
+      ok: false;
+      code: "DIRECTORY_UNREACHABLE" | "UNKNOWN_DELEGATOR" | "NO_SSO_SUBJECT" | "FORBIDDEN";
+      message: string;
+    };
+
+/** 명부에서 못 찾은 결재권자. 🔵 대신할 분 쪽과 **같은 말투**다 — 「없는 사람」이 아니라 「지금 못 찾는다」. */
+export const UNKNOWN_DELEGATOR_MESSAGE =
+  "결재권자를 지금 A/S 명부에서 찾을 수 없습니다. 목록을 새로 불러온 뒤 다시 고르십시오.";
+
+/**
+ * 🔴 **남의 결재권을 맡기려 했는데 자격이 없다.** 화면에서는 관리자가 아니면 고르개를 아예
+ * 그리지 않으므로, 이 문구가 보이는 것은 **손으로 만든 요청**이거나 보는 사이에 역할이 내려간
+ * 경우뿐이다. 🔵 그래도 사람 말로 적는다 — 「알 수 없는 오류」로 뭉개면 그때 무슨 일이
+ * 일어났는지 아무도 되짚지 못한다(CLAUDE.md 10절).
+ */
+export const DELEGATE_FOR_OTHERS_FORBIDDEN_MESSAGE =
+  "남의 결재권은 관리자만 맡길 수 있습니다. 본인 결재권은 그대로 맡기실 수 있습니다.";
+
+/**
+ * 포털 번호가 없는 **결재권자**를 거절하는 문구. 🔴 대신할 분 쪽(`noSsoDelegateMessage`)과
+ * 글자를 나눠 둔다 — 두 칸 중 **어느 쪽이 막혔는지**를 말해 주지 않으면 관리자는 멀쩡한
+ * 대리인을 몇 번 바꿔 고르다 포기한다.
+ */
+export function noSsoDelegatorMessage(name: string): string {
+  return `${name} 님은 아직 통합 로그인으로 들어온 적이 없어 그분의 결재권을 맡길 수 없습니다. 그 분이 통합 로그인으로 한 번 들어온 뒤에 다시 고르십시오.`;
+}
+
+/**
+ * 화면이 보낸 **「누구의 결재권인가」**(A/S 사용자 id, 또는 `null` = 본인)를 풀어 **포털 번호와
+ * 이름**을 얻고, 그 자리에서 **인가까지 가른다**.
+ *
+ * ── 🔴 2026-10-26: 「본인만」에서 「본인 또는 관리자」로 넓혔다 ──────────
+ * 그 전에는 서버가 세션의 번호를 그대로 적었다. 자리를 갑자기 비우게 된 사람(병가·사고)은
+ * **본인이 설정할 수 없다**는 것이 바뀐 까닭이다. 🔴 **좁히는 변경이 아니다** — 지금까지
+ * 자기 결재권을 맡길 수 있던 사람은 역할과 무관하게 그대로 맡길 수 있다.
+ *
+ * ── 🔴 「본인인가」는 **포털 번호로** 가른다 ────────────────────────────
+ * 화면이 보내는 것은 A/S 번호이고 세션이 아는 것은 포털 번호라, 번호를 풀기 **전에는 견줄
+ * 수조차 없다.** 그래서 관리자가 고르개에서 **자기 이름을 골라도** 그 줄은 「본인 위임」이다 —
+ * 비워 보낸 것과 같은 결과가 되어야 하고, 그 판정이 여기 한 곳에 있다.
+ *
+ * ── 🔵 자격을 **맨 마지막에** 묻는 까닭 ────────────────────────────────
+ * 명부에서 풀기 → 번호 없음 → 자격 차례다. 자격을 먼저 물으면 관리자가 아닌 사람이 **자기
+ * 번호를 골라 보냈을 때** 거절당한다 — 「본인 것이면 누구나」가 깨진다. 🔵 명부 자체는 이미
+ * 로그인한 모두에게 내려가므로(대신할 분 고르개), 이 차례가 새로 흘리는 것은 없다.
+ *
+ * @param delegatorUserId 화면이 고른 **A/S 사용자 id**. `null` 이면 **본인**이다.
+ * @param actor 지금 로그인한 사람의 이름과 **포털 번호**. 🔴 세션에서 꺼낸 값이어야 한다.
+ * @param mayDelegateForOthers **남의 결재권까지 맡길 수 있는가.** 🔴 부르는 쪽
+ *   (`./delegation-mutations.ts`)이 역할 사다리(`roleAtLeast(role, "ADMIN")`)로 셈해 넘긴다 —
+ *   이 파일은 순수해야 해서 역할표를 끌어오지 않는다. 🔴 화면이 보낸 값을 여기 넘기지 마라.
+ */
+export function resolveDelegatorFromDirectory(
+  directory: AsUserDirectory,
+  delegatorUserId: string | null,
+  actor: { name: string; sub: string },
+  mayDelegateForOthers: boolean,
+): ResolveDelegatorResult {
+  // 비워 보낸 것 = 본인. 🔵 명부를 못 받아 왔어도 **본인 위임은 선다** — 이름도 번호도 세션에
+  //    있고, 명부가 필요한 것은 대신할 분 쪽이다(그쪽이 따로 거절한다).
+  if (delegatorUserId === null) {
+    return { ok: true, delegator: { name: actor.name, sub: actor.sub, isSelf: true } };
+  }
+
+  if (directory.status !== "ok") {
+    return { ok: false, code: "DIRECTORY_UNREACHABLE", message: DIRECTORY_UNREACHABLE_SAVE_MESSAGE };
+  }
+
+  const user = directory.users.find((candidate) => candidate.id === delegatorUserId);
+  if (!user) return { ok: false, code: "UNKNOWN_DELEGATOR", message: UNKNOWN_DELEGATOR_MESSAGE };
+  // 🔴 번호가 없으면 그 사람의 결재권이라는 것을 **가리킬 수가 없다** — 결재 판정의 열쇠가
+  //    포털 번호이기 때문이다(`./directory.ts` 머리말). 세워 봐야 아무 일도 일어나지 않는다.
+  if (user.ssoSubject === null) {
+    return { ok: false, code: "NO_SSO_SUBJECT", message: noSsoDelegatorMessage(user.name) };
+  }
+
+  /**
+   * 🔴 자기 번호를 골랐으면 **본인 위임**이다 — 자격을 묻지 않는다(머리말).
+   * 🔵 이름은 **세션의 것**을 쓴다. 이 시스템에 로그인한 그 사람의 이름이고, 「그때 누구였나」를
+   *    남기려고 사본으로 적는 칸이다(표 쪽 머리말). 명부와 갈리면 로그인한 쪽이 맞다.
+   */
+  if (user.ssoSubject === actor.sub) {
+    return { ok: true, delegator: { name: actor.name, sub: actor.sub, isSelf: true } };
+  }
+
+  // 🔴 여기부터가 **넓힌 자리**다. 남의 결재권은 관리자만.
+  if (!mayDelegateForOthers) {
+    return { ok: false, code: "FORBIDDEN", message: DELEGATE_FOR_OTHERS_FORBIDDEN_MESSAGE };
+  }
+  return { ok: true, delegator: { name: user.name, sub: user.ssoSubject, isSelf: false } };
 }
 
 /* ------------------------------------------------------------------ */
@@ -222,8 +372,13 @@ export type ResolveDelegateResult =
 /**
  * 🔴 **자기 자신에게 맡기는 줄은 사람에게 말로 알려 준다.** DB CHECK
  * (`approval_delegations_not_self`)도 막지만 그 오류를 그대로 보이면 「알 수 없는 오류」가 된다.
+ *
+ * 🔴 **「결재권자 본인」이지 「누르는 사람」이 아니다**(2026-10-26). 관리자가 남의 결재권도
+ * 맡길 수 있게 되면서, 막히는 것은 **A 의 결재권을 A 에게** 맡기는 뜻 없는 줄 하나뿐이다 —
+ * 관리자가 **자기를 대리인으로** 세우는 것(A → 관리자)은 막지 않기로 했다(사용자 결정).
+ * 그래서 문구에서 「자기 자신에게」라는 말을 걷었다: 관리자에게는 거짓말이 된다.
  */
-export const SELF_DELEGATION_MESSAGE = "자기 자신에게는 결재권을 맡길 수 없습니다. 대신할 다른 분을 고르십시오.";
+export const SELF_DELEGATION_MESSAGE = "결재권자 본인을 대신할 분으로 고를 수는 없습니다. 다른 분을 고르십시오.";
 
 /** 명부에서 사라진 사람. 🔵 「없는 사람」이 아니라 「지금 못 찾는다」로 말한다. */
 export const UNKNOWN_DELEGATE_MESSAGE = "고르신 분을 지금 A/S 명부에서 찾을 수 없습니다. 목록을 새로 불러온 뒤 다시 고르십시오.";
@@ -245,14 +400,17 @@ export function noSsoDelegateMessage(name: string): string {
  * 않는다**(그 사람이 로그인해도 우리가 알아볼 수 없다). 보는 화면에서 「모른다」로 적는 것과
  * 정반대의 판단인데, 여기서 하는 것은 **새 사실을 만드는 일**이기 때문이다.
  *
- * ── 🔴 자기 자신인지는 **포털 번호로** 가른다 ───────────────────────────
- * 화면이 보내는 것은 A/S 번호이고 세션이 아는 것은 포털 번호라, 번호를 풀기 **전에는 견줄
- * 수조차 없다.** 그래서 이 순서다(풀기 → 자기 자신 → 번호 없음이 아니라, 풀기 → 번호 없음 →
- * 자기 자신). 🔵 번호가 없는 사람은 애초에 자기 자신일 수 없다 — 세션이 있다는 것은 포털로
- * 들어왔다는 뜻이다.
+ * ── 🔴 「같은 사람인가」는 **포털 번호로** 가른다 ────────────────────────
+ * 화면이 보내는 것은 A/S 번호이고 번호 열쇠는 포털 번호라, 번호를 풀기 **전에는 견줄 수조차
+ * 없다.** 그래서 이 순서다(풀기 → 같은 사람 → 번호 없음이 아니라, 풀기 → 번호 없음 → 같은
+ * 사람). 🔵 번호가 없는 사람은 애초에 결재권자일 수 없다 — 결재 판정의 열쇠가 그 번호다.
  *
- * @param delegatorSub 맡기는 사람(= 지금 로그인한 사람)의 **포털 번호**. 🔴 세션에서 꺼낸
- *   값이어야 한다. 화면이 보낸 값을 넘기면 남의 결재권을 넘기는 요청을 손으로 만들 수 있다.
+ * @param delegatorSub **결재권자**의 포털 번호. 🔴 **화면이 보낸 값을 그대로 넘기지 마라** —
+ *   `resolveDelegatorFromDirectory` 를 지나 **자격까지 확인된** 번호여야 한다. 그 함수를 건너
+ *   뛰고 여기 날것을 넘기면 남의 결재권을 넘기는 요청이 오류 없이 통과한다.
+ *   🔵 2026-10-26 전까지는 「= 지금 로그인한 사람」이었다. 관리자가 남의 결재권도 맡길 수 있게
+ *   넓히면서 **둘이 갈렸고**, 그래서 아래 「자기 자신」 판정도 **누르는 사람이 아니라 결재권자**를
+ *   기준으로 한다 — 관리자가 **자기를 대리인으로** 세우는 것은 막지 않기로 했다(사용자 결정).
  */
 export function resolveDelegateFromDirectory(
   directory: AsUserDirectory,

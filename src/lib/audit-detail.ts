@@ -474,17 +474,42 @@ export function auditDetailLines(action: AuditAction, detail: Record<string, unk
      * 보여야 한다.** 표의 줄은 지워지지 않지만 그것을 보는 화면은 본인 것뿐이라, 나중에 「이 건은 왜
      * 본인이 아닌 사람이 눌렀나」를 제3자가 되짚는 자리가 이력이다.
      *
+     * ── 🔴 2026-10-26: 「내 결재권」이 언제나 참이 아니게 됐다 ──────────────
+     * 관리자가 **남의 결재권도** 맡기고 거둘 수 있게 넓혔다. 그래서 `onBehalf` 가 참인 줄에는
+     * **누구 자리였는지**를 이름으로 적는다 — 「내 결재권을 맡김」으로 그대로 두면 **그 줄이
+     * 거짓말을 한다.** 되짚기가 한 겹 깊어졌기 때문이다: 이제 「그 위임을 누가 세웠나」까지 봐야
+     * 설명이 끝난다. 🔵 본인이 맡긴 줄의 글자는 그대로다(가장 흔한 줄이고, 바꾸면 옛 줄과 새 줄이
+     * 다른 말을 하게 된다).
+     * 🔵 옛 줄에는 `delegatorName` 도 `onBehalf` 도 없다 — 감사 로그는 고쳐 넣지 않으므로
+     *    `onBehalf` 가 거짓으로 읽혀 **그때 참이었던 말**(「내 결재권」)이 그대로 보인다.
+     *
      * 🔵 기간은 **사람이 적었던 날짜 그대로** 적는다 — `endsAt`(다음 날 0시)을 그리면 「26일까지
      *    맡겼네」로 읽힌다(실제로 적은 것은 25일까지다). 그래서 쓰는 쪽이 날짜 두 칸을 함께 남긴다.
      */
     case "APPROVAL_DELEGATION_CREATED": {
-      const lines: AuditDetailLine[] = [text(`${s(d.delegateName)} 님에게 ${formatDelegationPeriod(s(d.startDate), s(d.endDate))} 동안 내 결재권을 맡김`)];
+      const period = formatDelegationPeriod(s(d.startDate), s(d.endDate));
+      const lines: AuditDetailLine[] = [
+        text(
+          d.onBehalf
+            ? `${s(d.delegatorName)} 님의 결재권을 ${s(d.delegateName)} 님에게 ${period} 동안 맡김 (관리자 지정)`
+            : `${s(d.delegateName)} 님에게 ${period} 동안 내 결재권을 맡김`,
+        ),
+      ];
       // 사유는 선택이다 — 비면 줄을 그리지 않는다(「없음」을 지어내지 않는다).
       if (d.reason) lines.push(text(`사유: ${s(d.reason)}`));
       return { lines, unknown: false };
     }
     case "APPROVAL_DELEGATION_REVOKED":
-      return { lines: [text(`${s(d.delegateName)} 님에게 맡긴 위임(${s(d.endDate)}까지)을 되돌림`)], unknown: false };
+      return {
+        lines: [
+          text(
+            d.onBehalf
+              ? `${s(d.delegatorName)} 님이 ${s(d.delegateName)} 님에게 맡긴 위임(${s(d.endDate)}까지)을 되돌림 (관리자)`
+              : `${s(d.delegateName)} 님에게 맡긴 위임(${s(d.endDate)}까지)을 되돌림`,
+          ),
+        ],
+        unknown: false,
+      };
 
     /* ── O/H 템플릿 ────────────────────────────────────────────── */
     // O/H 부품 템플릿 (조각 8a) — 🔴 줄을 통째로 갈아 끼우는 저장이라, **이 줄만 읽고도 그때 무엇이

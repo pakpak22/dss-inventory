@@ -1,10 +1,18 @@
 import "server-only";
-import { and, desc, eq, gt, isNull } from "drizzle-orm";
+import { and, desc, eq, gt, isNotNull, isNull, lte, or } from "drizzle-orm";
 import { db } from "@/db/client";
 import { approvalDelegations } from "@/db/schema/approval-delegations";
+import type { Role } from "@/db/schema/users";
 import { actingApproverSubs, delegateSubsFor, isActiveDelegation, type ActingApproverSubs } from "./delegation";
+import { mayManageOthersDelegations } from "./delegation-authority";
 import { seoulDateText, seoulEndDateText } from "./delegation-input";
-import { canRevokeDelegation, delegationState, type DelegationRowView } from "./delegation-screen";
+import {
+  canRevokeDelegation,
+  delegationState,
+  type AllDelegationRowView,
+  type AllDelegationsView,
+  type DelegationRowView,
+} from "./delegation-screen";
 
 /**
  * ============================================================================
@@ -144,9 +152,15 @@ function toRowView(
   },
   now: Date,
   /**
-   * 🔴 **내가 맡긴 줄인가.** 거짓이면 `canRevoke` 는 상태와 무관하게 거짓이다 — **되돌리기는
-   * 맡긴 사람만** 할 수 있고(조건절의 `delegator_sub = 내 번호`), 받은 사람에게 참으로 실어
-   * 보내면 다음 사람이 그 칸을 보고 **눌러도 거절당하는 단추**를 그린다.
+   * 🔴 **내가 맡긴 줄인가.** 거짓이면 `canRevoke` 는 상태와 무관하게 거짓이다 — **대리인은 제가
+   * 맡은 위임을 거둘 수 없고**(맡은 사람이 스스로 자격을 버리면 맡긴 사람이 모르는 사이에 그
+   * 차례가 다시 선다), 참으로 실어 보내면 다음 사람이 그 칸을 보고 **눌러도 거절당하는 단추**를
+   * 그린다.
+   *
+   * 🔵 2026-10-26 에 되돌리기가 **본인 또는 `ADMIN`** 으로 넓어졌지만 이 칸은 그대로다 —
+   *    관리자인 대리인은 「모두의 결재권 위임」 묶음에서 **제 역할로** 거두고, 그쪽은 `canRevoke`
+   *    를 따로 셈한다(`toAllRowView`). 여기서 역할을 보기 시작하면 「받은 것도 거둘 수 있다」가
+   *    되어 위 울타리가 화면에서만 풀린다.
    */
   mine: boolean,
 ): DelegationRowView {
@@ -239,4 +253,151 @@ export async function listDelegationsIActFor(delegateSub: string, now: Date = ne
    */
   // 🔵 맡긴 사람이 아니므로 `canRevoke` 는 거짓이다 — 되돌리기는 맡긴 사람만 할 수 있다(toRowView 주석).
   return rows.filter((row) => isActiveDelegation(row, now)).map((row) => toRowView(row, now, false));
+}
+
+/* ------------------------------------------------------------------ */
+/* 모두의 결재권 위임 — 관리 권한이 있는 사람만 (2026-10-26)              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 🔴 **끝난 줄을 몇 개까지 가져올까.** 살아 있는 줄에는 상한을 두지 않는다 — 그 집합은 「지금
+ * 자리를 비운 사람 수」라 본질적으로 작고, 🔴 **상한에 밀려 되돌려야 할 줄이 안 보이는 것이 이
+ * 묶음에서 가장 나쁜 일**이다(이 묶음을 더한 까닭 자체가 「관리자가 방금 세운 줄을 찾아 거둘
+ * 길이 없다」였다). 상한이 필요한 쪽은 끝난 줄뿐이다 — 이 표는 줄을 지우지 않아(표 쪽 머리말)
+ * 해가 갈수록 쌓이기만 한다.
+ *
+ * 🔵 50 에 깊은 뜻은 없다. 「한 화면에서 훑을 수 있는 양」이고(위 `DELEGATION_LIST_LIMIT` 과 같은
+ * 자), 더 뒤까지 찾아야 하면 변경 이력이 영구 기록이다 — 맡길 때도 거둘 때도 한 줄씩 남는다.
+ * 잘렸다는 사실은 화면이 말해 준다.
+ */
+const FINISHED_DELEGATION_LIMIT = 50;
+
+/**
+ * 🔴 **거절은 빈 목록이 아니라 `ok: false`** 다(아래 함수 머리말). 🔵 `view` 의 모양은 화면 쪽
+ * 순수 모듈에 있다 — 화면이 받는 모양이고, 그 파일은 `server-only` 를 끌어오지 않는다.
+ *
+ * 🔵 `live` 집합은 되돌리기가 받아 주는 집합과 **정확히 같다**(`revoked_at IS NULL AND
+ *    ends_at > now`). 그래서 그 목록의 모든 줄에 [되돌리기]가 붙고, 눌러도 거절당하는 줄이
+ *    섞이지 않는다.
+ */
+export type AllDelegationsResult = { ok: true; view: AllDelegationsView } | { ok: false; reason: "FORBIDDEN" };
+
+/** 한 줄이 필요로 하는 칸 — 두 조회가 **같은 모양**을 돌려주어야 화면이 같은 부품으로 그린다. */
+const ALL_ROW_COLUMNS = {
+  id: approvalDelegations.id,
+  delegatorSub: approvalDelegations.delegatorSub,
+  delegateSub: approvalDelegations.delegateSub,
+  delegatorName: approvalDelegations.delegatorName,
+  delegateName: approvalDelegations.delegateName,
+  startsAt: approvalDelegations.startsAt,
+  endsAt: approvalDelegations.endsAt,
+  revokedAt: approvalDelegations.revokedAt,
+  revokedByName: approvalDelegations.revokedByName,
+  reason: approvalDelegations.reason,
+  createdBySub: approvalDelegations.createdBySub,
+  createdByName: approvalDelegations.createdByName,
+} as const;
+
+/**
+ * 표 한 줄 → 모두의 목록 한 줄. 🔴 **번호 세 칸이 여기서 끝난다** — 화면이 받는 모양에는
+ * 번호를 담을 칸이 없다(`./delegation-screen.ts` 머리말).
+ *
+ * 🔴 **「본인이 맡겼나」를 여기서 가른다.** `created_by_sub` 와 `delegator_sub` 를 맞대는 일이
+ * 서버에서 끝나야 번호 두 개를 화면으로 내려보내지 않는다.
+ */
+function toAllRowView(
+  row: {
+    id: string;
+    /** 🔵 판정 함수(`delegationState` → `isActiveDelegation`)가 **위임 한 줄 전체**를 받는다 — 번호 둘을 그대로 넘긴다(위 `toRowView` 와 같은 까닭). */
+    delegatorSub: string;
+    delegateSub: string;
+    delegatorName: string;
+    delegateName: string;
+    startsAt: Date;
+    endsAt: Date;
+    revokedAt: Date | null;
+    revokedByName: string | null;
+    reason: string;
+    createdBySub: string;
+    createdByName: string;
+  },
+  now: Date,
+): AllDelegationRowView {
+  const state = delegationState(row, now);
+  return {
+    id: row.id,
+    delegatorName: row.delegatorName,
+    delegateName: row.delegateName,
+    startDate: seoulDateText(row.startsAt),
+    // 🔴 사람이 적었던 종료일로 되돌려 적는다 — `ends_at` 을 그대로 그리면 **하루 뒤**가 보인다.
+    endDate: seoulEndDateText(row.endsAt),
+    reason: row.reason,
+    state,
+    revokedByName: row.revokedByName,
+    createdByName: row.createdByName,
+    createdBySelf: row.createdBySub === row.delegatorSub,
+    /**
+     * 🔵 **보는 사람을 묻지 않는다.** 이 목록은 관리 권한이 있는 사람에게만 내려가고(아래
+     *    거절), 그 사람은 아무 줄이나 거둘 수 있다 — 되돌리기 조건절이 그렇게 넓어졌다.
+     */
+    canRevoke: canRevokeDelegation(state),
+  };
+}
+
+/**
+ * **모든 사람의** 결재권 위임. 🔴 관리 권한이 있는 사람만 받을 수 있다.
+ *
+ * ── 🔴 이 묶음이 왜 있나 ───────────────────────────────────────────────
+ * 관리자가 A→B 위임을 세워도 위 두 목록에는 **한 줄도 안 뜬다** — 둘 다 「내가 결재권자」 또는
+ * 「내가 대리인」인 줄만 담는데 세운 사람은 둘 다 아니다. 그러면 방금 만든 것이 안 나타나
+ * **저장이 안 된 것처럼 보이고**, 되돌릴 권한이 있는데도 그 줄을 집을 길이 없다. A/S 에서
+ * 실제로 겪은 일이라 넓히는 날 함께 만든다.
+ *
+ * ── 🔴 인가를 **이 함수가** 본다. 화면·페이지에 맡기지 않는다 ───────────
+ * 이 파일의 다른 조회들과 달리 여기만 제 손으로 묻는다. 돌려주는 것이 **남의 줄**이라서다 —
+ * 화면이 가리는 데 그치면 이 함수를 부르는 **새 자리**(다음에 생길 통로·스크립트)가 생기는
+ * 날 조용히 다 새어 나간다.
+ *
+ * 🔴 **거절은 빈 목록이 아니라 `ok: false`** 다. 빈 목록으로 돌려주면 「권한이 없다」와 「아직
+ * 아무도 안 맡겼다」가 **같은 값**이 되고, 화면은 둘을 구별해 말할 수 없다. 거절한 값에는
+ * `view` 칸 자체가 없어서, 부르는 쪽이 `ok` 를 안 보고 꺼내려 하면 `tsc` 가 멈춘다.
+ *
+ * ── 왜 두 질의인가, 그리고 왜 겹치지 않는가 ─────────────────────────────
+ * 상한이 필요한 쪽이 한쪽뿐이라 한 질의로는 표현되지 않는다(위 상수 주석). 두 질의의 조건은
+ * **서로 정확한 여집합**이고, 🔴 **「지금」을 한 번 만들어 둘 다에 같은 값으로 넘긴다** — 각자
+ * `now()` 를 쓰면 두 질의 사이에 끝난 줄이 양쪽에서 빠지거나 양쪽에 들어간다.
+ *
+ * 🔴 **이 조회에도 색인이 없다.** 표의 색인은 받는 쪽(`delegate_sub`)으로 깔려 있다. 이 조회는
+ * 설정 탭을 **관리자가** 열 때만 돌고 표 전체가 아직 두 자릿수라 그대로 둔다 — 늘어나면 색인을
+ * 더해야 하고, 그것은 스키마 변경이라 이 조각의 일이 아니다.
+ */
+export async function listAllDelegations(actorRole: Role, now: Date = new Date()): Promise<AllDelegationsResult> {
+  if (!mayManageOthersDelegations(actorRole)) return { ok: false, reason: "FORBIDDEN" };
+
+  const isLive = and(isNull(approvalDelegations.revokedAt), gt(approvalDelegations.endsAt, now));
+  // 위의 **정확한 여집합**: 되돌렸거나(기간과 무관하다) 기간이 끝났거나.
+  const isFinished = or(isNotNull(approvalDelegations.revokedAt), lte(approvalDelegations.endsAt, now));
+
+  const [live, finishedPage] = await Promise.all([
+    db().select(ALL_ROW_COLUMNS).from(approvalDelegations).where(isLive).orderBy(desc(approvalDelegations.startsAt)),
+    db()
+      .select(ALL_ROW_COLUMNS)
+      .from(approvalDelegations)
+      .where(isFinished)
+      .orderBy(desc(approvalDelegations.startsAt))
+      // 🔵 한 건 더 받아 「더 있다」를 센다. 따로 세면 그 사이에 줄이 늘어 「더 있다는데 다
+      //    보인다」가 될 수 있고, 질의가 하나 더 는다.
+      .limit(FINISHED_DELEGATION_LIMIT + 1),
+  ]);
+
+  const finishedTruncated = finishedPage.length > FINISHED_DELEGATION_LIMIT;
+  return {
+    ok: true,
+    view: {
+      live: live.map((row) => toAllRowView(row, now)),
+      finished: (finishedTruncated ? finishedPage.slice(0, FINISHED_DELEGATION_LIMIT) : finishedPage).map((row) => toAllRowView(row, now)),
+      finishedTruncated,
+      finishedLimit: FINISHED_DELEGATION_LIMIT,
+    },
+  };
 }
