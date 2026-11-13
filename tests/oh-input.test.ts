@@ -17,9 +17,12 @@ import {
  * ============================================================================
  * 이 시험이 지키는 것은 둘이다:
  *
- *  1. **13줄이 상한이다.** OH 견적서 양식의 부품 칸이 34~46행이라, 더 담아 두면 견적서를 만들 때
- *     넘치는 줄이 갈 곳이 없다 — 그때 조용히 자르면 **청구할 부품이 문서에서 사라진다.** 상한을
- *     올리려면 양식을 먼저 고쳐야 한다. 이 시험이 그 사실을 붙들어 둔다.
+ *  1. **20줄이 상한이다**(2026-11-13, 13 → 20). 🔴 그 수는 **사람이 정한 한도**이고 양식에서
+ *     오지 않는다 — 견적서 양식의 O/H 부품 칸은 담은 만큼 늘어난다(A/S 의
+ *     `src/lib/xlsx/oh-quote-template.ts`, 2026-08-31). 이 시험이 붙드는 것은 「양식이 몇 줄인가」가
+ *     아니라 **그 한도가 실제로 서 있는가**다: 20 은 통과하고 21 은 거절돼야 한다. 🔴 한쪽만 재면
+ *     상한이 통째로 없어져도 시험이 통과한다. 13 줄을 함께 재는 까닭은 **상한을 늘린 것이지 다른
+ *     곳을 줄인 것이 아님**을 못 박기 위해서다.
  *  2. 🔴 **「비었다」와 「0」은 다른 값이다.** 빈 칸은 「O/H 단가를 정하지 않았다」(저장 쪽이 줄을
  *     지운다)이고, 0 은 「오버홀 때는 무상」이다. 둘을 같게 다루면 O/H 견적서가 정하지 않은
  *     부품을 0원으로 청구한다.
@@ -35,23 +38,30 @@ function 줄(n: number) {
   return Array.from({ length: n }, (_, i) => ({ partId: null, partNameText: `부품${i + 1}`, quantity: 1 }));
 }
 
-describe("🔴 부품 줄 수 상한 — 양식의 13줄", () => {
-  test("상한은 13이다 (OH 견적서 양식 34~46행)", () => {
-    assert.equal(MAX_OH_TEMPLATE_ITEMS, 13);
+describe("🔴 부품 줄 수 상한 — 사람이 정한 20줄 (2026-11-13)", () => {
+  test("상한은 20이다 (2026-11-13 쓰는 분 결정. 양식에서 오는 수가 아니다)", () => {
+    assert.equal(MAX_OH_TEMPLATE_ITEMS, 20);
   });
 
-  test("13줄은 통과한다", () => {
+  test("20줄은 통과한다 — 상한 **그 줄까지**는 담긴다", () => {
+    const r = validateOhTemplateFields({ name: "표준", items: 줄(20) });
+    assert.equal(r.ok, true);
+    assert.equal(r.ok && r.data.items.length, 20);
+  });
+
+  test("🔴 21줄째는 거절한다 — 20 을 통과시키는 시험만으로는 상한이 없어져도 못 잡는다", () => {
+    const r = validateOhTemplateFields({ name: "표준", items: 줄(21) });
+    assert.equal(r.ok, false);
+    assert.ok(r.ok === false && r.fieldErrors.items);
+    // 거절 문구가 몇 줄까지인지를 말해 줘야 한다 — 숫자가 없으면 사람은 몇 줄을 지울지 모른다.
+    assert.match(r.ok === false ? r.fieldErrors.items : "", /20/);
+  });
+
+  test("🔵 13줄은 여전히 통과한다 — 상한을 늘린 것이지 줄인 것이 아니다", () => {
+    // 2026-11-13 전에 저장된 템플릿은 13줄까지였다. 그 장들이 그대로 다시 저장될 수 있어야 한다.
     const r = validateOhTemplateFields({ name: "표준", items: 줄(13) });
     assert.equal(r.ok, true);
     assert.equal(r.ok && r.data.items.length, 13);
-  });
-
-  test("🔴 14줄째는 거절한다 — 넘치면 견적서에서 갈 곳이 없다", () => {
-    const r = validateOhTemplateFields({ name: "표준", items: 줄(14) });
-    assert.equal(r.ok, false);
-    assert.ok(r.ok === false && r.fieldErrors.items);
-    // 거절 문구가 까닭(양식의 칸 수)을 말해 줘야 한다 — 「13개까지」만 적으면 왜인지 모른다.
-    assert.match(r.ok === false ? r.fieldErrors.items : "", /13/);
   });
 });
 

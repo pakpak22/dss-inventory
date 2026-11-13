@@ -39,8 +39,9 @@ export type { OhTemplateItemView, OhTemplateModelView, OhTemplateView };
  * 찾는 글자가 이름 하나뿐이다(그 전에는 코드 순이었다. 스키마 머리말 참조).
  *
  * 부품 줄 · 이어진 모델 · 그 부품의 O/H 단가를 함께 싣는다. 🔵 템플릿마다 따로 읽으면 N+1 이라
- * **질의 네 번**으로 걷어 온다(머리 → 줄·모델 → 단가). 템플릿은 많아야 열몇 장이고 줄은 13개가
- * 상한이라, 한 번에 다 받아 화면에서 그리는 것이 이 저장소의 목록 관용구와도 맞는다.
+ * **질의 네 번**으로 걷어 온다(머리 → 줄·모델 → 단가). 템플릿은 많아야 열몇 장이고 줄은
+ * `MAX_OH_TEMPLATE_ITEMS`(2026-11-13 부터 20, 그 전에는 13)가 상한이라, 한 번에 다 받아 화면에서
+ * 그리는 것이 이 저장소의 목록 관용구와도 맞는다.
  */
 export async function listOhTemplates(): Promise<OhTemplateView[]> {
   const rows = await db()
