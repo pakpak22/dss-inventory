@@ -211,9 +211,38 @@ export function parsePortalDelegationCommand(payload: unknown): ParsePortalDeleg
  */
 export type PortalDelegationPerson = { id: string; name: string };
 
+/**
+ * 이미 있던 줄을 덮어쓸 때 `revoked_at` 에 **무엇을 할 것인가.** 값이 실려 왔으면 그대로
+ * 적고, 🔴 **널이면 이미 적힌 값을 지우지 않는다.**
+ *
+ * 다른 칸은 포털이 보낸 값으로 전부 덮는데 이 칸만 비대칭인 까닭:
+ *  · 🔴 **통로 규약에 차례를 가릴 값이 없다.** 지정과 철회가 길에서 뒤바뀌어 닿으면 나중에
+ *    닿은 것이 이긴다. 널까지 덮으면 늦게 닿은 `upsert` 가 **거둔 위임을 되살린다** — 오류는
+ *    한 번도 안 나고, 그 사람은 그날부터 남의 결재를 누를 수 있다. 설계 B-13 이 「거둔 줄
+ *    알았는데 안 거둬진」 쪽이 더 위험하다고 못 박은 바로 그 모양이다.
+ *  · 🔵 **이 비대칭으로 잃는 것이 없다.** 포털은 새 지정에 **새 `id`** 를 쓰므로, 거둔 줄을
+ *    같은 번호로 되살리라는 전파가 정상적으로 오는 길이 없다. 다시 맡기면 새 줄이 온다.
+ *  · 🔴 **넣는 자리(`values`)는 이 규칙을 안 쓴다** — 처음 받는 줄은 거둔 채로 와도 그대로
+ *    적어야 한다(그러지 않으면 거꾸로 「거둔 줄 알았는데 살아 있는」 줄이 생긴다). 비대칭은
+ *    **충돌했을 때**만의 이야기다.
+ * 🔴 **A/S·휴가도 같은 규칙이다**(2026-11-16 에 셋을 맞췄다). 한 집만 되돌리면 같은 전파가
+ *    시스템마다 다른 줄을 남기고, 그것은 어긋남 점검(설계 B-14)에서야 드러난다.
+ *
+ * 🔵 한 줄짜리를 굳이 내보내는 것은 **시험이 이 규칙을 실제로 돌려 보게** 하려는 것이다.
+ *    쓰는 자리(`./portal-delegation-store.ts`)는 `server-only` 라 이 집의 `npm test` 에서
+ *    불러올 수 없어, 거기 적힌 글자만 보는 시험으로는 규칙이 도는지 알 수 없다.
+ */
+export function revokedAtOnConflict(revokedAt: Date | null): { revokedAt: Date } | Record<string, never> {
+  return revokedAt === null ? {} : { revokedAt };
+}
+
 /** 줄을 쓰는 일. 🔴 **판단은 여기 없다** — 시키는 대로 쓰고 「썼나」만 돌려준다. */
 export type PortalDelegationStore = {
-  /** 있으면 덮어쓰고 없으면 넣는다. 🔴 같은 `id` 로 두 번 와도 **한 줄**이어야 한다. */
+  /**
+   * 있으면 덮어쓰고 없으면 넣는다. 🔴 같은 `id` 로 두 번 와도 **한 줄**이어야 한다.
+   * 🔴 덮어쓸 때 `revoked_at` 은 위 `revokedAtOnConflict` 를 따른다 — 이것도 **약속의
+   * 일부**다(구현마다 다르면 같은 전파가 시스템마다 다른 줄을 남긴다).
+   */
   upsert(row: {
     command: Extract<PortalDelegationCommand, { action: "upsert" }>;
     delegator: PortalDelegationPerson;

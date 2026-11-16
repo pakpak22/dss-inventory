@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import {
   applyPortalDelegation,
   parsePortalDelegationCommand,
+  revokedAtOnConflict,
   type PortalDelegationCommand,
   type PortalDelegationPerson,
   type PortalDelegationStore,
@@ -98,13 +99,24 @@ function fakeStore(): { store: PortalDelegationStore; rows: Map<string, StoredRo
       calls.upsert += 1;
       // 🔴 **열쇠가 포털의 `id` 다.** 진짜 표에서는 PK + onConflictDoUpdate 가 같은 일을 한다
       //    (그 두 글자가 실제로 쓰였는지는 route-source 시험이 소스로 본다).
+      /**
+       * 🔴 **진짜 표와 같은 함수로 `revoked_at` 을 고른다.** 새 줄이면 `before` 가 없어 온
+       * 값이 그대로 들어가고(`.values(…)` 쪽), 이미 있던 줄이면 `revokedAtOnConflict` 가
+       * 「널이면 손대지 않는다」를 지킨다(`.onConflictDoUpdate(…)` 쪽) —
+       * `src/lib/approval/portal-delegation-store.ts` 의 두 자리를 그대로 흉내 낸 것이다.
+       * 🔵 여기를 `command.revokedAt` 으로 되돌리면 아래 「되살아나지 않는다」 묶음이 곧바로
+       *    깨진다(2026-11-16 일부러 되돌려 확인).
+       */
+      const before = rows.get(command.id);
+      const patch = revokedAtOnConflict(command.revokedAt);
+      const revokedAt = "revokedAt" in patch ? patch.revokedAt : (before?.revokedAt ?? null);
       rows.set(command.id, {
         delegatorSub: command.delegatorSub,
         delegateSub: command.delegateSub,
         startsAt: command.startsAt,
         endsAt: command.endsAt,
         reason: command.reason,
-        revokedAt: command.revokedAt,
+        revokedAt,
         names: [delegator.name, delegate.name],
       });
     },
@@ -283,6 +295,88 @@ describe("🔴 저장 — 멱등", () => {
     const { store, rows } = fakeStore();
     await applyPortalDelegation({ command: parsed(upsertBody()), findActor: BOTH, store });
     assert.deepEqual(rows.get(ID)?.names, ["홍길동", "김철수"]);
+  });
+});
+
+describe("🔴 덮어쓸 때의 `revoked_at` — 한 방향 규칙 그 자체", () => {
+  /**
+   * 🔴 이 규칙은 **진짜 표에 쓰는 자리**(`portal-delegation-store.ts`)에 있는데 그 파일은
+   * `server-only` 라 이 집의 `npm test` 가 불러올 수 없다. 그래서 규칙만 떼어 내보내 두고
+   * 여기서 **실제로 돌려** 본다. 그 파일이 이 함수를 쓰고 있는지는
+   * `tests/integration-delegations-route-source.test.ts` 가 소스로 못 박는다 — 둘이 함께
+   * 있어야 「규칙은 맞는데 아무도 안 쓴다」가 안 생긴다.
+   */
+  it("🔴 널이면 칸을 아예 안 싣는다 — 실으면 SQL 이 `revoked_at = null` 을 쓴다", () => {
+    const patch = revokedAtOnConflict(null);
+    assert.deepEqual(patch, {});
+    assert.ok(!("revokedAt" in patch), "칸이 실리면 이미 적힌 철회가 지워진다");
+  });
+
+  it("값이 오면 그대로 싣는다 — 한 방향이지 「영영 못 고침」이 아니다", () => {
+    const at = new Date("2026-11-18T05:00:00.000Z");
+    assert.deepEqual(revokedAtOnConflict(at), { revokedAt: at });
+  });
+});
+
+describe("🔴 저장 — 거둔 위임이 **되살아나지 않는다**", () => {
+  /** 🔴 표본이 「거둔 줄」이 맞는지 먼저 못 박는다 — 아니면 아래 단언이 공짜로 통과한다. */
+  async function revokedRow() {
+    const made = fakeStore();
+    await applyPortalDelegation({ command: parsed(upsertBody()), findActor: BOTH, store: made.store });
+    await applyPortalDelegation({ command: parsed(revokeBody()), findActor: BOTH, store: made.store });
+    assert.equal(
+      made.rows.get(ID)?.revokedAt?.toISOString(),
+      "2026-11-18T05:00:00.000Z",
+      "표본이 거둔 줄이 아니다 — 아래 시험이 아무것도 재지 않는다",
+    );
+    return made;
+  }
+
+  it("🔴 거둔 줄에 `revokedAt` 없는 upsert 가 늦게 닿아도 철회가 남는다", async () => {
+    const { store, rows } = await revokedRow();
+
+    // 포털이 **먼저** 보낸 지정이 길에서 늦게 닿은 모양이다. 통로 규약에 차례를 가릴 값이
+    // 없어 나중에 닿은 것이 이긴다 — 여기서 되살아나면 그 사람은 아무 오류 없이 남의
+    // 결재를 누를 수 있게 된다(설계 B-13).
+    await applyPortalDelegation({
+      command: parsed(upsertBody({ reason: "출장 연장", endsAt: "2026-11-25T15:00:00.000Z" })),
+      findActor: BOTH,
+      store,
+    });
+
+    const row = rows.get(ID);
+    assert.ok(row);
+    assert.equal(row.revokedAt?.toISOString(), "2026-11-18T05:00:00.000Z", "거둔 위임이 되살아났다");
+    // 🔵 **옆 칸은 덮였는지 함께 잰다.** 안 그러면 「충돌했을 때 아무것도 안 덮는」 구현도
+    //    위 단언을 통과한다.
+    assert.equal(row.reason, "출장 연장", "다른 칸까지 안 덮으면 두 쪽이 다른 줄을 본다");
+    assert.equal(row.endsAt.toISOString(), "2026-11-25T15:00:00.000Z");
+  });
+
+  it("🔴 거둔 줄에 **값이 실린** upsert 가 오면 그 값으로 바뀐다", async () => {
+    const { store, rows } = await revokedRow();
+    await applyPortalDelegation({
+      command: parsed(upsertBody({ revokedAt: "2026-11-19T06:00:00.000Z" })),
+      findActor: BOTH,
+      store,
+    });
+    // 포털이 그 칸의 주인이다. 「한 방향」은 **널이 지우지 않는다**는 뜻이지 영영 못 고친다는
+    // 뜻이 아니다 — 버리면 거꾸로 「거둔 줄 알았는데 안 거둬진」 쪽이 된다.
+    assert.equal(rows.get(ID)?.revokedAt?.toISOString(), "2026-11-19T06:00:00.000Z");
+  });
+
+  it("🔵 처음 받는 줄은 **거둔 채로 와도 그대로** 적는다 — 비대칭은 충돌했을 때만이다", async () => {
+    const { store, rows } = fakeStore();
+    await applyPortalDelegation({
+      command: parsed(upsertBody({ revokedAt: "2026-11-18T05:00:00.000Z" })),
+      findActor: BOTH,
+      store,
+    });
+    assert.equal(rows.get(ID)?.revokedAt?.toISOString(), "2026-11-18T05:00:00.000Z");
+    // 🔵 살아 있는 줄은 그대로 살아 있다(새 줄의 기본값이 「거둠」으로 새지 않는다).
+    const 둘째 = fakeStore();
+    await applyPortalDelegation({ command: parsed(upsertBody()), findActor: BOTH, store: 둘째.store });
+    assert.equal(둘째.rows.get(ID)?.revokedAt, null);
   });
 });
 

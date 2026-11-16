@@ -6,6 +6,7 @@ import { portalApprovalDelegations } from "@/db/schema/portal-approval-delegatio
 import { auditValues } from "@/lib/audit";
 import { findActiveUserByAuthSub } from "@/lib/auth/users";
 import { seoulDateText, seoulEndDateText } from "./delegation-input";
+import { revokedAtOnConflict } from "./portal-delegation-sync";
 import type { PortalDelegationPerson, PortalDelegationStore } from "./portal-delegation-sync";
 
 /**
@@ -72,8 +73,11 @@ export const portalDelegationStore: PortalDelegationStore = {
          * 있고(끊긴 응답은 저쪽이 이미 저장했을 수도 있다), 줄이 둘이 되면 철회가 한 줄만
          * 맞힌다. 🔴 사람 칸까지 **전부** 덮는다 — 포털이 그 줄의 주인이라 「우리가 먼저 받은
          * 값」을 지킬 까닭이 없고, 한 칸만 안 덮으면 두 쪽이 다른 줄을 보게 된다.
-         * 🔵 `revoked_at` 도 덮는다: 안 실려 왔으면 `null` 이라 **되살아난다.** 포털에서 거둔
-         *    위임을 다시 살리는 길이 거기 있고, 그 판단은 포털이 한다.
+         * 🔴 **`revoked_at` 하나만 예외다**(2026-11-16, 세 시스템의 규약을 맞췄다). 값이 실려
+         *    왔으면 적고 **널이면 이미 적힌 값을 지우지 않는다** — 널까지 덮으면 철회와 엇갈려
+         *    늦게 닿은 이 문장이 **거둔 위임을 되살리고**, 그 사람은 아무 오류 없이 남의 결재를
+         *    누를 수 있게 된다. 까닭 전부와 「왜 여기만 조건부인가」는 `revokedAtOnConflict`
+         *    머리말에 있다. 🔵 **위의 `values`(처음 받는 줄)는 그 규칙을 안 쓴다.**
          */
         .onConflictDoUpdate({
           target: portalApprovalDelegations.id,
@@ -83,8 +87,8 @@ export const portalDelegationStore: PortalDelegationStore = {
             startsAt: command.startsAt,
             endsAt: command.endsAt,
             reason: command.reason,
-            revokedAt: command.revokedAt,
             syncedAt: new Date(),
+            ...revokedAtOnConflict(command.revokedAt),
           },
         });
 
@@ -118,6 +122,9 @@ export const portalDelegationStore: PortalDelegationStore = {
              * 🔴 **거둔 채로 들어온 줄**인가. 통로 규약상 평소에는 없지만, 실려 오면 그대로
              *    적으므로(`parsePortalDelegationCommand` 주석) 이력에도 그 사실이 보여야 한다 —
              *    없으면 「받았는데 왜 안 듣지」의 답이 표에만 있고 이력에는 없다.
+             * 🔵 **「지금 그 줄이 거둬져 있나」가 아니다.** 이미 거둔 줄에 널로 온 전파는 여기서
+             *    `false` 인데 표의 `revoked_at` 은 그대로 남는다(한 방향 규칙). 이 칸은 **무엇이
+             *    들어왔나**만 말한다.
              */
             arrivedRevoked: command.revokedAt !== null,
           },

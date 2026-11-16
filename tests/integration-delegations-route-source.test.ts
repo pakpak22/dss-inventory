@@ -120,6 +120,37 @@ describe("🔴 멱등을 무엇이 보장하는가 — 표와 쓰기", () => {
     assert.match(store, /\.set\(\{ revokedAt, syncedAt: new Date\(\) \}\)/);
   });
 
+  /**
+   * 🔴 아래 둘은 **한 방향 규칙이 실제로 쓰이는지**를 본다. 규칙 자체가 맞는지는
+   * `tests/portal-delegation-sync.test.ts` 가 `revokedAtOnConflict` 를 돌려서 재고, 여기서는
+   * 「그 함수를 쓰는가」만 본다 — 둘이 함께 있어야 「규칙은 맞는데 아무도 안 쓴다」가 없다.
+   * 🔵 자르는 자리를 주석 걷어낸 본문에서 찾는다(이 파일 머리말의 `body`).
+   */
+  const storeBody = body(store);
+  const conflictAt = storeBody.indexOf(".onConflictDoUpdate(");
+  const valuesAt = storeBody.indexOf(".values({");
+
+  it("🔴 덮어쓸 때 `revoked_at` 을 **널로 지우지 않는다** — 거둔 위임이 되살아나는 길이다", () => {
+    assert.ok(conflictAt > 0, "덮어쓰는 자리를 찾지 못했다 — 이 시험이 아무것도 안 재고 있다");
+    const conflict = storeBody.slice(conflictAt);
+    assert.ok(
+      conflict.includes("...revokedAtOnConflict(command.revokedAt)"),
+      "덮어쓰는 자리가 한 방향 규칙을 안 쓴다",
+    );
+    // 늦게 닿은 upsert 가 철회를 되살리면 **아무 오류 없이** 남의 결재를 누를 수 있게 된다.
+    assert.ok(
+      !/revokedAt: command\.revokedAt/.test(conflict),
+      "덮어쓰는 자리가 널까지 그대로 적는다 — 엇갈려 닿은 전파가 철회를 되살린다",
+    );
+  });
+
+  it("🔵 **넣는 자리는 그대로다** — 처음 받는 줄은 거둔 채로 와도 그대로 적는다", () => {
+    assert.ok(valuesAt > 0 && valuesAt < conflictAt, "넣는 자리를 찾지 못했다");
+    const values = storeBody.slice(valuesAt, conflictAt);
+    // 여기까지 조건부로 만들면 거꾸로 「포털은 거뒀는데 여기선 살아 있는」 줄이 생긴다.
+    assert.match(values, /revokedAt: command\.revokedAt/);
+  });
+
   it("🔵 없는 줄을 거두는 것은 오류가 아니다 — 0행이면 false", () => {
     assert.match(store, /if \(!row\) return false;/);
   });
