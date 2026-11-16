@@ -4,6 +4,10 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { cancelPartIssueApproval, decidePartIssueApproval, executePartIssueApproval, rejectExecutionPartIssueApproval, requestPartIssueApproval } from "@/lib/approval/part-issue";
 import { PART_ISSUE_ROUTE_GONE_MESSAGE } from "@/lib/approval/part-issue-gate";
+// 🔴 **거래를 열기 전에** 포털에 묻는 자리다(아래 `decidePartIssueAction`). 결재 함수 안에서
+//    부르면 망 호출이 `FOR UPDATE` 트랜잭션 안으로 들어간다(설계 C-3).
+import { resolvePortalDelegations } from "@/lib/approval/portal-acting-subs";
+import { notePortalDelegationOutage } from "@/lib/approval/portal-delegation";
 import { requireRole, requireSession } from "@/lib/auth/session";
 import { parseIssueQuantities } from "@/lib/stock/issue";
 import { RETURN_TO_FIELD, safeReturnTo } from "@/lib/stock/return-to";
@@ -40,6 +44,19 @@ import { RETURN_TO_FIELD, safeReturnTo } from "@/lib/stock/return-to";
 export interface PartIssueActionState {
   /** 실패 사유 — **서버 문구 그대로**. 성공하면 redirect 하므로 이 자리는 비어 있다. */
   error: string | null;
+  /**
+   * 🔴 **포털에 못 물은 채로 결재를 판정했다**(2026-11-16, 설계 B-6·B-7 —
+   * `dss-approvals/DELEGATION_DESIGN.md`). 포털이 멎으면 위임 없이 진행하므로 **본인 결재는
+   * 멀쩡하고 대리인만 조용히 막힌다.** 그때 그 사람이 받는 문구는 「지금 결재할 차례가
+   * 아닙니다」 하나뿐이라, 이 칸이 없으면 **왜 못 누르는지 알 길이 영영 없다.**
+   *
+   * 🔵 **성공하면 redirect 하므로 이 칸도 실패한 자리에서만 보인다** — 그런데 그 자리가 바로
+   *    안내가 필요한 자리다(막힌 대리인). 서버 함수는 성공·실패를 안 가리고 싣는다(그쪽 주석).
+   * 🔵 값이 `true` 뿐인 까닭은 `@/lib/approval/portal-delegation` 의
+   *    `notePortalDelegationOutage` 에 있다. 안내 문구를 그리는 것은 **다음 조각**의 일이고,
+   *    여기서는 값이 화면까지 나오는 길만 낸다.
+   */
+  portalDelegationUnavailable?: true;
 }
 
 const APPROVALS = "/approvals";
@@ -150,6 +167,15 @@ export async function decidePartIssueAction(_prev: PartIssueActionState, formDat
   const note = decision === "REJECTED" ? cleanNote(formData.get("note")) : "";
   if (decision === "REJECTED" && note.length < 2) return { error: "반려 사유를 적으십시오." };
 
+  /**
+   * 🔴 **포털에 맡긴 위임을 여기서 묻는다 — 거래를 열기 전이다**(2026-11-16, 설계 B-4·C-3).
+   *    결재 판정은 결재건 행을 `FOR UPDATE` 로 잡은 **트랜잭션 안**에서 도는데, 망 호출을 거기
+   *    넣으면 포털이 느린 날 그 행 잠금이 2초씩 붙들린다. 그래서 **먼저 묻고 결과만 들고 들어
+   *    간다.** 🔵 그 함수는 어떤 일이 있어도 던지지 않는다 — 못 물었으면 「위임 없음」이고
+   *    (설계 B-6) 본인 결재는 그대로 돈다.
+   */
+  const portal = await resolvePortalDelegations(session.user.authSub);
+
   let r;
   try {
     /**
@@ -157,12 +183,21 @@ export async function decidePartIssueAction(_prev: PartIssueActionState, formDat
      *    아무도 자기 차례를 집지 못한다 — 그래서 `PartIssueActor` 가 `sub` 를 **타입으로**
      *    요구한다(`src/lib/approval/part-issue.ts` 머리말).
      */
-    r = await decidePartIssueApproval(id, decision, note, { id: session.user.id, name: session.user.name, sub: session.user.authSub });
+    r = await decidePartIssueApproval(id, decision, note, { id: session.user.id, name: session.user.name, sub: session.user.authSub }, portal);
   } catch (e) {
     console.error("[part-issue] 결재 실패:", e instanceof Error ? e.message : e);
-    return { error: "결재하지 못했습니다. 잠시 뒤 다시 시도하십시오." };
+    // 🔴 터진 길에도 **못 물었다는 사실을 함께 싣는다.** 여기서 빠뜨리면 「포털이 멎은 날
+    //    DB 도 멎었다」는 드문 경우에만 안내가 사라지는데, 그런 자리는 아무도 다시 안 본다.
+    // 🔵 타입을 손으로 적어 준다 — 돌려줄 모양이 **인자가 아니라 이 액션의 반환 타입**에서
+    //    오는 자리라, 비워 두면 추론이 제약(칸 하나짜리)으로 좁아져 `tsc` 가 멈춘다.
+    return notePortalDelegationOutage<PartIssueActionState>({ error: "결재하지 못했습니다. 잠시 뒤 다시 시도하십시오." }, portal);
   }
-  if (!r.ok) return { error: r.message };
+  /**
+   * 🔴 **막힌 자리가 곧 안내가 필요한 자리다**(설계 B-7). 포털에 못 물어 위임이 안 걸렸으면
+   *    대리인은 「지금 결재할 차례가 아닙니다」만 보게 된다 — 서버 함수가 결과에 실어 둔 칸을
+   *    **그대로 옮겨 적는다**(여기서 다시 판정하지 않는다).
+   */
+  if (!r.ok) return r.portalDelegationUnavailable ? { error: r.message, portalDelegationUnavailable: true } : { error: r.message };
 
   revalidatePath(APPROVALS);
   // 🔵 승인·반려로는 재고도 신청 상태도 움직이지 않는다 — 머리말의 「대기 N」 을 다시 세지 않는다.

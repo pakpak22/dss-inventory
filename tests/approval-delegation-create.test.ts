@@ -220,7 +220,10 @@ describe("⑤ 🔴 이어지지 않는다 — 그래서 **만드는 쪽은 막�
 
   it("🔴 C 는 **B 의 결재권만** 얻는다 — A 의 것은 못 얻는다", () => {
     assert.deepEqual(delegatorSubsFor(rows, sub("c"), NOW), [sub("b")], "A 가 맡긴 사람은 B 뿐이다");
-    assert.deepEqual(actingApproverSubs(rows, sub("c"), NOW), [sub("c"), sub("b")]);
+    // 🔵 넷째 인자는 **포털에 맡긴 위임**이다(2026-11-16, 설계 B-4). 이 묶음은 이 표의 규칙만
+    //    재므로 비워 둔다 — 두 고지를 **갈아타며** 두 겹이 생기지 않는지는
+    //    `tests/portal-delegation.test.ts` 가 따로 잰다.
+    assert.deepEqual(actingApproverSubs(rows, sub("c"), NOW, []), [sub("c"), sub("b")]);
   });
 
   it("🔵 **B 가 맡기는 것 자체는 막지 않는다** — 남의 대리인도 출장을 간다", () => {
@@ -230,7 +233,7 @@ describe("⑤ 🔴 이어지지 않는다 — 그래서 **만드는 쪽은 막�
     const create = bodyOf(src(MUTATIONS), "export async function createApprovalDelegation(");
     assert.ok(!create.includes("select("), "만드는 길이 기존 위임을 읽는다 — 두 겹을 막는 검사가 생겼다");
     // B 는 자기 자격을 그대로 쓰고(a 의 대리인), C 는 B 의 자격만 얻는다 — 둘 다 성립한다.
-    assert.deepEqual(actingApproverSubs(rows, sub("b"), NOW), [sub("b"), sub("a")]);
+    assert.deepEqual(actingApproverSubs(rows, sub("b"), NOW, []), [sub("b"), sub("a")]);
   });
 
   it("🔵 겹치는 기간을 **또 맡겨도** 결재 목록이 겹치지 않는다 — 그래서 만들 때 막지 않는다", () => {

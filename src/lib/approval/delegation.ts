@@ -24,6 +24,16 @@
  * 🔵 실제 결재 판정·목록·알림 종이 이 함수들을 부른다(2026-10-21, 조각 2). 표를 읽어 오는 일은
  * `./delegation-queries.ts` 가 하고, 「누를 수 있나」를 네 곳이 한 벌로 보는 자리가 아래
  * `actingApproverSubs` 다.
+ *
+ * ── 🔴 2026-11-16 부터 위임을 맡기는 고지가 **둘**이다 ──────────────────
+ * 이 표(재고관리 제 것) 말고 **포털(dss-auth)에 맡긴 위임**이 생겼다(설계 B-1·B-4 —
+ * `dss-approvals/DELEGATION_DESIGN.md`). 둘 다 인정하고 **합집합**으로 판정한다. 포털 쪽은
+ * 기간·되돌림 판정까지 **포털이 끝내서** 결재권자 번호만 넘어오므로, 이 파일의 규칙
+ * (`isActiveDelegation`)은 **이 표의 줄에만** 적용된다. 합치는 자리는 아래
+ * `actingApproverSubs` 한 곳이고, 🔴 **두 고지를 갈아타며 두 겹이 되지 않게 막는 자리도 거기
+ * 하나**다.
+ * 🔵 포털이 준 값을 그대로 쓴다 — 이 집은 `users.auth_sub` 가 곧 포털 `sub` 이라 **열쇠를
+ *    바꿀 일이 없다**(A/S 와 다른 점이고, 그 차이는 `./portal-delegation.ts` 에 적혀 있다).
  * ============================================================================
  */
 
@@ -182,23 +192,51 @@ export type ActingApproverSubs = readonly [string, ...string[]];
  * 막히지 않는다 — 막으면 「맡겼더니 내가 못 누른다」가 되고, 그것은 아무도 바란 적 없는 일이다.
  *
  * ── 🔴 늘어나는 것은 **대리인 자격뿐**이다 ──────────────────────────────
- * 이 목록에 들어오는 번호는 **지금 살아 있는 위임의 결재권자**뿐이다(`delegatorSubsFor`).
- * 관리자라고 남의 번호가 여기 들어오지 않고, 그래서 「관리자라고 남의 단계를 대신 누를 수
- * 없다」는 울타리가 그대로 선다. 두 겹(A→B·B→C)이 안 이어지는 것도 그 함수가 지킨다.
+ * 이 목록에 들어오는 번호는 **지금 살아 있는 위임의 결재권자**뿐이다(`delegatorSubsFor` ·
+ * 포털이 같은 잣대로 판정해 준 목록). 관리자라고 남의 번호가 여기 들어오지 않고, 그래서
+ * 「관리자라고 남의 단계를 대신 누를 수 없다」는 울타리가 그대로 선다.
  *
- * 🔵 차례에는 뜻이 없다 — 본인이 맨 앞인 것만 정해 두고(값이 달라지지 않게), 나머지는
- *    `delegatorSubsFor` 가 준 차례 그대로다.
+ * ── 🔴 고지가 **둘**이다. 합집합이고, 이어 붙지는 않는다 (2026-11-16) ────
+ * 2026-11-13 결정(설계 B-4)으로 **포털에 맡긴 위임과 각 시스템 위임을 둘 다 살려 두기로**
+ * 했다. 그래서 이 함수는 목록 **둘**을 받아 **합집합**을 만든다:
+ *  · `delegations` — 이 시스템의 `approval_delegations` 를 읽은 줄들(기간·되돌림을 이 층이
+ *    직접 가린다 — `isActiveDelegation`).
+ *  · `portalDelegatorSubs` — 포털이 「지금 대신할 수 있다」고 **이미 판정해서** 준 결재권자들의
+ *    포털 번호(`./portal-acting-subs.ts` 가 받아 온다). 🔴 기간·되돌림을 여기서 다시 보지
+ *    않는다 — 포털이 제 표로 판정한 결과이고, 그 규칙을 여기 베껴 적으면 두 벌이 갈린다.
+ *
+ * 🔴 **둘을 이어 붙이지 않는다.** 이 시스템의 위임으로 A→B 이고 포털 위임으로 B→C 여도
+ * **C 는 A 를 얻지 못한다.** 두 목록을 각각 **「한 겹」으로만** 쓰고, 어느 쪽이 돌려준 번호도
+ * 다시 `delegateSub` 로 넣어 되풀이하지 않기 때문이다 — 까닭은 바로 위 `delegatorSubsFor` 의
+ * 둘(A 는 C 를 모른다 · 고리가 생긴다)과 같다. 고지가 둘이 되면서 **한 고지 안에서는 막히던 두
+ * 겹이 고지를 갈아타며 생길** 수 있게 됐으므로, 여기가 그것을 막는 유일한 자리다.
+ *
+ * 🔵 차례에는 뜻이 없다 — 본인이 맨 앞인 것만 정해 두고(값이 달라지지 않게), 그다음이 이
+ *    시스템의 위임, 그다음이 포털 위임이다. 겹치면 **먼저 나온 쪽 한 번만** 남는다.
  *
  * @param actorSub 「지금 누르려는 사람」의 **포털 번호**. 🔴 `users.id` 나 A/S 번호를 넘기면
  *   위임은 하나도 안 붙고 **그 틀린 값 하나짜리 목록**이 돌아간다 — 오류 없이 영원히 0건이 된다
  *   (`delegatorSubsFor` 의 같은 주의).
+ * @param portalDelegatorSubs 🔴 **선택 인자가 아니다.** 기본값을 두면 빠뜨린 자리에서만 포털
+ *   위임이 조용히 안 걸린다 — 오류가 나지 않고 「어떤 길에서만 대리 결재가 안 된다」가 되며,
+ *   그 화면에는 아무 표시도 남지 않는다. 포털에 묻지 않는 자리는
+ *   `./portal-delegation.ts` 의 `NO_PORTAL_DELEGATIONS` 를 **글자로 넘겨** 그 뜻을 드러낸다.
  */
 export function actingApproverSubs(
   delegations: readonly ApprovalDelegationPeriod[],
   actorSub: string,
   now: Date,
+  portalDelegatorSubs: readonly string[],
 ): ActingApproverSubs {
-  return [actorSub, ...delegatorSubsFor(delegations, actorSub, now)];
+  const merged = new Set<string>(delegatorSubsFor(delegations, actorSub, now));
+  for (const delegatorSub of portalDelegatorSubs) {
+    // 🔴 본인은 맨 앞에 이미 있다. 포털은 답의 맨 앞에 부른 사람 자신을 넣어 주므로(설계 C-2)
+    //    여기서 걸러 내지 않으면 본인 번호가 목록에 두 번 들어간다 — 그러면 같은 건이 화면에
+    //    두 번 뜬다(`delegatorSubsFor` 가 중복을 걷는 까닭과 같다).
+    if (delegatorSub === "" || delegatorSub === actorSub) continue;
+    merged.add(delegatorSub);
+  }
+  return [actorSub, ...merged];
 }
 
 /* ------------------------------------------------------------------ */

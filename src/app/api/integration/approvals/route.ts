@@ -1,6 +1,9 @@
 import { PORTAL_TOKEN_PURPOSES, readBearerToken, verifyPortalServiceToken } from "@/lib/auth/portal-service-token";
 import { findActiveUserByAuthSub } from "@/lib/auth/users";
 import { listPartIssueApprovalsToDecide } from "@/lib/approval/part-issue";
+// 🔴 **글자로 「안 물었다」를 적는 상수**다(아래 호출부 주석). 빈 배열을 그냥 넘기면 「물었는데
+//    없었다」와 똑같이 생겨, 다음 사람이 결함으로 보고 「묻게」 고친다.
+import { NO_PORTAL_DELEGATIONS } from "@/lib/approval/portal-delegation";
 import { env } from "@/lib/env";
 import { buildPortalApprovalInbox } from "@/lib/notifications/portal-approvals";
 
@@ -59,7 +62,14 @@ export async function GET(request: Request): Promise<Response> {
       findActor: findActiveUserByAuthSub,
       // 🔴 자격 판정을 새로 짓지 않는다 — 승인 요청건(/approvals) 화면 · 알림 종이
       //    이미 쓰고 있는 조회를 그대로 넘긴다(approval/part-issue.ts).
-      listPendingApprovals: listPartIssueApprovalsToDecide,
+      // 🔴 **다만 포털에는 묻지 않는다**(2026-11-16, 결재권 위임). 지금 이 요청이 **포털이
+      //    우리를 부른 것**이라, 여기서 또 포털에 물으면 **포털이 우리를 기다리는 동안 우리가
+      //    포털을 기다린다.** 포털의 상한은 1.5초이고 우리 상한은 2초라(approval/
+      //    portal-acting-subs.ts) 답이 닿기 전에 포털이 이 줄을 통째로 버린다.
+      // 🔵 **대가**: 포털에 맡긴 위임으로 대신할 건은 **통합 승인함에서만** 빠진다 — 재고관리
+      //    자신의 결재 화면·종에는 그대로 뜬다(둘은 제 손으로 묻는다). 메우려면 포털이 이미
+      //    아는 그 목록을 **부를 때 함께 실어 주어야** 하고, 그것은 포털 쪽 조각이다.
+      listPendingApprovals: (subject) => listPartIssueApprovalsToDecide(subject, NO_PORTAL_DELEGATIONS.delegatorSubs),
     });
 
     return Response.json(inbox, { headers: NO_STORE });

@@ -65,12 +65,30 @@ describe("통합 승인함 통로", () => {
   });
 
   it("🔴 자격 판정을 새로 쓰지 않는다 — 기존 조회를 그대로 넘긴다", () => {
-    assert.match(approvals, /listPendingApprovals: listPartIssueApprovalsToDecide/);
+    assert.match(approvals, /listPendingApprovals: \(subject\) => listPartIssueApprovalsToDecide\(subject, NO_PORTAL_DELEGATIONS\.delegatorSubs\)/);
     assert.match(approvals, /findActor: findActiveUserByAuthSub/);
     // 라우트가 스스로 SQL 을 쓰거나 역할을 비교하면 판정이 두 벌이 된다.
     for (const forbidden of ["db.select", "drizzle-orm", '=== "ADMIN"', '=== "SUPER_ADMIN"', "role ==="]) {
       assert.ok(!approvals.includes(forbidden), `라우트가 직접 판정한다: ${forbidden}`);
     }
+  });
+
+  /**
+   * 🔴 **포털이 우리를 부르는 통로에서는 포털에 되묻지 않는다** (2026-11-16, 결재권 위임).
+   * 되물으면 **포털이 우리를 기다리는 동안 우리가 포털을 기다린다** — 포털의 상한이 1.5초인데
+   * 우리 상한이 2초라(approval/portal-acting-subs.ts) 답이 닿기 전에 포털이 이 줄을 버린다.
+   * 🔵 대가(통합 승인함에서만 대리 건이 빠진다)는 라우트 주석에 적혀 있다.
+   */
+  it("🔴 포털에 **되묻지 않는다** — 서로 기다리는 짝이 된다", () => {
+    // 🔴 **주석을 걷어내고 본다.** 「여기서는 되묻지 않는다(까닭은 portal-acting-subs.ts)」는
+    //    설명이 곧 금지어를 품는다 — 안 걷어내면 설명 때문에 깨진다(2026-11-16 실측).
+    const body = approvals.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    for (const forbidden of ["resolvePortalDelegations", "portal-acting-subs", "fetch("]) {
+      assert.ok(!body.includes(forbidden), `포털이 부른 통로가 포털에 되묻는다: ${forbidden}`);
+    }
+    // 🔵 「안 물었다」를 **글자로** 적는다 — 빈 배열을 그냥 넘기면 「물었는데 없었다」와 같아
+    //    보여 다음 사람이 결함으로 보고 「묻게」 고친다.
+    assert.match(approvals, /NO_PORTAL_DELEGATIONS/);
   });
 
   it("🔴 읽기 전용이다 — 승인·반려를 실행하는 길이 없다", () => {

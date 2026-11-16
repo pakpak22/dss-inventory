@@ -4,6 +4,9 @@ import { fetchAsUserDirectory } from "./as-users";
 import { mayManageOthersDelegations } from "./delegation-authority";
 import { listAllDelegations, listDelegationsIActFor, listDelegationsIMade } from "./delegation-queries";
 import { seoulDateText } from "./delegation-input";
+// 🔴 **이 화면만 부르는 자리라 여기서 묻는다**(아래 `portalActing`). 조회 쪽은 포털이 우리를
+//    부르는 통로에서도 불려 스스로 물으면 안 된다(`./portal-acting-subs.ts` 머리말).
+import { resolvePortalDelegations } from "./portal-acting-subs";
 import type { AllDelegationsView, DelegationRowView } from "./delegation-screen";
 import { toAsUserChoiceDirectory, type AsUserChoiceDirectory } from "./directory";
 
@@ -55,6 +58,36 @@ export type DelegationScreenData = {
    */
   canDelegateForOthers: boolean;
   /**
+   * 🔴 **포털에 맡겨 둔 위임으로 지금 내가 대신할 수 있는 결재권자 수**(2026-11-16, 설계 B-4).
+   *
+   * ── 🔴 왜 여기 있나 ───────────────────────────────────────────────────
+   * 2026-11-13 부터 위임을 맡기는 고지가 **둘**이다 — 이 시스템의 표(위 `made`·`acting`)와
+   * **포털(통합 승인함에서 지정한다)**. 결재 판정은 둘을 합집합으로 보는데, 이 화면이 제 표만
+   * 보여 주면 **「분명 맡겼는데 여기엔 없다」**가 된다. 설계 D-2 가 「각 화면에서 **어디에
+   * 지정된 위임인가**를 구별해 보여 줄 것」이라고 못 박은 자리다.
+   *
+   * 🔴 **수뿐이고 이름이 없다.** 포털의 `acting` 통로가 돌려주는 것이 번호 목록뿐이고, 번호를
+   * 이름으로 푸는 일은 이 시스템이 못 한다(포털 명부를 들고 있지 않다). 🔴 이름까지 보이려면
+   * 포털의 **다른 일**(`list`)을 불러야 하는데, 그 답은 모양도 거르는 규칙도 달라 **기간·되돌림
+   * 판정을 이 집에 한 벌 더 베껴 적어야** 한다 — 설계가 그 규칙을 포털에 둔 까닭을 무너뜨린다.
+   * 🔵 그래서 **자세한 것은 통합 승인함에서 본다**가 맞는 답이고, 이 칸은 「저쪽에도 N건이
+   *    있습니다」를 말해 주는 **길잡이**다. 문구를 그리는 것은 다음 조각의 일이다.
+   *
+   * 🔵 **「몇 건을 받았나」를 세는 자리이기도 하다.** 로그에 세지 않는 까닭은
+   *    `./portal-delegation.ts` 머리말에 있다 — 같은 물음이 모든 화면의 알림 종에서도 돌아,
+   *    찍으면 아무도 안 읽는 줄만 쌓인다. 사람이 보는 자리에 수를 두는 편이 낫다.
+   */
+  portalActing: {
+    /** 🔵 **본인은 빠진 수**다 — 포털은 답의 맨 앞에 부른 사람 자신을 넣어 준다(설계 C-2). */
+    count: number;
+    /**
+     * 🔴 **포털에 못 물었다**(설계 B-6). 그때 위 `count` 는 0 이지만 그 0 은 「없다」가 아니라
+     * **「모른다」**다. 🔴 둘을 한 칸으로 뭉개면 포털이 멎은 날 이 화면이 **「포털에 맡긴 위임이
+     * 하나도 없습니다」라고 거짓말**을 하게 된다.
+     */
+    unavailable: boolean;
+  };
+  /**
    * 오늘(`YYYY-MM-DD`, 한국). 🔴 **서버가 정해 내려보낸다** — 화면에서 `new Date()` 로 만들면
    * 서버가 그린 글자와 브라우저가 그린 글자가 자정 즈음에 갈린다(운영 서버는 UTC 다).
    */
@@ -69,12 +102,19 @@ export type DelegationScreenData = {
  *   고르개를 가르는 값이고, **세션에서 온 값이어야 한다.**
  */
 export async function readDelegationScreen(actorSub: string, actorRole: Role, now: Date = new Date()): Promise<DelegationScreenData> {
-  const [directory, made, acting, all] = await Promise.all([
+  const [directory, made, acting, all, portal] = await Promise.all([
     fetchAsUserDirectory(),
     listDelegationsIMade(actorSub, now),
     listDelegationsIActFor(actorSub, now),
-    // 🔵 거절도 이 안에서 난다 — 네 조회가 서로를 기다리지 않는 모양은 그대로다(머리말).
+    // 🔵 거절도 이 안에서 난다 — 다섯 조회가 서로를 기다리지 않는 모양은 그대로다(머리말).
     listAllDelegations(actorRole, now),
+    /**
+     * 🔴 **포털에 맡긴 위임도 함께 묻는다**(2026-11-16, 설계 B-4·D-2). 제 표만 보여 주면
+     *    「분명 맡겼는데 여기엔 없다」가 된다(위 `portalActing` 주석).
+     * 🔵 **던지지 않는다** — 못 물으면 `unavailable` 이 서고, 나머지 네 묶음은 그대로 그려진다.
+     *    명부 호출(최대 5초)과 **나란히** 나가므로 이 화면이 더 느려지지 않는다.
+     */
+    resolvePortalDelegations(actorSub),
   ]);
 
   // 🔴 포털 번호를 떼고 내려보낸다(머리말).
@@ -84,6 +124,15 @@ export async function readDelegationScreen(actorSub: string, actorRole: Role, no
     acting,
     all: all.ok ? all.view : null,
     canDelegateForOthers: mayManageOthersDelegations(actorRole),
+    /**
+     * 🔴 **본인 번호를 빼고 센다.** 포털은 답의 맨 앞에 부른 사람 자신을 넣어 주므로(설계 C-2)
+     *    그냥 세면 위임이 하나도 없는 사람도 「1건」이 된다. 🔵 번호 자체는 **여기서 끝난다** —
+     *    화면이 받는 모양에 번호를 담을 칸이 없다(이 파일 머리말의 명부 규칙과 같은 자리다).
+     */
+    portalActing: {
+      count: portal.delegatorSubs.filter((delegatorSub) => delegatorSub !== actorSub).length,
+      unavailable: portal.unavailable,
+    },
     today: seoulDateText(now),
   };
 }

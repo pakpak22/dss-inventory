@@ -37,6 +37,17 @@ import {
 const sub = (name: string) => `sub-${name}`;
 const asId = (name: string) => `as-${name}`;
 
+/**
+ * 🔴 **「이 시험에서는 포털에 안 물었다」**를 글자로 적는다 (2026-11-16, 설계 B-4).
+ *
+ * 2026-11-16 부터 위임을 맡기는 고지가 **둘**이고(이 표 + 포털), `actingApproverSubs` 는 넷째
+ * 인자로 포털 쪽 목록을 받는다. 아래 ⑤의 옛 시험들은 **이 표의 규칙만** 재는 것이므로 포털
+ * 쪽은 비워 둔다 — 🔴 **단언을 약하게 만든 것이 아니다.** 기대값은 한 글자도 안 바뀌었고,
+ * 늘어난 것은 「포털이 아무 말도 안 했을 때」라는 전제뿐이다. 두 고지가 **합쳐지는** 동작은
+ * `tests/portal-delegation.test.ts` 가 따로 잰다.
+ */
+const NO_PORTAL: readonly string[] = [];
+
 /** 기간 하나 — 2026-10-01 00:00 부터 2026-10-08 00:00 **직전**까지. */
 const STARTS = new Date("2026-10-01T00:00:00.000Z");
 const ENDS = new Date("2026-10-08T00:00:00.000Z");
@@ -199,46 +210,46 @@ describe("⑤ 지금 내 자격으로 누를 수 있는 번호들 (actingApprove
   it("🔴 위임이 하나도 없으면 **본인 번호 하나뿐**이다 — 네 자리가 예전과 한 글자도 다르지 않게 돈다", () => {
     // 🔴 이것이 「위임을 넣어도 지금 동작이 안 바뀐다」의 근거다. 목록이 한 칸이면 DB 쪽
     //    `inArray(…, [그 한 칸])` 은 `eq(…, 그 칸)` 과 같은 줄을 고른다.
-    assert.deepEqual(actingApproverSubs([], sub("kim"), at), [sub("kim")]);
-    assert.deepEqual(actingApproverSubs([delegation("park", "lee")], sub("kim"), at), [sub("kim")], "남의 위임은 내 목록을 늘리지 않는다");
+    assert.deepEqual(actingApproverSubs([], sub("kim"), at, NO_PORTAL), [sub("kim")]);
+    assert.deepEqual(actingApproverSubs([delegation("park", "lee")], sub("kim"), at, NO_PORTAL), [sub("kim")], "남의 위임은 내 목록을 늘리지 않는다");
   });
 
   it("🔴 **본인이 맨 앞에 언제나 남는다** — 위임은 넘기는 것이 아니라 늘리는 것이다", () => {
     // 🔴 원래 결재권자(kim)가 자리를 비우며 맡겨 두고도 중간에 들어와 직접 누를 수 있어야 한다.
     //    맡긴 사람 쪽은 목록이 늘지 않지만, **자기 번호는 그대로 남는다.**
-    assert.deepEqual(actingApproverSubs([delegation("kim", "lee")], sub("kim"), at), [sub("kim")]);
-    assert.deepEqual(actingApproverSubs([delegation("kim", "lee")], sub("lee"), at), [sub("lee"), sub("kim")]);
+    assert.deepEqual(actingApproverSubs([delegation("kim", "lee")], sub("kim"), at, NO_PORTAL), [sub("kim")]);
+    assert.deepEqual(actingApproverSubs([delegation("kim", "lee")], sub("lee"), at, NO_PORTAL), [sub("lee"), sub("kim")]);
   });
 
   it("둘에게서 위임받으면 셋이 된다 — 본인 + 맡긴 두 사람", () => {
     const rows = [delegation("kim", "lee"), delegation("park", "lee")];
-    assert.deepEqual(actingApproverSubs(rows, sub("lee"), at), [sub("lee"), sub("kim"), sub("park")]);
+    assert.deepEqual(actingApproverSubs(rows, sub("lee"), at, NO_PORTAL), [sub("lee"), sub("kim"), sub("park")]);
   });
 
   it("🔴 끝난 위임·되돌린 위임은 목록을 늘리지 않는다 — 본인 하나로 돌아온다", () => {
     const ended = delegation("kim", "lee", { startsAt: new Date("2026-09-01T00:00:00.000Z"), endsAt: new Date("2026-09-10T00:00:00.000Z") });
     const revoked = delegation("park", "lee", { revokedAt: new Date("2026-10-02T00:00:00.000Z") });
-    assert.deepEqual(actingApproverSubs([ended, revoked], sub("lee"), at), [sub("lee")]);
+    assert.deepEqual(actingApproverSubs([ended, revoked], sub("lee"), at, NO_PORTAL), [sub("lee")]);
   });
 
   it("🔴 두 겹은 이어지지 않는다 — A→B·B→C 에서 C 는 A 의 번호를 못 얻는다", () => {
     const rows = [delegation("a", "b"), delegation("b", "c")];
-    assert.deepEqual(actingApproverSubs(rows, sub("c"), at), [sub("c"), sub("b")], "A 가 맡긴 사람은 B 뿐이다");
-    assert.deepEqual(actingApproverSubs(rows, sub("b"), at), [sub("b"), sub("a")]);
+    assert.deepEqual(actingApproverSubs(rows, sub("c"), at, NO_PORTAL), [sub("c"), sub("b")], "A 가 맡긴 사람은 B 뿐이다");
+    assert.deepEqual(actingApproverSubs(rows, sub("b"), at, NO_PORTAL), [sub("b"), sub("a")]);
   });
 
   it("🔴 **빈 목록이 나오는 길이 없다** — `inArray(…, [])` 는 오류 없이 모두를 막는다", () => {
     // 🔴 drizzle 이 빈 배열을 `false` 로 굽는다. 그러면 아무도 아무것도 못 누르는데 오류는 나지
     //    않아, 「왜 안 되지」의 답을 아무도 못 찾는다. 그래서 본인 번호가 언제나 들어간다.
     for (const rows of [[], [delegation("kim", "lee")], [delegation("a", "b"), delegation("b", "a")]]) {
-      assert.ok(actingApproverSubs(rows, sub("cho"), at).length >= 1);
+      assert.ok(actingApproverSubs(rows, sub("cho"), at, NO_PORTAL).length >= 1);
     }
   });
 
   it("🔴 A/S 번호를 넘기면 **그 틀린 번호 하나짜리** 목록이다 — 위임이 하나도 안 붙는다", () => {
     // 🔵 빈 목록이 아니라 「아무 줄도 안 맞는 번호 하나」가 된다. 어느 쪽이든 결과는 0건이고,
     //    이 시험은 열쇠가 다시 뒤바뀌었을 때 **여기서** 깨지라고 있다.
-    assert.deepEqual(actingApproverSubs([delegation("kim", "lee")], asId("lee"), at), [asId("lee")]);
+    assert.deepEqual(actingApproverSubs([delegation("kim", "lee")], asId("lee"), at, NO_PORTAL), [asId("lee")]);
   });
 });
 

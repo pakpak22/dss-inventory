@@ -43,16 +43,27 @@ type Conn = ReturnType<typeof db> | Tx;
  * 결재권자들. **네 자리가 이 값을 받는다**(까닭은 `./delegation.ts` 의 `actingApproverSubs`).
  *
  * @param actorSub 누르려는 사람의 **포털 번호**(세션의 `sub` · `users.auth_sub`).
+ * @param portalDelegatorSubs 🔴 **포털에 맡긴 위임**으로 지금 대신할 수 있는 결재권자들
+ *   (2026-11-16, 설계 B-4). 이 파일은 **묻지 않는다** — 망 호출이고, 이 함수는 결재 트랜잭션
+ *   **안에서** 불리기 때문이다(아래 `conn`). 묻는 일은 `./portal-acting-subs.ts` 의
+ *   `resolvePortalDelegations` 가 **거래를 열기 전에** 하고, 그 결과가 여기까지 인자로 내려온다
+ *   (설계 C-3). 🔴 **기본값을 두지 않는다**: 빠뜨린 자리에서만 포털 위임이 조용히 안 걸리고,
+ *   그때 오류도 화면 표시도 없다. 안 묻는 자리는 `NO_PORTAL_DELEGATIONS.delegatorSubs` 를
+ *   글자로 넘겨 **안 물었다는 사실을 코드에 적는다.**
  * @param conn 🔴 **쓰기와 같은 트랜잭션을 넘겨라.** 결재를 집는 자리(`decidePartIssueApproval`)
  *   에서 이것을 밖에서 읽으면, 읽은 뒤 집기 전 사이에 위임이 끝나거나 되돌려질 수 있고 그때
  *   「권한이 없는데 통과한」 결재가 한 건 남는다. 기본값이 `db()` 라 **안 넘겨도 오류가 나지
  *   않는다** — 그래서 여기 적어 둔다.
+ *   🔵 **포털 쪽은 이 울타리가 없다** — 트랜잭션 밖에서 미리 물은 값이라 그 사이에 되돌려질 수
+ *   있다. 그래도 망 호출을 거래 안에 넣는 대가(포털이 느린 날 결재건 행 잠금이 2초씩 붙들린다)가
+ *   훨씬 크고, 위임이 **되돌려진 직후 몇 밀리초**에 눌린 결재 하나는 포털의 기록으로 설명된다.
  * @param now 🔴 **판정과 기록이 같은 순간이어야 한다.** 결재 쪽은 단계 줄의 `decided_at` 에
  *   적는 그 시각을 그대로 넘긴다. 둘이 갈리면 기간이 끝나는 즈음의 결재가 유효했는지를
  *   나중에 설명할 수 없다.
  */
 export async function actingApproverSubsFor(
   actorSub: string,
+  portalDelegatorSubs: readonly string[],
   conn: Conn = db(),
   now: Date = new Date(),
 ): Promise<ActingApproverSubs> {
@@ -76,7 +87,9 @@ export async function actingApproverSubsFor(
   // 🔵 `delegate_sub` 로 이미 좁혔지만 그 조건을 순수 함수에 **다시 맡긴다** — 걸러 내는 일을
   //    부르는 쪽에 떠넘기지 않는 것이 그 함수의 약속이고, 여기서 빼면 그 약속에 기대는 다른
   //    부르는 쪽이 생겼을 때 조용히 갈린다.
-  return actingApproverSubs(rows, actorSub, now);
+  // 🔴 **합치는 자리도 그 함수 하나다**(2026-11-16). 포털 목록을 여기서 이어 붙이면 두 고지를
+  //    합치는 규칙이 두 벌이 되고, 두 겹(A→B·B→C)을 막는 자리도 함께 둘이 된다.
+  return actingApproverSubs(rows, actorSub, now, portalDelegatorSubs);
 }
 
 /**
@@ -95,6 +108,20 @@ export async function actingApproverSubsFor(
  *
  * 🔴 **`starts_at` 은 WHERE 에 넣지 않는다** — 위 둘과 같은 까닭이고(색인에 없다), 아직
  * 시작하지 않은 줄은 순수 함수가 거른다. 여기 조건을 손으로 적으면 반열린 구간이 세 벌이 된다.
+ *
+ * ── 🔴 **포털 위임은 여기 안 붙는다. 통로가 그 방향으로 없다** (2026-11-16) ──
+ * 위 `actingApproverSubsFor` 는 포털에 맡긴 위임까지 합치는데(설계 B-4) 이쪽은 못 한다 —
+ * 포털의 통로(`/api/integration/delegations`)가 받는 일 다섯 가운데 **이 방향이 없기**
+ * 때문이다: `acting` 은 「이 사람이 **대신할 수 있는** 사람들」이고, 그 반대인 「이 사람을
+ * **대신할 수 있는** 사람들」을 묻는 일이 없다. `list&scope=mine` 이 비슷해 보이지만 그것은
+ * **사람에게 보여 줄 줄**(이름·사유·기간까지)이고 철회된 줄을 거르는 규칙이 달라, 그것으로
+ * 알림을 넓히려면 **기간·되돌림 판정을 이 집에 한 벌 더 베껴 적어야** 한다 — 설계가 그 규칙을
+ * 포털에 둔 까닭 자체를 무너뜨린다.
+ *
+ * 🔵 **그래서 무엇이 빠지나**: 포털 쪽 대리인에게 **「결재가 생겼다」 즉시 알림(메일)만** 안
+ * 간다. 🔵 그 사람의 **알림 종·결재 화면·[승인] 단추는 멀쩡히 돈다** — 그 셋은 포털에 직접
+ * 묻는다. 적힌 결재자에게는 그대로 가고, 포털의 주기 작업도 평소처럼 줍는다. 🔴 메우려면
+ * **포털에 반대 방향 일을 하나 더 내야** 하고, 그것은 포털 쪽 조각이다.
  */
 export async function activeDelegateSubsFor(delegatorSub: string, now: Date = new Date()): Promise<string[]> {
   const rows = await db()

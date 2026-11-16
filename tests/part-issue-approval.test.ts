@@ -185,8 +185,10 @@ describe("② 지금 차례가 누구인가", () => {
    *    `tests/part-issue-delegation.test.ts` 가 이어서 잰다.
    * 🔵 위임 줄이 **하나도 없을 때**의 목록이다. 그래서 아래 다섯 줄은 이 칸이 생기기 전과
    *    글자 하나 다르지 않은 것을 재고 있다.
+   * 🔵 넷째 인자(**포털에 맡긴 위임**, 2026-11-16)도 비어 있다 — 「포털에 물었더니 아무것도
+   *    없더라」가 이 묶음의 전제다. 기대값은 한 글자도 안 바뀌었다.
    */
-  const alone = (name: string) => actingApproverSubs([], name, new Date("2026-10-21T00:00:00.000Z"));
+  const alone = (name: string) => actingApproverSubs([], name, new Date("2026-10-21T00:00:00.000Z"), []);
 
   it("🔴 내 차례가 아닌 사람은 결재할 수 없다", () => {
     const step = { approverSub: sub("kim"), status: "REQUESTED" as const };

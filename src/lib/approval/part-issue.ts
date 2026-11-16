@@ -22,6 +22,10 @@ import { actingApproverSubsFor } from "./delegation-queries";
 // 🔴 「그 자리를 실제로 누가 눌렀나」의 갈래 넷도 저장소에 한 자리에서만 갈린다 — 화면마다 다시
 //    적으면 옛 줄(`decided_by_sub` 가 `NULL`)이 「본인」으로 둔갑한다(그 함수의 머리말).
 import { approvalStepActor, type ApprovalStepActor } from "./delegation";
+// 🔴 **포털에 묻는 모듈(`./portal-acting-subs.ts`)은 여기서 끌어오지 않는다.** 망 호출을
+//    트랜잭션 안으로 들이지 않으려는 것이고(설계 C-3), 끌어오면 다음 사람이 「여기서 물으면
+//    되겠네」로 손이 간다. 들어오는 것은 **이미 받아 온 답의 그릇**뿐이다.
+import { notePortalDelegationOutage, type PortalDelegations } from "./portal-delegation";
 import {
   checkCanCancelPartIssue,
   checkCanDecidePartIssue,
@@ -349,8 +353,21 @@ export type DecidePartIssueResult =
       status: PartIssueStatus;
       /** 방금 결재한 단계 번호 */
       stepOrder: number;
+      /** 🔴 아래 `ok: false` 쪽과 **같은 칸**이다. 까닭은 거기 적혀 있다. */
+      portalDelegationUnavailable?: true;
     }
-  | { ok: false; message: string };
+  | {
+      ok: false;
+      message: string;
+      /**
+       * 🔴 **포털에 못 물은 채로 판정했다**(2026-11-16, 설계 B-6·B-7). 포털이 멎으면 위임 없이
+       * 진행하므로 **대리인만 조용히 막힌다** — 그 사람에게는 「지금 결재할 차례가 아닙니다」
+       * 하나만 보이고, 자기가 왜 못 누르는지 알 길이 없다. 이 칸이 화면까지 가는 길을 내 준다.
+       * 🔵 값이 `true` 뿐인 까닭과 성공·실패를 안 가리는 까닭은 `./portal-delegation.ts` 의
+       *    `notePortalDelegationOutage` 에 있다.
+       */
+      portalDelegationUnavailable?: true;
+    };
 
 /**
  * 내 차례의 단계를 승인하거나 반려한다.
@@ -363,6 +380,12 @@ export type DecidePartIssueResult =
  * 함수는 저장소에 하나뿐이고(`./delegation.ts` 의 `actingApproverSubs`), 목록·알림 종·순수
  * 판정도 **같은 함수**에서 받는다. 위임이 하나도 없으면 목록은 본인 번호 하나뿐이라 예전과
  * 한 글자도 다르지 않게 돈다.
+ *
+ * ── 🔴 포털 위임은 **밖에서 물어 들고 들어온다** (2026-11-16, 설계 B-4·C-3) ──
+ * 위임을 맡기는 고지가 둘이 됐다(이 시스템의 표 + 포털). 🔴 **포털에 묻는 일을 이 함수가 하지
+ * 않는다** — 아래 판정은 결재건 행을 `FOR UPDATE` 로 잡은 **트랜잭션 안**에서 도는데, 거기
+ * 망 호출을 넣으면 포털이 느린 날 그 행 잠금이 2초씩 붙들린다. 묻는 일은 서버 액션이 **거래를
+ * 열기 전에** 하고(`app/actions/part-issue.ts`), 여기는 그 답을 받기만 한다.
  *
  * 🔵 `note` 는 **반려 사유**다. 승인에는 한마디를 받지 않으므로(2026-10-15 결정, 화면에 칸이
  * 없고 서버 액션도 승인일 때는 읽지 않는다) 승인으로 올 때는 언제나 빈 글자다 — 표의
@@ -377,6 +400,12 @@ export async function decidePartIssueApproval(
   decision: "APPROVED" | "REJECTED",
   note: string,
   actor: PartIssueActor,
+  /**
+   * 🔴 **선택 인자가 아니다**(2026-11-16). 기본값을 두면 빠뜨린 자리에서만 포털 위임이 조용히
+   * 안 걸린다 — 오류도 화면 표시도 없다. 포털에 묻지 않는 자리(시험·스크립트)는
+   * `NO_PORTAL_DELEGATIONS` 를 글자로 넘겨 그 뜻을 드러낸다.
+   */
+  portal: PortalDelegations,
 ): Promise<DecidePartIssueResult> {
   if (decision === "REJECTED") {
     const gate = checkRejectReason(note);
@@ -464,8 +493,11 @@ export async function decidePartIssueApproval(
      *    읽은 뒤 아래에서 집기 전 사이에 위임이 끝나거나 되돌려질 수 있고, 그때 **권한이 없는데
      *    통과한** 결재가 한 건 남는다. 🔵 함수의 기본값이 `db()` 라 안 넘겨도 오류는 나지 않는다.
      * 🔵 결재건 행을 이미 `FOR UPDATE` 로 잡아 둔 뒤라, 이 읽기가 길어져도 사슬이 갈라지지 않는다.
+     *
+     * 🔴 **포털 위임은 이미 받아 둔 값**이다(`portal.delegatorSubs`) — 거래를 열기 전에 물었다
+     *    (머리말 · 설계 C-3). 여기서 묻지 마라: 망 호출이 이 `FOR UPDATE` 안으로 들어온다.
      */
-    const actingSubs = await actingApproverSubsFor(actor.sub, tx, now);
+    const actingSubs = await actingApproverSubsFor(actor.sub, portal.delegatorSubs, tx, now);
 
     /**
      * 3. 내 차례의 단계 줄을 집는다. 🔴 **포털 번호로** 집는다 — A/S 번호로 집으면 아무도 자기
@@ -560,7 +592,13 @@ export async function decidePartIssueApproval(
   if (result.ok && nextApproverSub !== null) {
     await pingPortalApprovalCreated(nextApproverSub);
   }
-  return result;
+  /**
+   * 🔴 **「포털에 못 물은 채로 판정했다」를 결과에 얹는다**(2026-11-16, 설계 B-7). 못 물으면
+   *    위임이 안 걸려 **대리인만 조용히 막히는데**, 그 사람이 받는 문구는 「지금 결재할 차례가
+   *    아닙니다」 하나뿐이다. 이 한 칸이 화면까지 가는 유일한 길이고, **얹는 자리는 여기
+   *    하나**다 — 성공·실패 가지마다 적으면 한쪽이 빠지는 날 안내가 조용히 사라진다.
+   */
+  return notePortalDelegationOutage(result, portal);
 }
 
 /* ------------------------------------------------------------------ */
@@ -914,9 +952,18 @@ function toView(r: ListRow): PartIssueView {
  * 대리인 화면에 그 건이 **아예 안 보인다** — 종은 울리는데 가 보면 없는 꼴이 된다. 번호 목록을
  * 만드는 함수는 저장소에 하나뿐이고(`./delegation.ts` 의 `actingApproverSubs`), 집행·알림 종·
  * 순수 판정도 **같은 함수**에서 받는다.
+ *
+ * @param portalDelegatorSubs 🔴 **포털에 맡긴 위임**으로 지금 대신할 수 있는 결재권자들
+ *   (2026-11-16, 설계 B-4). 🔴 **이 함수가 스스로 묻지 않는다 — 부르는 쪽이 정한다.** 까닭은
+ *   이 조회가 **포털이 우리를 부르는 통로**(`app/api/integration/approvals`)에서도 불리기
+ *   때문이다: 거기서 또 포털에 물으면 **포털이 우리를 기다리는 동안 우리가 포털을 기다린다**
+ *   (포털의 상한은 1.5초, 우리 상한은 2초라 답이 닿기 전에 포털이 그 줄을 버린다).
+ *   🔴 **기본값을 두지 않는다** — 두면 그 통로가 아무 표시 없이 「안 묻는 쪽」으로 굳는다.
+ *   화면 쪽(`./part-issue-screen-data.ts`)은 물어서 넘기고, 그 통로는
+ *   `NO_PORTAL_DELEGATIONS.delegatorSubs` 를 글자로 넘겨 **안 물었다는 사실을 코드에 적는다.**
  */
-export async function listPartIssueApprovalsToDecide(approverSub: string): Promise<PartIssueView[]> {
-  const actingSubs = await actingApproverSubsFor(approverSub);
+export async function listPartIssueApprovalsToDecide(approverSub: string, portalDelegatorSubs: readonly string[]): Promise<PartIssueView[]> {
+  const actingSubs = await actingApproverSubsFor(approverSub, portalDelegatorSubs);
   const rows = await listSelect()
     .where(and(eq(stockIssueApprovals.status, "PENDING_APPROVAL"), inArray(stockIssueApprovalSteps.approverSub, [...actingSubs])))
     .orderBy(asc(stockIssueApprovals.requestedAt));
@@ -1093,9 +1140,14 @@ export async function listOpenPartIssueApprovalsByRequest(requestIds: readonly s
  *
  * @param approverSub 🔴 **포털 번호**(`users.auth_sub` · 세션의 `sub`). `users.id` 를 넘기면
  *   **영원히 0건**이다(①의 주석 — 실제로 있었던 결함이다).
+ * @param portalDelegatorSubs 🔴 ①과 **같은 값이어야 한다**(2026-11-16, 설계 B-4) — 갈리면
+ *   「종에는 N건인데 눌러 보면 다른 수」가 된다. ①과 같은 까닭으로 **여기도 스스로 묻지
+ *   않는다**: 이 집계가 포털이 우리를 부르는 통로(`app/api/integration/notifications`)에서도
+ *   불린다. 머리말의 종(`components/HeaderNotificationBell.tsx`)은 물어서 넘기고, 그 통로는
+ *   `NO_PORTAL_DELEGATIONS.delegatorSubs` 를 글자로 넘긴다.
  */
-export async function summarizePartIssueApprovalsToDecide(approverSub: string): Promise<{ count: number; oldestAt: Date | null }> {
-  const actingSubs = await actingApproverSubsFor(approverSub);
+export async function summarizePartIssueApprovalsToDecide(approverSub: string, portalDelegatorSubs: readonly string[]): Promise<{ count: number; oldestAt: Date | null }> {
+  const actingSubs = await actingApproverSubsFor(approverSub, portalDelegatorSubs);
   const [r] = await db()
     .select({ n: count(), oldest: min(stockIssueApprovals.requestedAt) })
     .from(stockIssueApprovalSteps)
