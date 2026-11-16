@@ -894,11 +894,14 @@ describe("🔴 남의 건은 내 종에 안 뜬다 — 가르는 열쇠는 질�
      *    받는가, 그리고 그 목록으로 좁히는가. 하나만 재면 손으로 만든 목록을 넣어도 통과한다.
      */
     /**
-     * 🔴 2026-11-16(포털 결재권 위임)에 **고지가 둘**이 됐다 — 이 집의 표와 포털. 합치는 자리는
-     *    여전히 `actingApproverSubs` 하나이고, 이 집계는 포털 쪽 목록을 **받아서** 그 함수로
-     *    넘긴다. 🔴 여기서 포털 목록을 빼면 **대리인에게 종만 안 울린다**(화면에는 뜬다).
+     * 🔴 2026-11-16(결재권 위임)에 **고지가 둘**이 됐다 — 이 집의 표와 승인함. 합치는 자리는
+     *    여전히 `actingApproverSubs` 하나다.
+     * 🟢 **그날 저녁에 인자가 사라졌다**(설계 B-12). 낮까지는 이 집계가 포털 쪽 목록을
+     *    **받아서** 넘겼고, 그래서 「넘기는 자리」와 「안 넘기는 자리」가 갈려 **남의 시스템
+     *    종에서만 대리 건이 빠졌다**(설계 D-8 ②). 이제 그 함수가 제 표 둘을 읽는다.
      */
-    assert.ok(fn.includes("actingApproverSubsFor(approverSub, portalDelegatorSubs)"), "결재 차례 집계가 위임 목록을 **그 함수**에서 받지 않는다 — 대리인에게 종이 안 울리거나, 아무나 세게 된다");
+    assert.ok(fn.includes("actingApproverSubsFor(approverSub)"), "결재 차례 집계가 위임 목록을 **그 함수**에서 받지 않는다 — 대리인에게 종이 안 울리거나, 아무나 세게 된다");
+    assert.ok(!fn.includes("portalDelegatorSubs"), "위임 목록을 부르는 쪽이 정하는 길이 되살아났다 — 통로마다 다른 수를 세게 된다");
     assert.ok(fn.includes("inArray(stockIssueApprovalSteps.approverSub, [...actingSubs])"), "결재 차례 집계가 포털 번호로 좁히지 않는다 — 남의 결재가 내 종에 뜨거나, A/S 번호라 영원히 0건이다");
     assert.ok(!fn.includes("approverUserId"), "A/S 번호로 좁히고 있다 — 오류 없이 영원히 0건이 된다");
     assert.ok(fn.includes('eq(stockIssueApprovalSteps.status, "REQUESTED")'), "이미 결재한 단계까지 세고 있다");
@@ -917,7 +920,7 @@ describe("🔴 남의 건은 내 종에 안 뜬다 — 가르는 열쇠는 질�
    */
   it("🔴 질의에 넘기는 번호가 바뀌지 않았다 — 차례는 sub, 올린 건은 id", () => {
     const queries = src("src/lib/notifications/queries.ts");
-    assert.ok(queries.includes("summarizePartIssueApprovalsToDecide(viewer.sub, portalDelegatorSubs)"), "결재 차례를 users.id 로 묻고 있다(또는 포털 위임을 안 넘긴다) — 영원히 0건이거나 대리인에게 종이 안 울린다");
+    assert.ok(queries.includes("summarizePartIssueApprovalsToDecide(viewer.sub)"), "결재 차례를 users.id 로 묻고 있다 — 영원히 0건이다");
     assert.ok(queries.includes("listDecidedPartIssueApprovalsFor(viewer.id,"), "결재 결과를 포털 번호로 묻고 있다 — 영원히 0건이 된다");
   });
 });
@@ -927,40 +930,51 @@ describe("🔴 두 통로가 포털 번호를 어디서 얻는가 — users 를 
     const layout = src("src/app/(app)/layout.tsx");
     const bell = src("src/components/HeaderNotificationBell.tsx");
     assert.ok(layout.includes("subject={session.user.authSub}"), "머리말이 포털 번호를 종에 안 넘긴다");
-    assert.ok(bell.includes("listInventoryNotifications({ id: userId, role, sub: subject }, portal.delegatorSubs)"), "종이 포털 번호(또는 포털 위임 목록)를 질의에 안 넘긴다 — 결재 줄이 영원히 안 뜨거나 대리인에게만 안 뜬다");
-    // 🔴 **종은 포털에 직접 묻는다**(2026-11-16). 안 물으면 대리인에게 종만 안 울린다 —
-    //    `/approvals` 에는 그 건이 보이는데 종에는 없는, 아무도 신고하지 않는 짝이 된다.
-    assert.ok(bell.includes("resolvePortalDelegations(subject)"), "종이 포털에 결재권 위임을 묻지 않는다 — 대리인에게 종이 안 울린다");
+    assert.ok(bell.includes("listInventoryNotifications({ id: userId, role, sub: subject })"), "종이 포털 번호를 질의에 안 넘긴다 — 결재 줄이 영원히 안 뜬다");
+    /**
+     * 🔴 **뒤집힌 단언이다**(2026-11-16 저녁, 설계 B-12).
+     * 옛 뜻: 「**종은 포털에 직접 묻는다** — 안 물으면 대리인에게 종만 안 울린다」.
+     * 지금 뜻: 🔴 **종도 안 묻는다.** 위 질의가 제 표 둘을 읽으므로 대리인에게 그대로 울리고,
+     * 묻는 길이 되살아나면 모든 화면에 2초짜리 왕복이 하나씩 다시 붙는다.
+     * 🔵 **남의 알림을 받아 오는 길은 그대로다** — 걷어낸 것은 결재권 위임을 묻던 길 하나다.
+     */
+    const bellBody = bell.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    assert.ok(!bellBody.includes("resolvePortalDelegations"), "종이 포털에 결재권 위임을 되묻는다 — 모든 화면에 왕복이 하나씩 붙는다");
+    assert.ok(bellBody.includes("fetchPortalNotifications(subject)"), "남의 알림을 받아 오는 길까지 걷어냈다 — 통합 종이 반쪽이 된다");
   });
 
   it("포털 통로: 토큰의 sub 로 되짚은 **그 users 행**의 `authSub` 를 쓴다", () => {
     const route = src("src/app/api/integration/notifications/route.ts");
     assert.ok(route.includes("findActiveUserByAuthSub(verified.subject)"), "포털 통로가 사람을 되짚는 길이 바뀌었다");
     assert.ok(
-      route.includes("listInventoryNotifications({ id: user.id, role: user.role, sub: user.authSub }, NO_PORTAL_DELEGATIONS.delegatorSubs)"),
-      "포털 통로가 포털 번호를 안 넘긴다 — 남의 시스템 종에서만 결재 줄이 빠진다",
+      route.includes("listInventoryNotifications({ id: user.id, role: user.role, sub: user.authSub })"),
+      "포털 통로가 포털 번호를 안 넘긴다 — 남의 시스템 종에서 결재 줄이 빠진다",
     );
     // 🔴 번호를 얻으려고 users 를 **한 번 더** 읽지 않는다 — 위에서 이미 통째로 읽었다.
     assert.equal(route.split("findActiveUserByAuthSub").length - 1, 2, "users 를 두 번 읽고 있다(import 1 + 호출 1 이어야 한다)");
   });
 
   /**
-   * 🔴 **포털이 우리를 부르는 통로에서는 포털에 묻지 않는다** (2026-11-16, 결재권 위임).
-   * 거기서 또 포털에 물으면 **포털이 우리를 기다리는 동안 우리가 포털을 기다린다** — 포털의
-   * 상한이 1.5초인데 우리 상한이 2초라(approval/portal-acting-subs.ts) 답이 닿기 전에 포털이
-   * 이 줄을 통째로 버린다. 🔵 그 대가(남의 시스템 종에서만 대리 건이 빠진다)는 라우트 주석에.
+   * 🔴 **뒤집힌 단언이다** (2026-11-16 저녁, 설계 B-12).
+   *
+   * 옛 뜻: 「**포털이 우리를 부르는 통로에서만** 포털에 안 묻는다 — 되물으면 포털이 우리를
+   * 기다리는 동안 우리가 포털을 기다린다. 그래서 「안 물었다」를 글자로 적어 둔다」. 그 대가가
+   * **남의 시스템 종에서만 대리 건이 빠지는 것**이었다(설계 D-8 ②).
+   *
+   * 지금 뜻: 🔴 **어디서도 안 묻는다.** 그러니 이 통로 하나만 재면 **공짜로 통과한다** —
+   * 머리말의 종까지 **함께** 보아서, 되돌아가는 날 여기서 깨지게 한다.
+   * 🔵 저장소 전체를 걷어 보는 더 넓은 그물은 `tests/portal-delegation.test.ts` ④에 있다.
    */
-  it("🔴 포털 통로는 포털에 **되묻지 않는다** — 서로 기다리는 짝이 된다", () => {
-    // 🔴 **주석을 걷어내고 본다.** 「여기서는 되묻지 않는다(까닭은 portal-acting-subs.ts)」는
-    //    설명이 곧 금지어를 품는다 — 안 걷어내면 설명 때문에 깨진다(2026-11-16 실측).
-    const route = src("src/app/api/integration/notifications/route.ts")
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^\s*\/\/.*$/gm, "");
-    assert.ok(!route.includes("resolvePortalDelegations"), "포털이 부른 통로가 포털에 되묻는다 — 포털의 1.5초 안에 못 답한다");
-    assert.ok(!route.includes("portal-acting-subs"), "포털이 부른 통로가 포털에 묻는 모듈을 끌어온다 — 되묻는 길이 열린다");
-    // 🔵 「안 물었다」를 **글자로** 적는다 — 빈 배열을 그냥 넘기면 「물었는데 없었다」와 같아 보여
-    //    다음 사람이 결함으로 고친다.
-    assert.ok(route.includes("NO_PORTAL_DELEGATIONS.delegatorSubs"), "안 물었다는 사실이 코드에 안 적혀 있다");
+  it("🔴 **종도 통로도 포털에 결재권 위임을 묻지 않는다** — 되돌아가면 여기서 깨진다", () => {
+    // 🔴 **주석을 걷어내고 본다.** 「걷어냈다」는 내력 설명이 곧 금지어를 품는다 — 안 걷어내면
+    //    설명 때문에 깨진다(2026-11-16 실측).
+    const strip = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    for (const relative of ["src/app/api/integration/notifications/route.ts", "src/components/HeaderNotificationBell.tsx"]) {
+      const body = strip(src(relative));
+      assert.ok(!body.includes("resolvePortalDelegations"), `${relative} 이 포털에 결재권 위임을 되묻는다`);
+      assert.ok(!body.includes("portal-acting-subs"), `${relative} 이 포털에 묻는 모듈을 끌어온다 — 그 모듈은 걷어냈다`);
+      assert.ok(!body.includes("NO_PORTAL_DELEGATIONS"), `${relative} 에 「안 물었다」 상수가 남아 있다 — 그 상태 자체가 없어졌다`);
+    }
   });
 });
 

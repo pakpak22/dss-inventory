@@ -86,19 +86,14 @@ export type NotificationViewer = {
  * 부른다.** 조립이 한 번 더 거르므로 여기서 안 묻는 것은 **답을 바꾸는 일이 아니라 질의를
  * 아끼는 일**이고, 두 자리가 같은 함수를 보므로 갈라질 수 없다.
  *
- * @param portalDelegatorSubs 🔴 **포털에 맡긴 위임**으로 지금 대신할 수 있는 결재권자들
- *   (2026-11-16, 설계 B-4). 🔴 **이 함수가 스스로 묻지 않는다 — 부르는 쪽이 정한다.** 까닭은
- *   이 조회가 **포털이 우리를 부르는 통로**(`app/api/integration/notifications`)에서도 불리기
- *   때문이다: 거기서 또 포털에 물으면 **포털이 우리를 기다리는 동안 우리가 포털을 기다린다**
- *   (포털의 상한은 1.5초, 우리 상한은 2초라 답이 닿기 전에 포털이 그 줄을 버린다).
- *   🔴 **기본값을 두지 않는다** — 두면 그 통로가 아무 표시 없이 「안 묻는 쪽」으로 굳는다.
- *   머리말의 종(`components/HeaderNotificationBell.tsx`)은 물어서 넘기고, 그 통로는
- *   `NO_PORTAL_DELEGATIONS.delegatorSubs` 를 글자로 넘겨 **안 물었다는 사실을 코드에 적는다.**
- *   🔵 못 물었다는 사실 자체는 이 답에 싣지 않는다 — 이 모양은 **포털에게 그대로 나가는 약속**
- *   (`InventoryNotificationFeed`)이라, 칸을 늘리면 사내 시스템 사이의 약속이 바뀐다. 안내가
- *   필요한 자리는 결재 화면과 결재 단추이고 그쪽에는 길이 나 있다.
+ * ── 🟢 **승인함 위임이 두 통로에서 똑같이 걸린다** (2026-11-16 저녁, 설계 B-12) ──
+ * 그날 낮까지는 「지금 내 차례인 결재」의 위임 목록을 **부르는 쪽이 정해서 넘겼다**: 머리말의
+ * 종은 포털에 물어서 넘기고, **포털이 우리를 부르는 통로**(`app/api/integration/notifications`)는
+ * 「안 물었다」를 글자로 넘겼다(되물으면 포털이 우리를 기다리는 동안 우리가 포털을 기다린다).
+ * 🔴 그 갈림의 대가가 **「남의 시스템 종에서만 대리 건이 빠진다」**였다 — 설계 D-8 ②.
+ * 🟢 이제 아래 집계가 **제 표 둘**을 읽으므로 넘길 인자가 없고, 두 통로가 같은 수를 센다.
  */
-export async function listInventoryNotifications(viewer: NotificationViewer, portalDelegatorSubs: readonly string[], now = new Date()): Promise<InventoryNotificationFeed> {
+export async function listInventoryNotifications(viewer: NotificationViewer, now = new Date()): Promise<InventoryNotificationFeed> {
   try {
     const [pending, rejected, toDecide, decided, lowStock] = await Promise.all([
       // 🔴 「누가 받는가」를 여기서 다시 적지 않는다 — 조립이 쓰는 그 함수를 그대로 본다.
@@ -109,9 +104,9 @@ export async function listInventoryNotifications(viewer: NotificationViewer, por
       // 🔴 「7일」을 여기서 손으로 적지 않는다 — 조립과 **같은 함수**로 선을 긋는다.
       receivesRejectedNotification(viewer.role) ? listRejectedRequestsFor(viewer.id, rejectionCutoff(now), NOTIFICATION_MAX_ITEMS) : Promise.resolve({ rows: [], total: 0 }),
       // 🔴 **포털 번호**로 묻는다(viewer.sub). users.id 를 넘기면 영원히 0건이다.
-      // 🔴 포털 위임 목록도 **그대로 넘긴다**(2026-11-16). 안 넘기면 대리인에게 **종만 안
-      //    울린다** — 화면에는 있는데 알림이 없는, 아무도 신고하지 않는 짝이 된다.
-      receivesIssueApprovalToDecideNotification() ? summarizePartIssueApprovalsToDecide(viewer.sub, portalDelegatorSubs) : Promise.resolve({ count: 0, oldestAt: null }),
+      // 🟢 위임 목록은 그 집계가 **제 표 둘에서** 만든다(2026-11-16 저녁) — 여기서 넘기지
+      //    않으므로 「넘기는 자리와 안 넘기는 자리」가 갈릴 일도 없다(머리말).
+      receivesIssueApprovalToDecideNotification() ? summarizePartIssueApprovalsToDecide(viewer.sub) : Promise.resolve({ count: 0, oldestAt: null }),
       // 🔴 여기는 반대로 **이 시스템의 users.id** 다 — 결재건의 `requested_by` 가 그 번호다.
       // 🔴 반려의 「7일」은 위 반려 줄과 **같은 함수**에서 온다. 두 벌로 적지 않는다.
       receivesIssueApprovalDecidedNotification() ? listDecidedPartIssueApprovalsFor(viewer.id, rejectionCutoff(now), NOTIFICATION_MAX_ITEMS) : Promise.resolve({ rows: [], total: 0 }),

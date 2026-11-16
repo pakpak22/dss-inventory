@@ -1,8 +1,5 @@
 import { PORTAL_TOKEN_PURPOSES, readBearerToken, verifyPortalServiceToken } from "@/lib/auth/portal-service-token";
 import { findActiveUserByAuthSub } from "@/lib/auth/users";
-// 🔴 **글자로 「안 물었다」를 적는 상수**다(아래 호출부 주석). 빈 배열을 그냥 넘기면 「물었는데
-//    없었다」와 똑같이 생겨, 다음 사람이 결함으로 보고 「묻게」 고친다.
-import { NO_PORTAL_DELEGATIONS } from "@/lib/approval/portal-delegation";
 import type { InventoryNotificationFeed } from "@/lib/notifications/bell-items";
 import { listInventoryNotifications } from "@/lib/notifications/queries";
 
@@ -64,14 +61,13 @@ export async function GET(request: Request): Promise<Response> {
     //    토큰의 `sub` 와 같은 값이고, 「지금 내 차례인 불출 결재」가 이 번호로만 갈린다
     //    (notifications/queries.ts 의 `NotificationViewer.sub`). **users 를 다시 읽지 않는다** —
     //    위에서 이미 통째로 읽어 두었다.
-    // 🔴 **여기서는 포털에 묻지 않는다**(2026-11-16, 결재권 위임). 지금 이 요청이 **포털이
-    //    우리를 부른 것**이라, 여기서 또 포털에 물으면 **포털이 우리를 기다리는 동안 우리가
-    //    포털을 기다린다.** 포털의 상한은 1.5초이고 우리 상한은 2초라(그쪽 READ_TIMEOUT_MS ·
-    //    approval/portal-acting-subs.ts) 답이 닿기 전에 포털이 이 줄을 통째로 버린다.
-    // 🔵 **대가**: 포털에 맡긴 위임으로 대신할 건은 **남의 시스템 종에서만** 빠진다 — 재고관리
-    //    자신의 종과 결재 화면에는 그대로 뜬다(둘은 제 손으로 묻는다). 메우려면 포털이 이미
-    //    아는 그 목록을 **부를 때 함께 실어 주어야** 하고, 그것은 포털 쪽 조각이다.
-    const feed = await listInventoryNotifications({ id: user.id, role: user.role, sub: user.authSub }, NO_PORTAL_DELEGATIONS.delegatorSubs);
+    // 🟢 **승인함에서 맡긴 위임으로 대신할 결재도 이 수에 들어간다**(2026-11-16 저녁, 설계
+    //    B-12). 그날 낮까지는 이 자리가 「포털에 안 물었다」를 글자로 넘겼고 — 지금 이 요청이
+    //    **포털이 우리를 부른 것**이라 되물으면 포털이 우리를 기다리는 동안 우리가 포털을
+    //    기다린다 — 그 대가로 **남의 시스템 종에서만 대리 건이 빠졌다**(설계 D-8 ②). 이제 그
+    //    집계가 **제 표**를 읽으므로 되물을 까닭이 없고 구멍도 메워졌다.
+    // 🔴 여기서 포털에 묻는 길을 되살리지 마라 — 포털의 상한은 1.5초다(그쪽 READ_TIMEOUT_MS).
+    const feed = await listInventoryNotifications({ id: user.id, role: user.role, sub: user.authSub });
     return Response.json(feed, { headers: NO_STORE });
   } catch (e) {
     // 설정값이 빠졌거나(env 의 getter 가 던진다) 포털의 JWKS 를 못 읽었거나 DB 가 멎었다.

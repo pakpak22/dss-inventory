@@ -65,7 +65,10 @@ describe("통합 승인함 통로", () => {
   });
 
   it("🔴 자격 판정을 새로 쓰지 않는다 — 기존 조회를 그대로 넘긴다", () => {
-    assert.match(approvals, /listPendingApprovals: \(subject\) => listPartIssueApprovalsToDecide\(subject, NO_PORTAL_DELEGATIONS\.delegatorSubs\)/);
+    // 🟢 2026-11-16 저녁(설계 B-12): 감싸지 않고 **함수 자체를** 넘긴다. 낮까지는 「포털에 안
+    //    물었다」를 인자로 적어 주느라 화살표로 한 겹 감싸야 했고, 그 겹이 곧 **여기서만 다르게
+    //    세는 자리**였다 — 그래서 통합 승인함에서만 대리 건이 빠졌다(설계 D-8 ②).
+    assert.match(approvals, /listPendingApprovals: listPartIssueApprovalsToDecide,/);
     assert.match(approvals, /findActor: findActiveUserByAuthSub/);
     // 라우트가 스스로 SQL 을 쓰거나 역할을 비교하면 판정이 두 벌이 된다.
     for (const forbidden of ["db.select", "drizzle-orm", '=== "ADMIN"', '=== "SUPER_ADMIN"', "role ==="]) {
@@ -74,21 +77,26 @@ describe("통합 승인함 통로", () => {
   });
 
   /**
-   * 🔴 **포털이 우리를 부르는 통로에서는 포털에 되묻지 않는다** (2026-11-16, 결재권 위임).
-   * 되물으면 **포털이 우리를 기다리는 동안 우리가 포털을 기다린다** — 포털의 상한이 1.5초인데
-   * 우리 상한이 2초라(approval/portal-acting-subs.ts) 답이 닿기 전에 포털이 이 줄을 버린다.
-   * 🔵 대가(통합 승인함에서만 대리 건이 빠진다)는 라우트 주석에 적혀 있다.
+   * 🔴 **뒤집힌 단언이다** (2026-11-16 저녁, 설계 B-12).
+   *
+   * 옛 뜻: 「**이 통로에서는** 포털에 되묻지 않는다 — 되물으면 포털이 우리를 기다리는 동안
+   * 우리가 포털을 기다린다. 그래서 「안 물었다」를 `NO_PORTAL_DELEGATIONS` 로 적어 둔다」.
+   * 🔴 그 대가가 **통합 승인함에서만 대리 결재할 건이 빠지는 것**이었다(설계 D-8 ②).
+   *
+   * 지금 뜻: 🔴 **묻는 길 자체가 저장소에서 사라졌다.** 조회가 제 표를 읽으므로 이 통로에도
+   * 승인함 위임으로 대신할 건이 **뜬다** — 아래는 그것이 되돌아가지 않게 지키는 자리다.
+   * 🔵 이 통로 하나만 보면 **공짜로 통과한다**(아무도 안 묻는다). 그래서 여기서는 「이 통로가
+   * 쓰는 조회가 다시 인자를 받게 됐나」까지 함께 본다 — 그 인자가 곧 갈리는 자리였다.
    */
-  it("🔴 포털에 **되묻지 않는다** — 서로 기다리는 짝이 된다", () => {
-    // 🔴 **주석을 걷어내고 본다.** 「여기서는 되묻지 않는다(까닭은 portal-acting-subs.ts)」는
-    //    설명이 곧 금지어를 품는다 — 안 걷어내면 설명 때문에 깨진다(2026-11-16 실측).
+  it("🔴 포털에 **되묻지 않는다** — 그리고 「안 묻는 자리」를 따로 두지도 않는다", () => {
+    // 🔴 **주석을 걷어내고 본다.** 「걷어냈다」는 내력 설명이 곧 금지어를 품는다 — 안 걷어내면
+    //    설명 때문에 깨진다(2026-11-16 실측).
     const body = approvals.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-    for (const forbidden of ["resolvePortalDelegations", "portal-acting-subs", "fetch("]) {
-      assert.ok(!body.includes(forbidden), `포털이 부른 통로가 포털에 되묻는다: ${forbidden}`);
+    for (const forbidden of ["resolvePortalDelegations", "portal-acting-subs", "fetch(", "NO_PORTAL_DELEGATIONS"]) {
+      assert.ok(!body.includes(forbidden), `포털이 부른 통로가 포털에 되묻는다(또는 「안 묻는 자리」가 되살아났다): ${forbidden}`);
     }
-    // 🔵 「안 물었다」를 **글자로** 적는다 — 빈 배열을 그냥 넘기면 「물었는데 없었다」와 같아
-    //    보여 다음 사람이 결함으로 보고 「묻게」 고친다.
-    assert.match(approvals, /NO_PORTAL_DELEGATIONS/);
+    // 🔴 조회가 **위임 목록을 인자로 받지 않는다** — 받는 순간 이 통로만 다르게 셀 수 있다.
+    assert.match(source("src/lib/approval/part-issue.ts"), /export async function listPartIssueApprovalsToDecide\(approverSub: string\): Promise<PartIssueView\[\]>/);
   });
 
   it("🔴 읽기 전용이다 — 승인·반려를 실행하는 길이 없다", () => {

@@ -10,10 +10,6 @@ import { listAllRequests, type PendingRequestRow } from "@/lib/stock/requests";
 import { approvalStepActor, type ApprovalStepDecision } from "./delegation";
 import { listMyOpenPartIssueApprovals, listOpenPartIssueApprovalsByRequest, listPartIssueApprovalsToDecide, listPartIssueApprovalsToExecute } from "./part-issue";
 import { checkCanCancelPartIssue, type PartIssueView } from "./part-issue-rules";
-// 🔴 **이 화면만 부르는 자리라 여기서 묻는다**(아래 `readPartIssueApprovalScreen` 주석).
-//    조회 쪽은 포털이 우리를 부르는 통로에서도 불려 스스로 물으면 안 된다.
-import { resolvePortalDelegations } from "./portal-acting-subs";
-import { notePortalDelegationOutage } from "./portal-delegation";
 import {
   excludeApprovalsInExecuteList,
   pickPartIssueTrailSource,
@@ -65,17 +61,11 @@ export type PartIssueScreenData = {
   /** 🔴 위에서 뺐는가 — 빈 상태 문구가 이것으로 갈린다(`partIssueProgressEmptyText`). */
   progressExcludesExecutable: boolean;
   /**
-   * 🔴 **포털에 못 물은 채로 목록을 만들었다**(2026-11-16, 설계 B-6·B-7). 그때 (가)에는
-   * **포털에 맡긴 위임으로 대신할 건이 빠져 있다** — 대리인에게는 「결재할 건 0건」으로 보이고,
-   * 자기가 왜 비었는지 알 길이 없다. 🔴 **그 「조용히 막힌다」가 이 저장소들에서 가장 비싼 결함
-   * 모양**이라 설계가 안내를 띄우라고 못 박았다(B-7). 이 칸이 화면까지 가는 길을 내 준다.
-   *
-   * 🔵 값이 `true` 뿐인 까닭은 `./portal-delegation.ts` 의 `notePortalDelegationOutage` 에
-   *    있다 — `boolean` 이면 「물어봤는데 멀쩡했다」가 `false` 로 실려 다니고, 받는 쪽이 칸의
-   *    **있음**으로 읽는 날 멀쩡한 화면마다 경고가 깔린다.
-   * 🔵 안내 문구를 그리는 것은 **다음 조각**의 일이다. 여기서는 값이 나오는 길만 낸다.
+   * 🟢 **「포털에 못 물었다」 칸이 2026-11-16 저녁에 사라졌다**(설계 B-12). 그 전에는 이 화면이
+   * 결재 목록을 만들기 전에 **포털에 물었고**, 못 물으면 (가)에서 대리 건이 빠진 채 「결재할 건
+   * 0건」이 되었다 — 그 사실을 화면까지 실어 보내는 칸이 여기 있었다. 이제 **제 표를 읽으므로**
+   * 못 물을 일이 없다. 🔴 되살리지 마라: 칸이 있으면 뜰 일 없는 안내를 화면이 그린다.
    */
-  portalDelegationUnavailable?: true;
 };
 
 /**
@@ -324,18 +314,13 @@ function toCard(
  */
 export async function readPartIssueApprovalScreen(viewer: { userId: string; approverSub: string; isAdmin: boolean }): Promise<PartIssueScreenData> {
   /**
-   * 🔴 **포털에 맡긴 위임을 여기서 묻는다**(2026-11-16, 설계 B-4). 목록 조회는 스스로 묻지
-   *    않는다 — 그것이 포털이 우리를 부르는 통로에서도 불리기 때문이다(그 함수 주석). **이
-   *    화면만 부르는 이 자리**가 「물을까 말까」를 정하기에 알맞은 곳이다.
-   * 🔴 **던지지 않는다** — 포털이 멎어도 위임 없이 그대로 그린다(설계 B-6). 못 물었다는 사실은
-   *    아래에서 화면까지 실어 보낸다(B-7).
-   * 🔵 **세 조회보다 먼저 세운다.** 목록이 이 답을 받아야 하므로 나란히 세울 수가 없다 —
-   *    평소에는 수십 ms 이고, 넘쳐도 2초에서 끊긴다(`PORTAL_DELEGATIONS_TIMEOUT_MS`).
+   * 🟢 **승인함에 맡긴 위임이 저절로 섞여 온다**(2026-11-16 저녁, 설계 B-12) — 아래 조회가 두
+   *    표를 읽는다. 그날 낮까지는 이 자리가 **세 조회보다 먼저** 포털에 물어(최대 2초) 그 답을
+   *    목록에 넘겨야 했고, 그래서 세 조회를 나란히 세울 수가 없었다. 지금은 그 한 걸음이 통째로
+   *    사라져 **처음부터 셋이 나란히** 나간다.
    */
-  const portal = await resolvePortalDelegations(viewer.approverSub);
-
   const [toDecideViews, toExecuteViews, mineViews] = await Promise.all([
-    listPartIssueApprovalsToDecide(viewer.approverSub, portal.delegatorSubs),
+    listPartIssueApprovalsToDecide(viewer.approverSub),
     // 🔴 관리자가 아니면 **읽지도 않는다** — 화면에서 감추는 묶음이라 자료도 만들 까닭이 없다.
     viewer.isAdmin ? listPartIssueApprovalsToExecute() : Promise.resolve([] as PartIssueView[]),
     listMyOpenPartIssueApprovals(viewer.userId),
@@ -356,22 +341,13 @@ export async function readPartIssueApprovalScreen(viewer: { userId: string; appr
 
   const toExecute = toExecuteViews.map((v) => toCard(v, ctx));
   const mineAll = mineViews.map((v) => toCard(v, ctx));
-  /**
-   * 🔴 **「포털에 못 물었다」를 얹는 자리는 여기 하나**다(2026-11-16). 가지마다 적으면 한쪽이
-   *    빠지는 날 안내가 조용히 사라진다 — 얹는 규칙 자체는 결재 단추 쪽과 **같은 함수**다.
-   */
-  // 🔵 타입을 손으로 적어 준다 — 돌려줄 모양이 **인자가 아니라 이 함수의 반환 타입**에서
-  //    오는 자리라, 비워 두면 추론이 제약(칸 하나짜리)으로 좁아져 `tsc` 가 멈춘다.
-  return notePortalDelegationOutage<PartIssueScreenData>(
-    {
-      toDecide: toDecideViews.map((v) => toCard(v, ctx)),
-      toExecute,
-      // 🔴 (나)가 보이는 세션에서만 뺀다 — 안 보이는 사람에게서 빼면 승인된 자기 신청이 사라진다.
-      mine: viewer.isAdmin ? excludeApprovalsInExecuteList(mineAll, toExecute) : mineAll,
-      progressExcludesExecutable: viewer.isAdmin,
-    },
-    portal,
-  );
+  return {
+    toDecide: toDecideViews.map((v) => toCard(v, ctx)),
+    toExecute,
+    // 🔴 (나)가 보이는 세션에서만 뺀다 — 안 보이는 사람에게서 빼면 승인된 자기 신청이 사라진다.
+    mine: viewer.isAdmin ? excludeApprovalsInExecuteList(mineAll, toExecute) : mineAll,
+    progressExcludesExecutable: viewer.isAdmin,
+  };
 }
 
 /* ------------------------------------------------------------------ */

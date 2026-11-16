@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
@@ -18,7 +18,8 @@ import { describe, it } from "node:test";
  *  3. 🔴 **누구에 대한 줄인지는 몸통에서** 온다 — 쿼리 문자열을 읽지 않는다.
  *  4. 모양이 틀리면 **400**(500 이 아니다 — 포털이 영원히 되쏜다).
  *  5. 🔴 **멱등을 표가 보장한다** — `id` 에 기본값이 없고, 쓰기가 `onConflictDoUpdate` 다.
- *  6. 🔴 **판정에 이어 붙이지 않았다**(조각 8) — 이 조각에서 결재 동작이 바뀌면 안 된다.
+ *  6. 🔴 **판정에 이어져 있다**(조각 8, 2026-11-16 저녁) — 🔴 **조각 6 때는 정반대였다.**
+ *     그때는 「아직 안 이었다」를 못 박았고, 그 블록이 「이을 때 함께 고치라」고 적어 두었다.
  *  7. 응답이 캐시되지 않는다.
  * ============================================================================
  */
@@ -156,30 +157,50 @@ describe("🔴 멱등을 무엇이 보장하는가 — 표와 쓰기", () => {
   });
 });
 
-describe("🔴 이 조각은 판정을 건드리지 않았다 (조각 8 의 일)", () => {
-  it("새 표를 읽어 「누가 대신 누를 수 있나」를 정하는 자리가 아직 없다", () => {
+/**
+ * ============================================================================
+ * 🔴 **아래 두 블록은 2026-11-16 저녁에 뜻이 뒤집혔다** (조각 8, 설계 B-12)
+ * ============================================================================
+ * 조각 6 은 「받아 적기만 하고 **판정은 한 글자도 안 바뀐다**」를 못 박았다. 그때는 그래야
+ * 했다 — 「묻는 쪽」(옛 `src/lib/approval/portal-acting-subs.ts`)이 아직 살아 있어서, 한쪽만
+ * 바꾸면 **표가 비어 있는 동안 위임이 통째로 안 듣기** 때문이었다. 그 블록은 스스로
+ * 「이을 때 함께 고치라」고 적어 두었고, 이 조각이 그것을 한 것이다.
+ *
+ * 옛 단언 둘 → 지금 단언 둘:
+ *  · 「새 표를 읽어 판정하는 자리가 **아직 없다**」 → 🔴 「**판정이 그 표를 읽는다**」
+ *  · 「**「묻는 쪽」이 그대로 살아 있다**」      → 🔴 「**묻는 쪽이 걷혔다**」
+ * ============================================================================
+ */
+describe("🔴 이 통로로 들어온 줄이 **판정에 이어져 있다** (2026-11-16 저녁, 조각 8)", () => {
+  it("🔴 새 표를 읽어 「누가 대신 누를 수 있나」를 정하는 자리가 **있다**", () => {
     /**
-     * 🔴 이 조각이 끝나도 결재 동작은 한 군데도 안 바뀌어야 한다. 바꾸려면 「묻는 쪽」
-     * (`portal-acting-subs.ts`)을 함께 걷어내야 하고, 그것이 다음 조각이다 — 지금 한쪽만
-     * 바꾸면 **표가 비어 있는 동안 포털 위임이 통째로 안 듣는다.**
+     * 🔴 안 이어져 있으면 이 통로가 멀쩡히 200 을 돌려주면서도 **아무 일도 일어나지 않는다** —
+     * 맡긴 사람은 저쪽에서 성공을 보고, 대리인은 여기서 아무것도 못 누른다. 오류는 안 난다.
      */
-    const users = [
-      "src/lib/approval/delegation.ts",
-      "src/lib/approval/delegation-queries.ts",
-      "src/lib/approval/part-issue.ts",
-      "src/lib/approval/portal-acting-subs.ts",
-    ];
-    for (const path of users) {
-      assert.ok(
-        !source(path).includes("portalApprovalDelegations"),
-        `${path} 가 벌써 새 표를 읽는다 — 판정 연결은 조각 8 이다`,
-      );
-    }
+    const queries = source("src/lib/approval/delegation-queries.ts");
+    assert.ok(queries.includes('from "@/db/schema/portal-approval-delegations"'), "판정하는 층이 이 표를 아예 모른다");
+    assert.ok(queries.includes(".from(portalApprovalDelegations)"), "판정하는 층이 이 표를 읽지 않는다 — 받아만 적고 아무도 안 본다");
+    // 🔴 **제 표 위임도 그대로 읽는다**(설계 B-4 — 둘 다 산다). 갈아끼우면 이미 맡겨 둔
+    //    사람들이 아무 말 없이 자격을 잃는다.
+    assert.ok(queries.includes(".from(approvalDelegations)"), "이 시스템의 위임 표를 안 읽는다 — 갈아끼웠다");
   });
 
-  it("🔵 「묻는 쪽」이 그대로 살아 있다 — 지금 걷으면 기능이 끊긴다", () => {
-    const asking = source("src/lib/approval/portal-acting-subs.ts");
-    assert.match(asking, /fetch\(/);
-    assert.ok(source("src/lib/approval/delegation.ts").includes("portalDelegatorSubs"), "합치는 자리가 사라졌다");
+  it("🔴 「묻는 쪽」이 걷혔다 — 두 길이 함께 살아 있으면 안 된다", () => {
+    /**
+     * 🔴 두 길이 함께 살아 있으면 같은 위임이 두 고지에서 두 번 셈해질 자리가 생기고, 무엇보다
+     * **포털이 멎었을 때의 처신이 두 벌**이 된다(한쪽은 「위임 없음」, 한쪽은 제 표 그대로).
+     * 🔵 더 넓은 그물은 `tests/portal-delegation.test.ts` ④가 던진다 — `src/` 전체를 걷는다.
+     */
+    assert.equal(existsSync(join(process.cwd(), "src/lib/approval/portal-acting-subs.ts")), false, "포털에 묻던 모듈이 아직 있다");
+    assert.equal(existsSync(join(process.cwd(), "src/lib/approval/portal-delegation.ts")), false, "「못 물었다」 그릇이 아직 있다");
+    // 🔵 **합치는 자리는 그대로 하나다** — 모양만 번호 목록에서 위임 줄들로 바뀌었다.
+    assert.ok(source("src/lib/approval/delegation.ts").includes("portalDelegations: readonly ApprovalDelegationPeriod[]"), "합치는 자리가 사라졌다(또는 모양이 바뀌었다)");
+  });
+
+  it("🟢 **받는 쪽은 그대로다** — 걷어내다 조각 6 의 것을 함께 지우지 않았다", () => {
+    // 🔴 지웠으면 표에 아무것도 안 쌓이고, 판정이 제 표를 읽어 봤자 영원히 빈 목록이다.
+    assert.match(route, /applyPortalDelegation\(\{/);
+    assert.match(store, /\.onConflictDoUpdate\(\{/);
+    assert.ok(source("src/lib/approval/portal-delegation-sync.ts").includes("export function revokedAtOnConflict("), "한 방향 규칙(B-15)이 사라졌다");
   });
 });

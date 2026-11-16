@@ -1,33 +1,42 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { describe, it } from "node:test";
+// 🔴 `new URL(…).pathname` 을 그대로 쓰면 안 된다 — 이 PC 의 경로에 한글이 들어 있어
+//    퍼센트 인코딩된 글자가 나오고, `readdirSync` 가 그 폴더를 못 찾는다(실측).
+import { fileURLToPath } from "node:url";
 
 import { actingApproverSubs, type ApprovalDelegationPeriod } from "../src/lib/approval/delegation";
-import { NO_PORTAL_DELEGATIONS, notePortalDelegationOutage, readPortalDelegationSubs } from "../src/lib/approval/portal-delegation";
 
 /**
  * ============================================================================
- * 포털에 맡긴 결재권 위임을 **읽는다** (2026-11-16, 설계 조각 4)
+ * 승인함에 맡긴 결재권 위임을 **제 표에서** 읽는다 (2026-11-16 저녁, 설계 조각 8)
  * ============================================================================
- * 2026-11-13 결정으로 위임을 포털(dss-auth) 한 곳에 모았다(설계: `dss-approvals/
- * DELEGATION_DESIGN.md` 의 B-1·B-2). 지정은 통합 승인함이 하고, 저장은 포털이 하고, **읽는
- * 것은 각 시스템**이다. 이 조각이 재고관리 쪽 읽는 자리를 붙였다.
+ * ── 🔴 이 파일의 뜻이 2026-11-16 저녁에 **뒤집혔다** ────────────────────
+ * 조각 4 가 만든 이 시험은 「결재 길목에서 **포털에 묻는다**」를 못 박고 있었다(설계 B-3):
+ * 묻는 통로의 규격·상한·던지지 않기, 「못 물었다」와 「없다」를 값에서 가르기, 묻는 자리 넷과
+ * **되묻지 않는 자리 둘**. 그날 저녁에 설계 B-12 로 뒤집혀서 **포털이 지정·철회할 때 각
+ * 시스템에 써 주고 각 시스템은 제 표만 읽는다** — 조각 6 이 받는 표와 통로를 만들었고, 조각 8
+ * 이 그 표를 판정에 이으면서 **묻는 쪽을 통째로 걷어냈다.**
+ *
+ * 🔴 **그래서 옛 단언 가운데 여럿은 지운 것이 아니라 뜻을 뒤집은 것이다.** 무엇이 어떻게
+ * 바뀌었는지는 각 단언 옆에 적어 두었다. 가장 중요한 뒤집힘은 이것이다:
+ *
+ *   옛: 「포털 쪽 목록은 **포털이 이미 판정한 결과**라 기간·되돌림을 여기서 **다시 보지
+ *        않는다**」 (그래서 끝난 줄·거둔 줄도 그대로 들어왔다)
+ *   지금: 「둘째 고지도 **이 집의 표**라 **같은 `isActiveDelegation` 으로 우리가 가린다**」
  *
  * 여기서 못 박는 것:
- *  1. **그릇** — 빈 목록과 「못 물었다」가 값에서 갈린다(설계 B-6·B-7). 뭉개면 안내를 띄울
- *     자리에서 구별할 길이 영영 없다.
- *  2. **답 읽기** — 모르는 모양은 「위임 없음」이 아니라 「못 읽었다」다. 🔴 **답에 부른 사람
- *     자신이 없으면 그것도 못 읽은 것**이다(방향이 뒤집힌 답으로 남의 결재를 누르지 않게).
- *  3. 🔴 **합집합이되 이어 붙지 않는다**(설계 B-4) — 이 집의 표로 A→B 이고 포털로 B→C 여도
- *     C 는 A 를 못 얻는다. 고지가 둘이 되면서 **한 고지 안에서는 막히던 두 겹이 고지를
- *     갈아타며** 생길 수 있게 됐고, 막는 자리는 `actingApproverSubs` 하나다.
- *  4. **누가 묻고 누가 안 묻는가** — 🔴 포털이 우리를 부르는 통로에서는 **되묻지 않는다.**
+ *  1. 🔴 **합집합이되 이어 붙지 않는다**(설계 B-4) — 이 집 표로 A→B 이고 승인함 표로 B→C 여도
+ *     C 는 A 를 못 얻는다. 막는 자리는 `actingApproverSubs` 하나다.
+ *  2. 🔴 **두 표를 같은 자로 잰다** — 끝난 줄·거둔 줄·아직 시작 안 한 줄은 **양쪽 다** 빠진다.
+ *  3. 🔴 **판정이 읽는 자리가 어디인가** — 두 표를 **같은 연결(`conn`)로** 읽는다.
+ *  4. 🔴 **어디에서도 포털에 묻지 않는다** — 되돌아가면 여기서 깨진다.
  *
  * ── 🔴 이 저장소에는 DB 시험이 없다 ─────────────────────────────────────
- * 그래서 뜻은 순수 함수로 재고(①~④), 「어느 자리가 묻는가」는 **소스 글자**로 잰다(⑤) —
- * `tests/part-issue-delegation.test.ts` 와 같은 방식이다. 망을 타는 모듈
- * (`src/lib/approval/portal-acting-subs.ts`)은 `server-only` 를 물고 있어 **불러올 수 없다.**
- * 글자로 재는 까닭이 그것이기도 하다.
+ * 그래서 뜻은 순수 함수로 재고(①②), 「어느 자리가 무엇을 읽는가」는 **소스 글자**로 잰다(③④) —
+ * `tests/part-issue-delegation.test.ts` 와 같은 방식이다. 표를 읽는 모듈
+ * (`src/lib/approval/delegation-queries.ts`)은 `server-only` 를 물고 있어 **불러올 수 없다.**
  * ============================================================================
  */
 
@@ -37,8 +46,11 @@ const STARTS = new Date("2026-11-01T00:00:00.000Z");
 const ENDS = new Date("2026-11-30T00:00:00.000Z");
 const NOW = new Date("2026-11-16T12:00:00.000Z");
 
-/** 이 집의 표에 적힌 위임 한 줄. */
-const own = (delegatorName: string, delegateName: string, over: Partial<ApprovalDelegationPeriod> = {}): ApprovalDelegationPeriod => ({
+/**
+ * 위임 한 줄. 🔵 **두 표가 같은 모양이라 지어내는 함수도 하나다** — 칸 이름도 기간 규칙도
+ * `revoked_at` 깃발도 글자 그대로 같고, 그래서 같은 순수 함수가 둘을 잰다.
+ */
+const row = (delegatorName: string, delegateName: string, over: Partial<ApprovalDelegationPeriod> = {}): ApprovalDelegationPeriod => ({
   delegatorSub: sub(delegatorName),
   delegateSub: sub(delegateName),
   startsAt: STARTS,
@@ -47,15 +59,20 @@ const own = (delegatorName: string, delegateName: string, over: Partial<Approval
   ...over,
 });
 
+/** 이 집의 표(`approval_delegations`) 한 줄. */
+const own = row;
+/** 승인함에서 맡겨 포털이 써 준 표(`portal_approval_delegations`) 한 줄. */
+const portal = row;
+
 const src = (relative: string): string => readFileSync(new URL(`../${relative}`, import.meta.url), "utf8");
 
 /**
- * 🔴 **주석을 걷어낸 소스.** 아래 ⑤·⑥은 글자로 재는 시험이라 **주석이 답을 바꾼다.**
+ * 🔴 **주석을 걷어낸 소스.** 아래 ③·④는 글자로 재는 시험이라 **주석이 답을 바꾼다.**
  *
- * 이 저장소는 「왜 그렇게 했는가」를 길게 적는 집이라, 「여기서는 포털에 묻지 않는다(까닭은
- * `portal-acting-subs.ts`)」 같은 **설명이 곧 금지어를 품는다.** 걷어내지 않으면
+ * 이 저장소는 「왜 그렇게 했는가」를 길게 적는 집이라, 「옛 `portal-acting-subs.ts` 를 걷어냈다」
+ * 같은 **내력 설명이 곧 금지어를 품는다.** 걷어내지 않으면
  *  · 「묻지 않는다」를 재는 시험이 **설명 때문에** 깨지고(2026-11-16 에 실제로 넷이 깨졌다),
- *  · 🔴 더 나쁘게는 「묻는다」를 재는 시험이 **주석만으로 영영 통과**한다.
+ *  · 🔴 더 나쁘게는 「읽는다」를 재는 시험이 **주석만으로 영영 통과**한다.
  * 둘째가 훨씬 비싸다 — 깨지는 쪽은 바로 보이지만 통과하는 쪽은 아무도 안 본다.
  */
 const code = (relative: string): string =>
@@ -65,257 +82,290 @@ const code = (relative: string): string =>
 
 /* ------------------------------------------------------------------ */
 
-describe("① 그릇 — 「없다」와 「모른다」는 다른 값이다", () => {
-  it("🔴 안 물은 것은 **장애가 아니다** — `unavailable` 이 거짓이다", () => {
-    // 🔴 참으로 두면 포털에 묻지 않는 자리(포털이 우리를 부르는 통로 둘)마다 「포털을 확인하지
-    //    못했습니다」가 뜬다 — 아무 상관없는 화면에 경고가 깔린다.
-    assert.equal(NO_PORTAL_DELEGATIONS.unavailable, false);
-    assert.deepEqual(NO_PORTAL_DELEGATIONS.delegatorSubs, []);
-  });
-
-  it("🔴 빈 목록만 보고 「없다」고 읽을 수 없다 — 두 칸을 **함께** 봐야 갈린다", () => {
-    const askedAndEmpty = { delegatorSubs: [] as readonly string[], unavailable: false };
-    const couldNotAsk = { delegatorSubs: [] as readonly string[], unavailable: true };
-    // 🔴 목록만 보면 둘이 **똑같이** 생겼다. 이 한 줄이 「칸을 하나로 줄이자」를 막는 근거다.
-    assert.deepEqual(askedAndEmpty.delegatorSubs, couldNotAsk.delegatorSubs);
-    assert.notEqual(askedAndEmpty.unavailable, couldNotAsk.unavailable);
-  });
-});
-
-describe("② 포털의 답 읽기 (readPortalDelegationSubs)", () => {
-  const me = sub("lee");
-
-  it("제대로 된 답 — 맨 앞이 본인이고 뒤에 결재권자들", () => {
-    assert.deepEqual(readPortalDelegationSubs({ subs: [me, sub("kim")], count: 2 }, me), [me, sub("kim")]);
-  });
-
-  it("위임이 하나도 없는 사람 — **본인 하나짜리 목록**이고 「못 읽었다」가 아니다", () => {
-    assert.deepEqual(readPortalDelegationSubs({ subs: [me], count: 1 }, me), [me]);
-  });
-
-  it("🔴 모르는 모양은 **빈 목록이 아니라 `null`** 이다 — 통로가 바뀐 날 조용히 「위임 없음」이 되면 안 된다", () => {
-    // 🔴 빈 목록으로 읽으면 대리인 전원이 까닭 없이 막히는데 로그에도 화면에도 흔적이 없다.
-    for (const payload of [null, undefined, 42, "subs", [], {}, { subs: null }, { subs: "a,b" }, { subs: { 0: me } }, { count: 1 }]) {
-      assert.equal(readPortalDelegationSubs(payload, me), null, `${JSON.stringify(payload) ?? "undefined"} 를 「위임 없음」으로 읽었다`);
-    }
-  });
-
-  it("글자가 아닌 조각·빈 글자는 **그 조각만** 버린다", () => {
-    assert.deepEqual(readPortalDelegationSubs({ subs: [me, "", 7, null, sub("kim")] }, me), [me, sub("kim")]);
-  });
-
-  it("🔴 **답에 부른 사람 자신이 없으면 못 읽은 것**이다 — 방향이 뒤집힌 답으로 권한을 늘리지 않는다", () => {
-    /**
-     * 포털의 약속은 「`subs[0]` 은 언제나 부른 사람 자신」이다(설계 C-2). 그 약속이 깨진 답은
-     * 🔴 **우리가 아는 그 답이 아니다.** 가장 무서운 갈림이 방향이 뒤집히는 것인데(「내가
-     * 대신할 수 있는 사람들」 ↔ 「나를 대신할 수 있는 사람들」), 그때 그대로 합치면 **남의
-     * 결재를 누를 수 있게 된다.** 모양이 낯설면 권한을 늘리지 않는 쪽으로 간다.
-     */
-    assert.equal(readPortalDelegationSubs({ subs: [sub("kim"), sub("park")] }, me), null);
-    // 🔴 빈 배열도 약속 위반이다 — 본인이 들어 있어야 하므로 비어 올 수가 없다.
-    assert.equal(readPortalDelegationSubs({ subs: [] }, me), null);
-  });
-});
-
-describe("③ 🔴 두 고지를 합친다 — 합집합이되 **이어 붙지 않는다** (설계 B-4)", () => {
-  it("포털 위임만 있어도 붙는다 — 이 조각의 전부다", () => {
-    assert.deepEqual(actingApproverSubs([], sub("lee"), NOW, [sub("lee"), sub("kim")]), [sub("lee"), sub("kim")]);
+describe("① 🔴 두 고지를 합친다 — 합집합이되 **이어 붙지 않는다** (설계 B-4)", () => {
+  it("승인함 위임만 있어도 붙는다 — 이 조각의 전부다", () => {
+    assert.deepEqual(actingApproverSubs([], sub("lee"), NOW, [portal("kim", "lee")]), [sub("lee"), sub("kim")]);
   });
 
   it("🔴 **이 집의 위임을 걷어내지 않았다** — 둘 다 산다", () => {
-    // 🔴 설계 B-4 가 「둘 다 살려 둔다」였다. 포털 쪽으로 갈아끼우면 이미 맡겨 둔 사람들이
+    // 🔴 설계 B-4 가 「둘 다 살려 둔다」였다. 승인함 쪽으로 갈아끼우면 이미 맡겨 둔 사람들이
     //    **아무 말 없이** 자격을 잃는다.
-    const result = actingApproverSubs([own("kim", "lee")], sub("lee"), NOW, [sub("lee"), sub("park")]);
+    const result = actingApproverSubs([own("kim", "lee")], sub("lee"), NOW, [portal("park", "lee")]);
     assert.deepEqual(result, [sub("lee"), sub("kim"), sub("park")]);
   });
 
-  it("🔴 **본인이 맨 앞에 한 번만** — 포털이 본인을 맨 앞에 넣어 줘도 두 번 들어가지 않는다", () => {
-    // 🔴 두 번 들어가면 `inArray` 에 같은 번호가 두 칸이 되고, 같은 건이 화면에 두 번 뜬다.
-    const result = actingApproverSubs([], sub("lee"), NOW, [sub("lee")]);
+  it("🔴 **본인이 맨 앞에 한 번만** — 자기에게 맡긴 줄이 섞여 와도 두 번 들어가지 않는다", () => {
+    /**
+     * 🔴 **뒤집힌 단언이다.** 옛 까닭은 「포털이 답의 맨 앞에 부른 사람 자신을 넣어 주므로」
+     *    였는데(설계 C-2), 이제 그런 답 자체가 없다. 지금 막는 것은 **표에 자기에게 맡긴 줄이
+     *    있을 때**다 — 두 표 다 `*_not_self` CHECK 가 있어 평소에는 안 닿지만, 닿으면 `inArray`
+     *    에 같은 번호가 두 칸이 되어 **같은 건이 화면에 두 번 뜬다.**
+     */
+    const selfRow = portal("lee", "lee");
+    const result = actingApproverSubs([], sub("lee"), NOW, [selfRow]);
     assert.deepEqual(result, [sub("lee")]);
     assert.equal(result.filter((one) => one === sub("lee")).length, 1);
+    // 🔵 이 집 표에서 와도 마찬가지다 — 두 묶음이 같은 가지를 지난다.
+    assert.deepEqual(actingApproverSubs([own("lee", "lee")], sub("lee"), NOW, []), [sub("lee")]);
   });
 
   it("두 고지에 **같은 사람**이 겹쳐 있어도 한 번만 — 겹쳐 지정하는 일은 실제로 생긴다", () => {
     // 🔵 설계 D-2: 두 곳에 겹쳐 지정해도 해롭지 않다(둘 다 대신할 수 있을 뿐). 다만 목록에
     //    두 번 들어가면 같은 건이 두 번 뜬다.
-    assert.deepEqual(actingApproverSubs([own("kim", "lee")], sub("lee"), NOW, [sub("lee"), sub("kim")]), [sub("lee"), sub("kim")]);
+    assert.deepEqual(actingApproverSubs([own("kim", "lee")], sub("lee"), NOW, [portal("kim", "lee")]), [sub("lee"), sub("kim")]);
   });
 
-  it("🔴 **고지를 갈아타며 두 겹이 생기지 않는다** — 이 집 A→B, 포털 B→C 라도 C 는 A 를 못 얻는다", () => {
+  it("🔴 **고지를 갈아타며 두 겹이 생기지 않는다** — 이 집 A→B, 승인함 B→C 라도 C 는 A 를 못 얻는다", () => {
     /**
-     * 🔴 **이 조각이 새로 연 구멍이 바로 이것이다.** 한 고지 안에서는 `delegatorSubsFor` 가
+     * 🔴 **이 조각이 열어 둔 구멍이 바로 이것이다.** 한 고지 안에서는 `delegatorSubsFor` 가
      *    이어 붙이기를 막아 왔는데(A 는 C 를 모른다 · 고리가 생긴다), 고지가 둘이 되면서
      *    **두 고지를 갈아타며** 두 겹이 될 수 있게 됐다. 막는 자리는 `actingApproverSubs`
      *    하나뿐이라, 그 한 자리가 무너지면 **A 가 동의한 적 없는 사람에게 결재권이 넘어간다.**
      */
-    // 이 집의 표: a 가 b 에게 맡겼다. 포털: b 가 c 에게 맡겨서 c 가 물으면 [c, b] 가 온다.
     const ownRows = [own("a", "b")];
-    const asC = actingApproverSubs(ownRows, sub("c"), NOW, [sub("c"), sub("b")]);
+    const portalRows = [portal("b", "c")];
+    const asC = actingApproverSubs(ownRows, sub("c"), NOW, portalRows);
     assert.deepEqual(asC, [sub("c"), sub("b")], "c 가 a 의 결재권까지 얻었다 — 두 고지를 갈아타며 이어 붙었다");
     assert.equal(asC.includes(sub("a")), false);
 
     // 🔵 한 겹은 멀쩡히 돈다 — b 는 a 의 결재권을 그대로 쓴다.
-    assert.deepEqual(actingApproverSubs(ownRows, sub("b"), NOW, [sub("b")]), [sub("b"), sub("a")]);
+    assert.deepEqual(actingApproverSubs(ownRows, sub("b"), NOW, portalRows), [sub("b"), sub("a")]);
   });
 
-  it("🔴 반대 방향으로 갈아타도 마찬가지다 — 포털 A→B, 이 집 B→C", () => {
-    // 이 집의 표: b 가 c 에게 맡겼다. 포털: a 가 b 에게 맡겼다(c 가 물으면 포털은 [c] 뿐이다).
+  it("🔴 반대 방향으로 갈아타도 마찬가지다 — 승인함 A→B, 이 집 B→C", () => {
     const ownRows = [own("b", "c")];
-    const asC = actingApproverSubs(ownRows, sub("c"), NOW, [sub("c")]);
+    const portalRows = [portal("a", "b")];
+    const asC = actingApproverSubs(ownRows, sub("c"), NOW, portalRows);
     assert.deepEqual(asC, [sub("c"), sub("b")]);
-    assert.equal(asC.includes(sub("a")), false, "c 가 포털 쪽 한 겹까지 타고 올라갔다");
-  });
-
-  it("🔴 끝난 줄·되돌린 줄은 **이 집 쪽만** 걸러진다 — 포털 쪽 기간 판정을 베껴 적지 않았다", () => {
-    /**
-     * 🔵 포털이 주는 목록은 **포털이 이미 기간·되돌림을 가린 결과**다(설계 C-2). 여기서 한 번
-     *    더 가리려면 그 규칙을 이 집에 베껴 적어야 하고, 두 벌이 갈리는 날 한쪽만 틀린다.
-     * 🔴 그래서 포털 번호는 **무조건 들어간다** — 이 시험이 그 약속을 글자로 못 박는다.
-     */
-    const ended = own("kim", "lee", { startsAt: new Date("2026-10-01T00:00:00.000Z"), endsAt: new Date("2026-10-10T00:00:00.000Z") });
-    const revoked = own("cho", "lee", { revokedAt: new Date("2026-11-02T00:00:00.000Z") });
-    assert.deepEqual(actingApproverSubs([ended, revoked], sub("lee"), NOW, [sub("lee"), sub("park")]), [sub("lee"), sub("park")]);
+    assert.equal(asC.includes(sub("a")), false, "c 가 승인함 쪽 한 겹까지 타고 올라갔다");
   });
 
   it("빈 글자는 목록에 안 들어간다 — 열쇠로 쓰이는 값이다", () => {
-    assert.deepEqual(actingApproverSubs([], sub("lee"), NOW, ["", sub("kim"), ""]), [sub("lee"), sub("kim")]);
+    // 🔵 두 표 다 `NOT NULL` 이고 받는 통로가 빈 글자를 400 으로 거절하므로 평소에는 안 닿는다.
+    //    닿으면 그대로 `inArray` 의 한 칸이 된다.
+    assert.deepEqual(actingApproverSubs([own("kim", "lee")], sub("lee"), NOW, [portal("kim", "lee", { delegatorSub: "" })]), [sub("lee"), sub("kim")]);
   });
 
-  it("🔴 못 물었을 때(빈 목록)는 **이 칸이 생기기 전과 한 글자도 다르지 않다**", () => {
-    // 🔴 이것이 「포털이 멎어도 본인 결재는 멀쩡하다」의 근거다(설계 B-6).
+  it("🔴 승인함 줄이 하나도 없으면 **이 고지가 생기기 전과 한 글자도 다르지 않다**", () => {
     assert.deepEqual(actingApproverSubs([own("kim", "lee")], sub("lee"), NOW, []), [sub("lee"), sub("kim")]);
     assert.deepEqual(actingApproverSubs([], sub("lee"), NOW, []), [sub("lee")]);
   });
 });
 
-/**
- * 결과 모양 흉내 — 서버 액션이 돌려주는 것과 **같은 꼴**이다(`PartIssueActionState`).
- *
- * 🔵 칸을 **선언해 두어야** 한다. 제약(`{ portalDelegationUnavailable?: true }`)이 칸이 전부
- * 선택인 「약한 타입」이라, 그 칸이 아예 없는 객체를 넘기면 TS 가 「공통 칸이 하나도 없다」로
- * 보고 추론을 포기한다 — 실제 부르는 자리들이 타입을 손으로 적거나(`<PartIssueScreenData>`)
- * 칸을 선언해 두는 까닭이 그것이다.
- */
-type NotedResult = { error: string | null; portalDelegationUnavailable?: true };
-
-describe("④ 「못 물었다」를 결과에 얹는다 (notePortalDelegationOutage)", () => {
-  it("못 물었으면 칸이 선다 — 화면이 안내를 띄울 유일한 단서다(설계 B-7)", () => {
-    const result: NotedResult = { error: "지금 결재할 차례가 아닙니다." };
-    const noted = notePortalDelegationOutage(result, { delegatorSubs: [], unavailable: true });
-    assert.equal(noted.portalDelegationUnavailable, true);
-    assert.equal(noted.error, "지금 결재할 차례가 아닙니다.", "원래 값이 지워졌다");
+describe("② 🔴 **두 표를 같은 자로 잰다** — 2026-11-16 저녁에 뒤집힌 자리", () => {
+  /**
+   * 🔴 **여기가 이 조각의 뜻이 바뀐 핵심이다.**
+   *
+   * 옛 시험 이름: 「끝난 줄·되돌린 줄은 **이 집 쪽만** 걸러진다 — 포털 쪽 기간 판정을 베껴 적지
+   * 않았다」. 그때 둘째 고지는 **포털이 이미 판정해서 준 번호 목록**이라, 그 번호는 기간과
+   * 상관없이 **무조건** 들어가는 것이 맞았다(규칙을 두 벌로 적지 않으려는 것이었다).
+   *
+   * 지금 둘째 고지는 **이 집의 표**다. 포털은 줄을 써 주기만 하고 「지금 살아 있나」는 읽는 쪽이
+   * 가린다. 🔴 **가리지 않으면 거둔 위임과 끝난 위임이 영원히 듣는다** — 오류가 한 번도 안 나는
+   * 가장 비싼 모양이다(설계 B-13: 「거둔 줄 알았는데 안 거둬진」).
+   */
+  it("🔴 **거둔 승인함 줄은 안 걸린다** — 기간이 남아 있어도", () => {
+    const revoked = portal("kim", "lee", { revokedAt: new Date("2026-11-02T00:00:00.000Z") });
+    assert.deepEqual(actingApproverSubs([], sub("lee"), NOW, [revoked]), [sub("lee")]);
   });
 
-  it("🔴 멀쩡했으면 **칸 자체가 없다** — `false` 를 실으면 「있음」으로 읽는 쪽에서 경고가 깔린다", () => {
-    const result: NotedResult = { error: "지금 결재할 차례가 아닙니다." };
-    const noted = notePortalDelegationOutage(result, { delegatorSubs: [sub("kim")], unavailable: false });
-    assert.equal("portalDelegationUnavailable" in noted, false);
-    // 🔵 새 객체를 만들지 않는다 — 평소(포털이 멀쩡할 때)에는 아무 비용도 없다.
-    assert.equal(noted, result);
+  it("🔴 **끝난 승인함 줄은 안 걸린다** — 끝은 포함하지 않는다(반열린 구간)", () => {
+    const ended = portal("kim", "lee", { startsAt: new Date("2026-10-01T00:00:00.000Z"), endsAt: new Date("2026-10-10T00:00:00.000Z") });
+    assert.deepEqual(actingApproverSubs([], sub("lee"), NOW, [ended]), [sub("lee")]);
+    // 🔵 끝 **그 순간부터** 거짓이다 — 이 집 표와 같은 자(`isActiveDelegation`)다.
+    assert.deepEqual(actingApproverSubs([], sub("lee"), ENDS, [portal("kim", "lee")]), [sub("lee")]);
+    assert.deepEqual(actingApproverSubs([], sub("lee"), new Date(ENDS.getTime() - 1), [portal("kim", "lee")]), [sub("lee"), sub("kim")]);
   });
 
-  it("안 물은 자리에서는 칸이 서지 않는다 — 안 물은 것은 장애가 아니다", () => {
-    const result: NotedResult = { error: null };
-    assert.equal("portalDelegationUnavailable" in notePortalDelegationOutage(result, NO_PORTAL_DELEGATIONS), false);
+  it("🔴 **아직 시작 안 한 승인함 줄은 안 걸린다** — 미리 적어 둔 위임이 먼저 열리면 안 된다", () => {
+    assert.deepEqual(actingApproverSubs([], sub("lee"), new Date(STARTS.getTime() - 1), [portal("kim", "lee")]), [sub("lee")]);
+    assert.deepEqual(actingApproverSubs([], sub("lee"), STARTS, [portal("kim", "lee")]), [sub("lee"), sub("kim")]);
+  });
+
+  it("🔴 **남의 줄은 내 목록을 늘리지 않는다** — `delegate_sub` 가 나일 때만 본다", () => {
+    assert.deepEqual(actingApproverSubs([], sub("lee"), NOW, [portal("kim", "park")]), [sub("lee")]);
+  });
+
+  it("🔴 두 표에서 **같은 조건이 같게** 걸린다 — 한쪽만 느슨하면 거기로 새어 나간다", () => {
+    // 🔵 같은 줄을 두 묶음에 각각 넣어 **답이 같은지** 본다. 갈리면 한 표의 거르기만 고쳐
+    //    놓고 다른 표를 잊은 것이다.
+    for (const over of [{}, { revokedAt: NOW }, { endsAt: new Date("2026-11-02T00:00:00.000Z") }, { startsAt: new Date("2026-11-20T00:00:00.000Z"), endsAt: new Date("2026-11-30T00:00:00.000Z") }]) {
+      const asOwn = actingApproverSubs([own("kim", "lee", over)], sub("lee"), NOW, []);
+      const asPortal = actingApproverSubs([], sub("lee"), NOW, [portal("kim", "lee", over)]);
+      assert.deepEqual(asPortal, asOwn, `두 표가 같은 줄을 다르게 읽는다: ${JSON.stringify(over)}`);
+    }
   });
 });
 
 /* ------------------------------------------------------------------ */
-/* ⑤ 아래는 **순수 함수로는 닿지 않는 자리**를 글자로 못 박는 시험이다.    */
-/*    망을 타는 모듈은 `server-only` 를 물고 있어 불러올 수 없다.          */
+/* ③④ 아래는 **순수 함수로는 닿지 않는 자리**를 글자로 못 박는 시험이다.   */
+/*     표를 읽는 모듈은 `server-only` 를 물고 있어 불러올 수 없다.         */
 /* ------------------------------------------------------------------ */
 
-const FETCHER = "src/lib/approval/portal-acting-subs.ts";
+const QUERIES = "src/lib/approval/delegation-queries.ts";
 
-describe("⑤ 묻는 쪽 — 규격과 처신", () => {
-  const fetcher = code(FETCHER);
+describe("③ 🔴 판정이 **제 표**를 읽는다 — 묻는 쪽을 대신한 자리", () => {
+  const queries = code(QUERIES);
+  const fnStart = queries.indexOf("export async function actingApproverSubsFor(");
+  const fn = (() => {
+    assert.notEqual(fnStart, -1, "actingApproverSubsFor 가 사라졌다 — 이 시험이 아무것도 안 재고 있다");
+    const end = queries.indexOf("\nexport ", fnStart + 1);
+    return queries.slice(fnStart, end === -1 ? undefined : end);
+  })();
 
-  it("🔴 설계서의 통로 규격 그대로 부른다 — 한 칸이라도 틀리면 조용히 401·400 이 된다", () => {
-    assert.ok(fetcher.includes("/api/integration/delegations"), "통로 주소가 바뀌었다");
-    assert.ok(fetcher.includes('method: "POST"'), "읽기라고 GET 으로 바꿨다 — 사람 번호가 접근 로그에 남는다(포털 쪽 머리말)");
-    assert.ok(fetcher.includes("authorization: `Basic ${Buffer.from(credentials"), "자격증명을 머리말로 안 보낸다");
-    assert.ok(fetcher.includes('"content-type": "application/x-www-form-urlencoded"'), "본문 모양이 바뀌었다");
-    // 🔴 **방향**이다. 반대 방향을 꽂으면 오류 없이 엉뚱한 사람이 누르게 된다.
-    assert.ok(fetcher.includes('action: "acting"'), "묻는 방향이 `acting` 이 아니다");
+  it("🔴 **두 표를 읽는다** — 한쪽만 읽으면 그 고지의 위임이 통째로 안 듣는다", () => {
+    assert.ok(fn.includes(".from(approvalDelegations)"), "이 집의 위임 표를 안 읽는다");
+    assert.ok(fn.includes(".from(portalApprovalDelegations)"), "승인함 위임 표를 안 읽는다 — 맡겼는데 아무 데서도 안 듣는다");
   });
 
-  it("🔴 상한이 있고, **이 집의 포털 호출 상한과 같은 값**이다 — 설계서의 3초가 아니다", () => {
+  it("🔴 **승인함 표에도 같은 조건 셋을 건다** — 색인 차례 그대로", () => {
+    // 🔴 `portal_approval_delegations_delegate_idx` 가 `(delegate_sub, revoked_at, ends_at)` 다.
+    //    한 조건이라도 빠지면 거둔 줄·끝난 줄이 판정에 들어오거나 표가 통째로 딸려 온다.
+    assert.ok(fn.includes("eq(portalApprovalDelegations.delegateSub, actorSub)"), "대신할 사람으로 좁히지 않는다 — 남의 줄까지 읽는다");
+    assert.ok(fn.includes("isNull(portalApprovalDelegations.revokedAt)"), "거둔 줄까지 읽는다");
+    assert.ok(fn.includes("gt(portalApprovalDelegations.endsAt, now)"), "이미 끝난 줄까지 읽는다");
+  });
+
+  it("🔵 `starts_at` 은 **SQL 로 거르지 않는다** — 두 표 모두, 반열린 구간 판정은 한 곳에만 있다", () => {
+    for (const column of ["approvalDelegations.startsAt", "portalApprovalDelegations.startsAt"]) {
+      assert.ok(fn.includes(`startsAt: ${column}`), `${column} 을 안 읽어 온다 — 순수 함수가 거를 수 없다`);
+      assert.equal(fn.split(column).length - 1, 1, `${column} 을 SQL 에서도 거르고 있다 — 반열린 구간 규칙이 두 벌이 된다`);
+    }
+  });
+
+  it("🔴 **합치는 자리는 순수 함수 하나**다 — 여기서 이어 붙이면 두 겹을 막는 자리도 둘이 된다", () => {
+    assert.ok(fn.includes("return actingApproverSubs(rows, actorSub, now, portalRows);"), "읽어 온 두 묶음을 **한 자리에서** 순수 판정에 넘기지 않는다");
+  });
+
+  it("🔴 **두 표를 같은 연결로 읽는다** — 결재 트랜잭션 안에서 한쪽만 밖으로 새면 안 된다", () => {
     /**
-     * 🔴 설계서 B-6 의 3초는 **통합 승인함이 각 결재함을 부를 때**의 값이다. 이 집에서 포털을
-     *    부르는 상한은 2초로 맞춰져 있고(`notifications/portal.ts`), 같은 집에서 같은 포털을
-     *    부르는 상한이 둘이면 느릴 때 어느 쪽이 느린지 알 수 없게 된다. 🔵 **두 상수를 맞대어
-     *    본다** — 한쪽만 바뀌는 날 여기서 깨진다.
+     * 🔴 `conn` 은 결재가 `FOR UPDATE` 로 잡아 둔 **그 트랜잭션**이다(`decidePartIssueApproval`).
+     *    승인함 표만 `db()` 로 읽으면 읽은 뒤 집기 전 사이에 그 줄이 거둬질 수 있고, 그때
+     *    **권한이 없는데 통과한 결재**가 한 건 남는다.
+     * 🟢 묻던 시절에는 이 울타리를 둘째 고지에 걸 수 없었다 — 망 호출이라 거래 밖에서 미리
+     *    받아 왔다. 제 표가 되면서 비로소 걸렸다.
      */
-    const ours = /PORTAL_DELEGATIONS_TIMEOUT_MS = (\d+)/.exec(fetcher);
-    const theirs = /PORTAL_NOTIFICATIONS_TIMEOUT_MS = (\d+)/.exec(code("src/lib/notifications/portal.ts"));
-    assert.ok(ours, "상한 상수가 사라졌다 — 포털이 멎으면 결재 화면이 하염없이 기다린다");
-    assert.ok(theirs, "견줄 상대(알림 쪽 상한)가 사라졌다 — 이 시험이 빈 채로 통과할 뻔했다");
-    assert.equal(ours[1], theirs[1], "같은 집에서 같은 포털을 부르는 상한이 둘이 됐다");
-    assert.ok(fetcher.includes("AbortSignal.timeout(PORTAL_DELEGATIONS_TIMEOUT_MS)"), "상수를 선언만 하고 안 쓰고 있다");
+    assert.equal(fn.split("await conn").length - 1, 2, "두 표를 같은 연결(conn)로 읽지 않는다");
+    assert.ok(!fn.includes("db()\n"), "표 하나를 트랜잭션 밖에서 읽는다");
   });
 
-  it("🔴 **어떤 일이 있어도 던지지 않는다** — 포털 한 곳이 멈춘 날 세 시스템의 결재가 멈추면 안 된다", () => {
-    assert.ok(!fetcher.includes("throw"), "던지는 길이 생겼다(설계 B-6 — 못 물으면 「위임 없음」으로 보고 진행한다)");
-    // 🔴 설정값을 읽는 getter 는 값이 없으면 던진다 — 그래서 `try` 안에서 읽어야 한다.
-    const tryAt = fetcher.indexOf("try {");
-    const envAt = fetcher.indexOf("env.ssoClientId");
-    assert.ok(tryAt !== -1 && envAt > tryAt, "설정값을 try 밖에서 읽는다 — 설정이 빠진 날 결재가 통째로 깨진다");
-  });
-
-  it("🔴 로그에 **사람 번호를 쌓지 않는다** — 이 집의 포털 통로 전부가 같은 규칙이다", () => {
-    for (const line of fetcher.split("\n")) {
-      if (!line.includes("console.")) continue;
-      assert.ok(!line.includes("subject"), `로그에 포털 번호를 싣는다: ${line.trim()}`);
-      assert.ok(!line.includes("credentials"), `로그에 자격증명을 싣는다: ${line.trim()}`);
-    }
+  it("🔴 **표를 읽는 층이 망을 타지 않는다** — 이 함수는 결재 트랜잭션 **안**에서 돈다", () => {
+    assert.ok(!fn.includes("fetch("), "표를 읽는 층이 포털에 직접 묻는다 — 망 지연만큼 행 잠금이 붙들린다");
   });
 });
 
-describe("⑥ 🔴 **누가 묻고 누가 안 묻는가** — 빠뜨리면 「어떤 길에서만 안 듣는다」가 된다", () => {
-  /** 묻는 자리 — 사람이 보는 화면과 사람이 누르는 단추다. */
-  const ASK = [
-    "src/app/actions/part-issue.ts",
-    "src/lib/approval/part-issue-screen-data.ts",
-    "src/lib/approval/delegation-screen-data.ts",
-    "src/components/HeaderNotificationBell.tsx",
+describe("④ 🔴 **어디서도 포털에 결재권 위임을 묻지 않는다** (설계 B-12)", () => {
+  /**
+   * 🔴 **옛 시험을 넓힌 자리다.** 조각 4·6 에서는 「포털이 우리를 부르는 통로 **둘**에서만 안
+   * 묻는다」였고(되물으면 서로 기다리는 짝이 된다), 나머지 **넷은 물어야** 했다. 지금은
+   * **아무도 안 묻는다** — 그래서 통로 둘만 재면 **공짜로 통과한다.** 저장소 전체를 본다.
+   *
+   * 🔵 걸러 내는 이름은 걷어낸 것들이다. 되돌리려면 이 가운데 하나는 반드시 다시 나타난다.
+   */
+  const REMOVED = [
+    "portal-acting-subs",
+    "resolvePortalDelegations",
+    "fetchPortalActingSubs",
+    "PORTAL_DELEGATIONS_TIMEOUT_MS",
+    "NO_PORTAL_DELEGATIONS",
+    "notePortalDelegationOutage",
+    "readPortalDelegationSubs",
+    "portalDelegationUnavailable",
+    "portalDelegatorSubs",
   ];
-  /** 🔴 묻지 **말아야** 하는 자리 — 지금 그 요청이 **포털이 우리를 부른 것**이다. */
-  const NEVER_ASK = ["src/app/api/integration/approvals/route.ts", "src/app/api/integration/notifications/route.ts"];
 
-  it("사람이 보는 네 자리는 **전부** 묻는다 — 하나라도 빠지면 거기서만 대리 결재가 안 된다", () => {
-    for (const file of ASK) {
-      assert.ok(code(file).includes("resolvePortalDelegations("), `${file} 이 포털에 묻지 않는다`);
+  /** `src/` 아래 모든 `.ts`·`.tsx`. 🔴 자리를 늘려도 저절로 걸리게 하려는 것이다. */
+  function sourceFiles(dir: string, out: string[] = []): string[] {
+    for (const name of readdirSync(dir)) {
+      const path = join(dir, name);
+      if (statSync(path).isDirectory()) sourceFiles(path, out);
+      else if (/\.tsx?$/.test(name) && !name.endsWith(".test.ts")) out.push(path);
+    }
+    return out;
+  }
+
+  const files = sourceFiles(fileURLToPath(new URL("../src", import.meta.url)));
+
+  it("🔵 **표본이 비어 있지 않다** — 아래 둘이 공짜로 통과하지 않게 먼저 센다", () => {
+    // 🔴 걸을 파일을 한 장도 못 찾으면 아래 시험은 **무엇도 재지 않고** 초록이 된다.
+    assert.ok(files.length > 100, `src 아래 파일을 ${files.length}개밖에 못 찾았다 — 걷는 길이 틀렸다`);
+    assert.ok(
+      files.some((path) => path.endsWith(join("approval", "delegation-queries.ts"))),
+      "판정이 사는 파일이 표본에 없다",
+    );
+  });
+
+  it("🔴 걷어낸 이름이 `src/` 어디에도 **한 번도** 안 나온다 — 되돌아가면 여기서 깨진다", () => {
+    for (const path of files) {
+      // 🔴 **주석은 걷어낸다**(이 파일 머리말). 내력을 적어 둔 주석이 곧 금지어를 품는다.
+      const body = readFileSync(path, "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/^\s*\/\/.*$/gm, "");
+      for (const name of REMOVED) {
+        assert.ok(!body.includes(name), `${path} 에 걷어낸 ${name} 이 남아 있다 — 묻는 길이 되살아났다`);
+      }
     }
   });
 
-  it("🔴 포털이 부르는 통로 둘은 **되묻지 않는다** — 서로를 기다리는 짝이 된다", () => {
-    // 🔴 포털의 상한은 1.5초이고 우리 상한은 2초다. 되물으면 답이 닿기 전에 포털이 이 줄을
-    //    통째로 버린다 — 「남의 시스템 종에서만 재고 줄이 통째로 빠진다」가 된다.
-    for (const file of NEVER_ASK) {
-      const route = code(file);
-      assert.ok(!route.includes("resolvePortalDelegations"), `${file} 이 포털에 되묻는다`);
-      // 🔵 「안 물었다」를 **글자로** 적는다 — 빈 배열을 그냥 넘기면 「물었는데 없었다」와 같아
-      //    보여 다음 사람이 결함으로 보고 「묻게」 고친다.
-      assert.ok(route.includes("NO_PORTAL_DELEGATIONS.delegatorSubs"), `${file} 에 안 물었다는 사실이 안 적혀 있다`);
+  it("🔴 묻던 모듈 **파일 자체가 없다** — 아무도 안 부르는 죽은 코드로 남기지 않았다", () => {
+    for (const relative of ["src/lib/approval/portal-acting-subs.ts", "src/lib/approval/portal-delegation.ts"]) {
+      assert.equal(existsSync(new URL(`../${relative}`, import.meta.url)), false, `${relative} 이 아직 있다`);
     }
   });
 
-  it("🔴 **거래 안에서 묻는 자리가 없다** — 망 호출이 `FOR UPDATE` 잠금을 붙든다(설계 C-3)", () => {
-    for (const file of ["src/lib/approval/part-issue.ts", "src/lib/approval/delegation-queries.ts"]) {
-      assert.ok(!code(file).includes("resolvePortalDelegations"), `${file} 이 제 손으로 포털에 묻는다 — 트랜잭션 안으로 들어가는 길이다`);
+  it("🟢 **받는 쪽은 그대로 산다** — 걷어낸 것은 묻는 쪽뿐이다", () => {
+    /**
+     * 🔴 걷어내다 조각 6 의 것을 함께 지우면 **표에 아무것도 안 쌓이고**, 그러면 판정이 제 표를
+     *    읽어 봤자 영원히 빈 목록이다 — 오류는 한 번도 안 난다.
+     */
+    for (const relative of ["src/lib/approval/portal-delegation-sync.ts", "src/lib/approval/portal-delegation-store.ts", "src/app/api/integration/delegations/route.ts"]) {
+      assert.equal(existsSync(new URL(`../${relative}`, import.meta.url)), true, `${relative} 이 사라졌다 — 받는 길이 끊겼다`);
     }
+    const sync = code("src/lib/approval/portal-delegation-sync.ts");
+    assert.ok(sync.includes("export function revokedAtOnConflict("), "한 방향 규칙(B-15)이 사라졌다 — 거둔 위임이 되살아난다");
+    assert.ok(sync.includes("export async function applyPortalDelegation("), "전파를 적용하는 자리가 사라졌다");
+    assert.ok(code("src/lib/approval/portal-delegation-store.ts").includes("revokedAtOnConflict(command.revokedAt)"), "쓰는 자리가 한 방향 규칙을 안 쓴다");
   });
 
-  it("🔴 「못 물었다」가 **밖으로 나오는 길**이 있다 — 없으면 대리인이 조용히 막힌다(설계 B-7)", () => {
-    // 🔴 안내 문구는 다음 조각의 일이지만, **값이 나오는 길은 이 조각이 낸다.** 길이 없으면
-    //    안내를 붙이려는 사람이 결재 함수를 다시 열어야 하고 그때 하나를 빠뜨린다.
-    for (const file of ["src/app/actions/part-issue.ts", "src/lib/approval/part-issue-screen-data.ts", "src/lib/approval/part-issue.ts"]) {
-      assert.ok(code(file).includes("portalDelegationUnavailable"), `${file} 에 「못 물었다」가 밖으로 나오는 길이 없다`);
-    }
-    // 위임 설정 화면은 **수와 함께** 내려보낸다 — 「저쪽에도 N건이 있습니다」(설계 D-2).
-    const screen = code("src/lib/approval/delegation-screen-data.ts");
-    assert.ok(screen.includes("portalActing"), "위임 화면이 포털 쪽을 한 글자도 안 보여 준다");
-    assert.ok(screen.includes("unavailable: portal.unavailable"), "위임 화면이 「못 물었다」를 버리고 0건으로 그린다 — 거짓말이 된다");
+  it("🟢 포털을 부르는 **다른 길들은 그대로다** — 걷어낸 것이 너무 넓지 않았다", () => {
+    // 🔴 「포털에 묻지 마라」를 넓게 읽어 알림·명부·결재 알림까지 걷으면 종이 통째로 빈다.
+    assert.ok(code("src/lib/notifications/portal.ts").includes("fetch("), "남의 알림을 받아 오는 길이 사라졌다");
+    assert.ok(code("src/lib/approval/as-users.ts").includes("fetch("), "A/S 명부를 받아 오는 길이 사라졌다");
+    // 🔵 이 파일은 제 손으로 fetch 하지 않는다 — 망 호출은 `./portal.ts` 가 쥐고 있다(위 줄).
+    assert.ok(code("src/lib/notifications/approval-created-ping.ts").includes("notifyPortalApprovalCreated"), "결재 생김 알림 길이 사라졌다");
+  });
+});
+
+describe("⑤ 🔴 위임 설정 화면의 **「승인함에도 N건」**(설계 D-2)", () => {
+  /**
+   * 🔴 **뒤집힌 자리다.** 조각 4 때 이 수는 **포털에 물어서** 받았고, 「못 물은 0」과 「진짜 0」을
+   * 가르려고 `unavailable` 칸이 함께 있었다 — 뭉개면 포털이 멎은 날 화면이 「맡긴 위임이 하나도
+   * 없습니다」라고 **거짓말**을 하기 때문이었다. 지금은 **제 표를 읽으므로 0 은 언제나 「없다」**다.
+   *
+   * 🔴 **수 자체는 걷어내지 않았다.** 이 화면이 제 표만 보여 주면 「분명 맡겼는데 여기엔 없다」가
+   * 되고(설계 D-2), 그것이 고지를 둘로 둔 대가다.
+   */
+  const screen = code("src/lib/approval/delegation-screen-data.ts");
+  const queries = code(QUERIES);
+
+  it("🔴 수를 **제 표에서** 세고, 세는 자는 결재 판정과 **같은 순수 함수**다", () => {
+    assert.ok(screen.includes("countPortalDelegationsIActFor(actorSub, now)"), "화면이 승인함 쪽 수를 안 센다 — 「맡겼는데 여기엔 없다」가 된다");
+    const fnStart = queries.indexOf("export async function countPortalDelegationsIActFor(");
+    assert.notEqual(fnStart, -1, "세는 함수가 사라졌다 — 이 시험이 아무것도 안 재고 있다");
+    const fn = queries.slice(fnStart);
+    assert.ok(fn.includes(".from(portalApprovalDelegations)"), "제 표가 아니라 다른 데서 센다");
+    // 🔴 `count()` 로 세면 반열린 구간 규칙이 SQL 에 한 벌 더 생긴다 — 결재 판정과 갈린다.
+    assert.ok(fn.includes("delegatorSubsFor(rows, delegateSub, now).length"), "SQL 로 세고 있다 — 거르는 규칙이 두 벌이 된다");
+    assert.ok(!fn.includes("count()"), "SQL 집계로 바꿨다 — 끝난 줄·안 시작한 줄까지 세게 된다");
+  });
+
+  it("🔴 「못 물었다」 칸이 **없다** — 뜰 일 없는 경고를 그리지 않는다", () => {
+    assert.ok(!screen.includes("unavailable"), "화면 자료에 「못 물었다」가 남아 있다 — 이제 못 물을 일이 없다");
+    assert.ok(screen.includes("portalActing: { count: portalActingCount }"), "화면이 받는 모양이 달라졌다");
+  });
+
+  it("🔴 **번호는 서버에서 끝난다** — 화면이 받는 모양에 번호 칸이 없다", () => {
+    // 🔵 이 파일 머리말의 명부 규칙과 같은 자리다 — 그냥 실으면 전 직원의 포털 번호가 나간다.
+    assert.ok(!screen.includes("delegatorSubs"), "포털 번호 목록이 화면 자료까지 올라온다");
   });
 });

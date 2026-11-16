@@ -2,8 +2,11 @@ import "server-only";
 import { and, desc, eq, gt, isNotNull, isNull, lte, or } from "drizzle-orm";
 import { db } from "@/db/client";
 import { approvalDelegations } from "@/db/schema/approval-delegations";
+// 🔴 **둘째 고지**다(2026-11-16, 설계 B-12). 승인함에서 맡긴 위임을 포털이 써 주는 표이고,
+//    여기서는 **읽기만** 한다 — 쓰는 자리는 `./portal-delegation-store.ts` 하나다.
+import { portalApprovalDelegations } from "@/db/schema/portal-approval-delegations";
 import type { Role } from "@/db/schema/users";
-import { actingApproverSubs, delegateSubsFor, isActiveDelegation, type ActingApproverSubs } from "./delegation";
+import { actingApproverSubs, delegateSubsFor, delegatorSubsFor, isActiveDelegation, type ActingApproverSubs } from "./delegation";
 import { mayManageOthersDelegations } from "./delegation-authority";
 import { seoulDateText, seoulEndDateText } from "./delegation-input";
 import {
@@ -31,6 +34,13 @@ import {
  * 🔵 `starts_at` 은 **여기서 거르지 않는다.** 색인에 없기 때문이고(까닭은 표 쪽 주석), 앞의
  * 셋으로 좁히고 나면 남는 줄이 몇 줄이라 그 자리에서 순수 함수가 걸러도 된다. 끝을 포함하지
  * 않는 반열린 구간 판정도 거기 한 곳에만 있어야 한다(`isActiveDelegation`).
+ *
+ * ── 🔴 2026-11-16 저녁: 읽을 표가 **둘**이 됐다 (설계 B-12) ──────────────
+ * 그 전에는 둘째 고지(승인함에 맡긴 위임)를 **결재 길목에서 포털에 물어** 받았다(B-3). 뒤집힌
+ * 뒤로는 포털이 지정·철회할 때 **써 주고**, 우리는 `portal_approval_delegations` 를 읽는다.
+ * 🟢 그래서 **결재 길목에 망 호출이 하나도 없다** — 이 파일의 함수가 결재 트랜잭션 **안에서**
+ * 도는데도 안심인 까닭이고, 「포털이 멎으면 대리인만 조용히 막힌다」(옛 B-6)는 상태 자체가
+ * 없어졌다. 🔵 두 표는 색인 모양도 조건절도 같다 — 아래 두 질의가 글자까지 닮은 것이 그 때문이다.
  * ============================================================================
  */
 
@@ -43,30 +53,18 @@ type Conn = ReturnType<typeof db> | Tx;
  * 결재권자들. **네 자리가 이 값을 받는다**(까닭은 `./delegation.ts` 의 `actingApproverSubs`).
  *
  * @param actorSub 누르려는 사람의 **포털 번호**(세션의 `sub` · `users.auth_sub`).
- * @param portalDelegatorSubs 🔴 **포털에 맡긴 위임**으로 지금 대신할 수 있는 결재권자들
- *   (2026-11-16, 설계 B-4). 이 파일은 **묻지 않는다** — 망 호출이고, 이 함수는 결재 트랜잭션
- *   **안에서** 불리기 때문이다(아래 `conn`). 묻는 일은 `./portal-acting-subs.ts` 의
- *   `resolvePortalDelegations` 가 **거래를 열기 전에** 하고, 그 결과가 여기까지 인자로 내려온다
- *   (설계 C-3). 🔴 **기본값을 두지 않는다**: 빠뜨린 자리에서만 포털 위임이 조용히 안 걸리고,
- *   그때 오류도 화면 표시도 없다. 안 묻는 자리는 `NO_PORTAL_DELEGATIONS.delegatorSubs` 를
- *   글자로 넘겨 **안 물었다는 사실을 코드에 적는다.**
  * @param conn 🔴 **쓰기와 같은 트랜잭션을 넘겨라.** 결재를 집는 자리(`decidePartIssueApproval`)
  *   에서 이것을 밖에서 읽으면, 읽은 뒤 집기 전 사이에 위임이 끝나거나 되돌려질 수 있고 그때
  *   「권한이 없는데 통과한」 결재가 한 건 남는다. 기본값이 `db()` 라 **안 넘겨도 오류가 나지
  *   않는다** — 그래서 여기 적어 둔다.
- *   🔵 **포털 쪽은 이 울타리가 없다** — 트랜잭션 밖에서 미리 물은 값이라 그 사이에 되돌려질 수
- *   있다. 그래도 망 호출을 거래 안에 넣는 대가(포털이 느린 날 결재건 행 잠금이 2초씩 붙들린다)가
- *   훨씬 크고, 위임이 **되돌려진 직후 몇 밀리초**에 눌린 결재 하나는 포털의 기록으로 설명된다.
+ *   🟢 **이제 두 표 모두 그 울타리 안에 있다**(2026-11-16 저녁, 설계 B-12). 승인함 위임을 포털에
+ *   **묻던** 동안에는 그 값만 거래 밖에서 미리 받아 온 것이라 「되돌려진 직후 몇 밀리초」가
+ *   열려 있었는데, 제 표를 읽게 되면서 그 틈이 사라졌다.
  * @param now 🔴 **판정과 기록이 같은 순간이어야 한다.** 결재 쪽은 단계 줄의 `decided_at` 에
  *   적는 그 시각을 그대로 넘긴다. 둘이 갈리면 기간이 끝나는 즈음의 결재가 유효했는지를
- *   나중에 설명할 수 없다.
+ *   나중에 설명할 수 없다. 🔵 두 질의와 순수 판정이 **같은 한 값**을 본다.
  */
-export async function actingApproverSubsFor(
-  actorSub: string,
-  portalDelegatorSubs: readonly string[],
-  conn: Conn = db(),
-  now: Date = new Date(),
-): Promise<ActingApproverSubs> {
+export async function actingApproverSubsFor(actorSub: string, conn: Conn = db(), now: Date = new Date()): Promise<ActingApproverSubs> {
   const rows = await conn
     .select({
       delegatorSub: approvalDelegations.delegatorSub,
@@ -84,12 +82,71 @@ export async function actingApproverSubsFor(
       ),
     );
 
+  /**
+   * 🔴 **둘째 고지 — 승인함에서 맡긴 위임**(2026-11-16, 설계 B-12). 조건절이 위와 **글자까지
+   *    같은 모양**이고, 색인(`portal_approval_delegations_delegate_idx`)도 같은 차례로 깔려 있다
+   *    — 두 표를 같은 함수가 같은 조건으로 읽기 때문이다(표 쪽 주석).
+   * 🔴 **나란히(`Promise.all`) 세우지 않는다.** 이 함수는 결재 트랜잭션 **안에서도** 불리는데
+   *    (아래 `conn`), 한 거래는 연결 하나를 잡고 있어 같은 연결에 두 질의를 겹쳐 밀어 넣는 꼴이
+   *    된다. 둘 다 색인을 타는 가벼운 질의라 차례로 해도 싸고, 🟢 **애초에 여기 있던 2초짜리 망
+   *    호출이 통째로 사라진 자리**라 왕복 하나가 느는 것은 셈에 들지도 않는다.
+   */
+  const portalRows = await conn
+    .select({
+      delegatorSub: portalApprovalDelegations.delegatorSub,
+      delegateSub: portalApprovalDelegations.delegateSub,
+      startsAt: portalApprovalDelegations.startsAt,
+      endsAt: portalApprovalDelegations.endsAt,
+      revokedAt: portalApprovalDelegations.revokedAt,
+    })
+    .from(portalApprovalDelegations)
+    .where(
+      and(
+        eq(portalApprovalDelegations.delegateSub, actorSub),
+        isNull(portalApprovalDelegations.revokedAt),
+        gt(portalApprovalDelegations.endsAt, now),
+      ),
+    );
+
   // 🔵 `delegate_sub` 로 이미 좁혔지만 그 조건을 순수 함수에 **다시 맡긴다** — 걸러 내는 일을
   //    부르는 쪽에 떠넘기지 않는 것이 그 함수의 약속이고, 여기서 빼면 그 약속에 기대는 다른
-  //    부르는 쪽이 생겼을 때 조용히 갈린다.
-  // 🔴 **합치는 자리도 그 함수 하나다**(2026-11-16). 포털 목록을 여기서 이어 붙이면 두 고지를
-  //    합치는 규칙이 두 벌이 되고, 두 겹(A→B·B→C)을 막는 자리도 함께 둘이 된다.
-  return actingApproverSubs(rows, actorSub, now, portalDelegatorSubs);
+  //    부르는 쪽이 생겼을 때 조용히 갈린다. `starts_at` 도 거기서 걸린다(머리말).
+  // 🔴 **합치는 자리도 그 함수 하나다**(2026-11-16). 두 묶음을 여기서 이어 붙이면 합치는 규칙이
+  //    두 벌이 되고, 두 겹(A→B·B→C)을 막는 자리도 함께 둘이 된다.
+  return actingApproverSubs(rows, actorSub, now, portalRows);
+}
+
+/**
+ * **승인함에 맡겨 둔 위임으로 지금 내가 대신할 수 있는 결재권자 수** (2026-11-16, 설계 D-2).
+ *
+ * 🔴 **판정에 쓰이지 않는다.** 「누를 수 있나」는 지금도 앞으로도 위 `actingApproverSubsFor`
+ * 하나이고, 이 수는 위임 설정 화면이 **「저쪽에도 N건이 있습니다」**를 말해 주는 길잡이다 —
+ * 그 화면이 제 표(`approval_delegations`)만 보여 주면 **「분명 맡겼는데 여기엔 없다」**가 된다.
+ *
+ * 🔵 거르는 자는 위와 **같은 순수 함수**다(`delegatorSubsFor` → `isActiveDelegation`). 수를
+ *    SQL 의 `count()` 로 세지 않는 까닭이 그것이다 — 그러면 반열린 구간 규칙이 한 벌 더 생긴다.
+ * 🔵 이름은 돌려주지 않는다 — 이 표에는 **이름 칸이 없다**(세 시스템 공통 모양, 표 쪽 머리말).
+ *    자세한 것은 통합 승인함에서 본다.
+ */
+export async function countPortalDelegationsIActFor(delegateSub: string, now: Date = new Date()): Promise<number> {
+  const rows = await db()
+    .select({
+      delegatorSub: portalApprovalDelegations.delegatorSub,
+      delegateSub: portalApprovalDelegations.delegateSub,
+      startsAt: portalApprovalDelegations.startsAt,
+      endsAt: portalApprovalDelegations.endsAt,
+      revokedAt: portalApprovalDelegations.revokedAt,
+    })
+    .from(portalApprovalDelegations)
+    .where(
+      and(
+        eq(portalApprovalDelegations.delegateSub, delegateSub),
+        isNull(portalApprovalDelegations.revokedAt),
+        gt(portalApprovalDelegations.endsAt, now),
+      ),
+    );
+
+  return delegatorSubsFor(rows, delegateSub, now).length;
 }
 
 /**
@@ -109,19 +166,19 @@ export async function actingApproverSubsFor(
  * 🔴 **`starts_at` 은 WHERE 에 넣지 않는다** — 위 둘과 같은 까닭이고(색인에 없다), 아직
  * 시작하지 않은 줄은 순수 함수가 거른다. 여기 조건을 손으로 적으면 반열린 구간이 세 벌이 된다.
  *
- * ── 🔴 **포털 위임은 여기 안 붙는다. 통로가 그 방향으로 없다** (2026-11-16) ──
- * 위 `actingApproverSubsFor` 는 포털에 맡긴 위임까지 합치는데(설계 B-4) 이쪽은 못 한다 —
- * 포털의 통로(`/api/integration/delegations`)가 받는 일 다섯 가운데 **이 방향이 없기**
- * 때문이다: `acting` 은 「이 사람이 **대신할 수 있는** 사람들」이고, 그 반대인 「이 사람을
- * **대신할 수 있는** 사람들」을 묻는 일이 없다. `list&scope=mine` 이 비슷해 보이지만 그것은
- * **사람에게 보여 줄 줄**(이름·사유·기간까지)이고 철회된 줄을 거르는 규칙이 달라, 그것으로
- * 알림을 넓히려면 **기간·되돌림 판정을 이 집에 한 벌 더 베껴 적어야** 한다 — 설계가 그 규칙을
- * 포털에 둔 까닭 자체를 무너뜨린다.
+ * ── 🔴 **승인함 위임은 아직 여기 안 붙어 있다** (2026-11-16) ─────────────
+ * 위 `actingApproverSubsFor` 는 두 표를 합치는데(설계 B-4) 이쪽은 **제 표만** 읽는다.
+ * 🔴 **까닭이 2026-11-16 저녁에 바뀌었다.** 그 전에는 **길이 없어서** 못 했다 — 포털의 통로가
+ * 받는 일 다섯 가운데 이 방향(「이 사람을 **대신할 수 있는** 사람들」)이 없었고, 설계 D-8 ①이
+ * 그 구멍을 적어 두었다. 지금은 표가 **이 집에 있으므로** `portal_approval_delegations` 를
+ * `delegator_sub` 로 읽으면 그만이다 — **못 하는 것이 아니라 아직 안 한 것**이다.
  *
- * 🔵 **그래서 무엇이 빠지나**: 포털 쪽 대리인에게 **「결재가 생겼다」 즉시 알림(메일)만** 안
- * 간다. 🔵 그 사람의 **알림 종·결재 화면·[승인] 단추는 멀쩡히 돈다** — 그 셋은 포털에 직접
- * 묻는다. 적힌 결재자에게는 그대로 가고, 포털의 주기 작업도 평소처럼 줍는다. 🔴 메우려면
- * **포털에 반대 방향 일을 하나 더 내야** 하고, 그것은 포털 쪽 조각이다.
+ * 🔵 **그래서 지금 무엇이 빠지나**: 승인함 쪽 대리인에게 **「결재가 생겼다」 즉시 알림(메일)만**
+ * 안 간다. 🟢 그 사람의 **알림 종·결재 화면·[승인] 단추는 이제 멀쩡히 돈다**(위 함수가 두 표를
+ * 본다). 적힌 결재자에게는 그대로 가고, 포털의 주기 작업도 평소처럼 줍는다.
+ * 🔴 **잇는 것은 이 조각의 일이 아니다** — 알림이 가는 사람 수가 달라지는 변경이라 따로 다룬다.
+ * 🔵 이을 때는 **색인을 먼저 봐야 한다**: 두 표 다 색인이 받는 쪽(`delegate_sub`)으로 깔려 있어
+ *    이 방향에는 없다(아래 주석).
  */
 export async function activeDelegateSubsFor(delegatorSub: string, now: Date = new Date()): Promise<string[]> {
   const rows = await db()

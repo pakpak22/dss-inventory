@@ -1,7 +1,6 @@
 import { NotificationBell } from "@dss/ui";
 import type { Role } from "@/db/schema/users";
 import { acknowledgeNotificationAction, dismissAllNotificationsAction, dismissNotificationAction } from "@/app/actions/notifications";
-import { resolvePortalDelegations } from "@/lib/approval/portal-acting-subs";
 import { visibleNotificationKeys } from "@/lib/notifications/dismiss-keys";
 import { fetchPortalNotifications, withoutAcknowledged, withoutDismissed } from "@/lib/notifications/portal";
 import { listInventoryNotifications } from "@/lib/notifications/queries";
@@ -112,14 +111,13 @@ export async function HeaderNotificationBell({ userId, role, subject }: { userId
   //    그 값을 우리 질의에도 그대로 넘긴다 — 「지금 내 차례인 불출 결재」가 그 번호로만 갈린다
   //    (notifications/queries.ts 의 `NotificationViewer.sub`). **users 를 다시 읽지 않는다.**
   /**
-   * 🔴 **포털에 맡긴 위임도 함께 묻는다**(2026-11-16, 설계 B-4). 안 물으면 대리인에게 **종만
-   *    안 울린다** — 결재 화면(`/approvals`)에는 그 건이 보이는데 종에는 없는, 아무도 신고하지
-   *    않는 짝이 된다. 우리 질의는 그 답을 받아야 하므로 **두 망 호출을 나란히 세우고** 그
-   *    뒤에 DB 를 읽는다. 🔵 그래서 늘어나는 것은 **DB 읽기 시간만큼**이다(두 망 호출은 여전히
-   *    겹쳐 돈다). 🔵 못 물어도 던지지 않는다 — 위임이 안 걸릴 뿐 종은 예전 그대로 그려진다.
+   * 🟢 **승인함에 맡긴 위임이 저절로 섞여 온다**(2026-11-16 저녁, 설계 B-12) — 아래 질의가 두
+   *    표를 읽는다. 그날 낮까지는 이 자리에서 **포털에도 물어야** 해서(안 물으면 대리인에게
+   *    종만 안 울렸다) 망 호출 **둘**을 나란히 세우고 **그 답을 받은 뒤에야** DB 를 읽었다.
+   * 🟢 지금은 왕복 하나가 통째로 사라졌고, 그래서 **우리 질의가 포털을 기다릴 까닭도 없다** —
+   *    머리말이 적어 둔 「두 물음은 나란히 나간다」가 비로소 글자 그대로가 됐다.
    */
-  const [portal, others] = await Promise.all([resolvePortalDelegations(subject), fetchPortalNotifications(subject)]);
-  const raw = await listInventoryNotifications({ id: userId, role, sub: subject }, portal.delegatorSubs);
+  const [others, raw] = await Promise.all([fetchPortalNotifications(subject), listInventoryNotifications({ id: userId, role, sub: subject })]);
 
   // 🔴 이 한 줄이 없으면 「여기서 지웠는데 여기서만 그대로 뜬다」가 된다(위 머리말).
   const notDismissed = withoutDismissed(raw, others.dismissed);

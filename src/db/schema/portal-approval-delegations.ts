@@ -10,12 +10,13 @@ import { check, index, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-cor
  * `src/app/api/integration/delegations/route.ts` 하나뿐이다.
  *
  * ── ⓓ 🔴 2026-11-16 저녁에 **방식이 뒤집혔다**(설계 B-12) ────────────────
- * 그 전(2026-11-13, B-3)에는 **결재할 때마다 포털에 물었다**(`./approval/portal-acting-subs.ts`).
+ * 그 전(2026-11-13, B-3)에는 **결재할 때마다 포털에 물었다**(옛 `./approval/portal-acting-subs.ts`).
  * 뒤집은 까닭은 셋이다 — 결재 길목에서 **망 호출이 사라지고**, 포털이 멈춰도 결재가 멀쩡하고,
  * 종·메뉴·배지에 공짜로 붙는다. 대신 **전파가 한 곳이라도 실패하면 포털이 지정 자체를
  * 거절한다**(B-13). 설계 전문은 `dss-approvals/DELEGATION_DESIGN.md` 다.
- * 🔵 **「묻는 쪽」은 아직 그대로 살아 있다** — 걷어내는 것은 다음 조각의 일이고, 지금 걷으면
- *    이 표가 비어 있는 동안 포털 위임이 통째로 안 듣는다.
+ * 🟢 **「묻는 쪽」은 조각 8 에서 걷어냈다** — 이 표가 곧 둘째 고지이고, 읽는 자리는
+ *    `./approval/delegation-queries.ts` 의 `actingApproverSubsFor` 하나다(제 표 위임과 합집합).
+ *    🔴 그래서 **여기 안 적힌 위임은 어디에서도 안 걸린다** — 물어서 메우던 길이 없다.
  *
  * ── ⓒ 🔴 `approval_delegations` 와 **다른 표다. 둘 다 산다**(설계 B-4) ────
  * 저쪽은 **이 시스템 안에서** 맡긴 위임이고 이쪽은 **승인함에서 맡긴** 위임이다. 칸을 더해

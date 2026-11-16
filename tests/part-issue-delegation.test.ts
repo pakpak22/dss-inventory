@@ -60,11 +60,13 @@ const KIM_STEP = { approverSub: sub("kim"), status: "REQUESTED" as const };
  * 「지금 이 사람이 kim 의 단계를 누를 수 있나」 — **운영이 지나는 길 그대로** 잰다.
  * 🔴 번호 목록을 손으로 만들지 않고 `actingApproverSubs` 를 지난다. DB 조건절 셋이 받는 것과
  *    **같은 목록**이어야 하므로, 여기서 손으로 적으면 이 시험이 아무것도 지키지 못한다.
- * 🔵 넷째 인자는 **포털에 맡긴 위임**이다(2026-11-16, 설계 B-4). 안 넘기면 「포털에 물었더니
- *    아무것도 없더라」라, 아래 ①의 옛 시험들은 기대값이 한 글자도 안 바뀐 채로 돈다.
+ * 🔵 넷째 인자는 **승인함에서 맡겨 포털이 써 준 위임 줄들**이다(2026-11-16 저녁, 설계 B-12).
+ *    🔴 그날 낮까지는 **포털이 이미 판정해서 준 번호 목록**이었다 — 모양이 바뀐 것은 그래서다.
+ *    안 넘기면 그 고지가 비어 있다는 뜻이라, 아래 ①의 옛 시험들은 기대값이 한 글자도 안 바뀐
+ *    채로 돈다. 승인함 쪽까지 섞은 판정은 `tests/portal-delegation.test.ts` 가 따로 잰다.
  */
-const mayPress = (rows: ApprovalDelegationPeriod[], actorSub: string, now: Date = NOW, portalSubs: readonly string[] = []) =>
-  mayDecidePartIssueStep(KIM_STEP, actingApproverSubs(rows, actorSub, now, portalSubs));
+const mayPress = (rows: ApprovalDelegationPeriod[], actorSub: string, now: Date = NOW, portalRows: readonly ApprovalDelegationPeriod[] = []) =>
+  mayDecidePartIssueStep(KIM_STEP, actingApproverSubs(rows, actorSub, now, portalRows));
 
 describe("① 위임이 붙은 뒤 **누가 누를 수 있나**", () => {
   it("🔴 대리인이 그 단계를 누를 수 있다 — 이 조각의 전부다", () => {
@@ -212,11 +214,13 @@ describe("② 🔴 **넷이 같은 함수에서 번호 목록을 받는다** —
 
   it("🔴 목록을 **실제로 만드는 자리는 하나**다 — 표를 읽는 쪽이 순수 함수에 넘긴다", () => {
     const fn = bodyOf(src(QUERIES), "export async function actingApproverSubsFor(");
-    // 🔴 2026-11-16: **포털 목록도 같은 자리에서 합쳐진다**(설계 B-4). 표를 읽는 쪽이 제 손으로
-    //    이어 붙이면 합치는 규칙이 두 벌이 되고, 두 겹을 막는 자리도 함께 둘이 된다.
+    // 🔴 2026-11-16 저녁: **승인함 위임도 같은 자리에서 합쳐진다**(설계 B-12). 그날 낮까지는
+    //    넷째 인자가 포털에 물어 받은 번호 목록이었고, 지금은 **제 표에서 읽은 줄들**이다.
+    //    표를 읽는 쪽이 제 손으로 이어 붙이면 합치는 규칙이 두 벌이 되고, 두 겹을 막는 자리도
+    //    함께 둘이 된다.
     assert.ok(
-      fn.includes("return actingApproverSubs(rows, actorSub, now, portalDelegatorSubs);"),
-      "읽어 온 줄과 포털 목록을 **한 자리에서** 순수 판정에 넘기지 않는다 — 규칙이 두 벌이 된다",
+      fn.includes("return actingApproverSubs(rows, actorSub, now, portalRows);"),
+      "읽어 온 두 묶음을 **한 자리에서** 순수 판정에 넘기지 않는다 — 규칙이 두 벌이 된다",
     );
     assert.ok(!fn.includes("fetch("), "표를 읽는 층이 포털에 직접 묻는다 — 이 함수는 결재 트랜잭션 **안**에서 돈다");
   });
@@ -229,11 +233,16 @@ describe("③ 🔴 알림 종과 목록은 **같은 수**를 센다", () => {
 
   it("둘 다 **같은 번호 목록**으로 좁힌다 — 대리인에게 둘이 함께 늘어난다", () => {
     // 🔴 한쪽만 고치면 「가 보면 있는데 알림이 없다」(또는 그 반대)가 된다.
-    // 🔴 2026-11-16: 두 자리가 **포털 목록까지 같은 이름으로** 받아야 한다(설계 B-4). 한쪽만
-    //    넘기면 「종에는 뜨는데 화면에는 없다」(또는 그 반대)가 다시 생긴다.
-    assert.ok(list.includes("actingApproverSubsFor(approverSub, portalDelegatorSubs)"), "목록이 위임(또는 포털 위임)을 안 본다 — 대리인 화면이 비어 보인다");
-    assert.ok(bell.includes("actingApproverSubsFor(approverSub, portalDelegatorSubs)"), "종이 위임(또는 포털 위임)을 안 본다 — 대리인에게 알림이 안 간다");
+    // 🟢 2026-11-16 저녁(설계 B-12): 그 함수가 **제 표 둘**을 읽으므로 **넘길 인자가 없다.**
+    //    그날 낮까지는 「포털에 물어 넘기는 자리」와 「안 묻는 자리」가 갈려서 **같은 함수를
+    //    부르면서도 다른 수를 셀 수 있었다** — 인자가 사라지면서 갈릴 자리도 사라졌다.
+    assert.ok(list.includes("actingApproverSubsFor(approverSub)"), "목록이 위임을 안 본다 — 대리인 화면이 비어 보인다");
+    assert.ok(bell.includes("actingApproverSubsFor(approverSub)"), "종이 위임을 안 본다 — 대리인에게 알림이 안 간다");
     assert.ok(list.includes(NARROW) && bell.includes(NARROW));
+    // 🔴 **인자를 되살리지 마라** — 되살아나는 순간 두 자리가 다시 갈릴 수 있다.
+    for (const fn of [list, bell]) {
+      assert.ok(!fn.includes("portalDelegatorSubs"), "위임 목록을 부르는 쪽이 정하는 길이 되살아났다 — 자리마다 다른 수를 셀 수 있다");
+    }
   });
 
   it("나머지 두 조건도 그대로 같다 — 결재건은 `PENDING_APPROVAL`, 단계는 `REQUESTED`", () => {
@@ -280,42 +289,42 @@ describe("⑤ 🔴 집행은 **읽기와 쓰기가 같은 트랜잭션** 안에 
   it("위임을 `tx` 로, 결재 시각과 **같은 순간**으로 읽는다", () => {
     // 🔴 밖에서 읽으면 읽은 뒤 집기 전 사이에 위임이 끝나거나 되돌려질 수 있고, 그때 권한이
     //    없는데 통과한 결재가 한 건 남는다. 🔵 함수의 기본값이 `db()` 라 안 넘겨도 오류가 없다.
-    assert.ok(decide.includes("actingApproverSubsFor(actor.sub, portal.delegatorSubs, tx, now)"), "집행이 위임을 트랜잭션 밖에서(또는 다른 시각으로) 읽는다");
+    // 🟢 2026-11-16 저녁(설계 B-12): **승인함 위임도 같은 `tx` 안에서 읽힌다.** 그날 낮까지는
+    //    둘째 고지가 망 호출이라 거래 밖에서 미리 받아 와 인자로 들고 들어갔고, 그 틈에
+    //    거둬진 위임으로 눌린 결재가 한 건 생길 수 있었다.
+    assert.ok(decide.includes("actingApproverSubsFor(actor.sub, tx, now)"), "집행이 위임을 트랜잭션 밖에서(또는 다른 시각으로) 읽는다");
     // 🔴 `now` 가 그 UPDATE 의 `decided_at` 과 같은 값이어야 한다 — 위에서 한 번만 만든다.
     assert.equal(decide.split("new Date()").length - 1, 1, "결재 한 번에 시각을 두 번 만들고 있다 — 판정과 기록이 갈린다");
   });
 
   /**
-   * 🔴 **반대로, 포털에 묻는 일은 트랜잭션 **밖**이어야 한다** (2026-11-16, 설계 C-3).
-   * 위임 표 읽기는 거래 **안**이 맞지만(위), 망 호출은 그 반대다 — 결재건 행을 `FOR UPDATE` 로
-   * 잡아 둔 채 포털을 기다리면 그 잠금이 2초씩 붙들린다. 둘이 **정반대 방향**이라 한 자리에서
-   * 함께 못 박는다.
+   * 🔴 **뒤집힌 단언이다** (2026-11-16 저녁, 설계 B-12).
+   * 옛 뜻: 「결재 함수는 **스스로 묻지 않는다** — 묻는 일은 서버 액션이 거래를 열기 **전에**
+   * 하고, 여기는 **받은 답의 그릇**(`PortalDelegations`)을 인자로 받는다」. 망 호출을
+   * `FOR UPDATE` 안에 들이지 않으려는 울타리였다.
+   * 지금 뜻: 🔴 **아무도 안 묻는다.** 그릇도 묻는 모듈도 없어졌고, 결재 함수는 제 표 둘을
+   * 트랜잭션 안에서 읽는다 — 울타리가 「묻는 자리를 앞으로 옮겨라」에서 「묻지 마라」가 됐다.
    */
-  it("🔴 결재 함수는 포털에 **스스로 묻지 않는다** — 받은 답을 인자로 들고 들어간다", () => {
+  it("🔴 결재 길목 어디에도 **망 호출이 없다** — 묻는 길을 되살리면 행 잠금이 붙들린다", () => {
     /**
-     * 🔴 **주석을 걷어내고 본다.** 이 집은 「왜 안 하는가」를 길게 적어서, 「포털에 묻는
-     *    모듈(`portal-acting-subs.ts`)을 여기서 끌어오지 않는다」는 **설명이 곧 금지어를
-     *    품는다.** 안 걷어내면 설명 때문에 시험이 깨지고(2026-11-16 실측), 반대로 「있어야
-     *    한다」 쪽은 주석만으로 영영 통과한다.
+     * 🔴 **주석을 걷어내고 본다.** 이 집은 「왜 안 하는가」를 길게 적어서, 걷어낸 모듈 이름을
+     *    적어 둔 **내력 설명이 곧 금지어를 품는다.** 안 걷어내면 설명 때문에 시험이 깨지고
+     *    (2026-11-16 실측), 반대로 「있어야 한다」 쪽은 주석만으로 영영 통과한다.
      */
-    const server = src(PART_ISSUE)
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^\s*\/\/.*$/gm, "");
-    assert.ok(!server.includes("portal-acting-subs"), "결재 모듈이 포털에 묻는 모듈을 끌어온다 — 망 호출이 트랜잭션 안으로 들어가는 길이 열린다");
-    assert.ok(!server.includes("resolvePortalDelegations"), "결재 모듈이 제 손으로 포털에 묻고 있다");
-    // 🔵 들어오는 것은 **이미 받아 온 답의 그릇**뿐이다.
-    assert.ok(server.includes('from "./portal-delegation"'), "답을 담는 그릇을 안 쓰고 있다 — 빈 목록과 「못 물었다」가 뭉개진다");
-  });
-
-  it("🔴 묻는 자리는 **거래를 열기 전**이다 — 서버 액션이 묻는다", () => {
-    const action = src("src/app/actions/part-issue.ts");
-    // 🔴 `decidePartIssueApproval(` 보다 **앞줄**에서 물어야 한다. 뒤에서 물으면 이미 거래가
-    //    끝난 뒤라 그 답이 판정에 쓰이지 않는다(오류 없이 위임만 안 걸린다).
-    const asked = action.indexOf("await resolvePortalDelegations(session.user.authSub)");
-    const decided = action.indexOf("await decidePartIssueApproval(");
-    assert.notEqual(asked, -1, "서버 액션이 포털에 묻지 않는다 — 포털 위임이 결재에서 한 번도 안 걸린다");
-    assert.notEqual(decided, -1, "결재를 부르는 자리가 사라졌다");
-    assert.ok(asked < decided, "포털에 묻는 자리가 결재 **뒤**로 갔다 — 그 답은 판정에 쓰이지 않는다");
+    const strip = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    const server = strip(src(PART_ISSUE));
+    const action = strip(src("src/app/actions/part-issue.ts"));
+    for (const [where, body] of [
+      ["결재 모듈", server],
+      ["서버 액션", action],
+    ] as const) {
+      assert.ok(!body.includes("portal-acting-subs"), `${where} 가 포털에 묻는 모듈을 끌어온다 — 그 모듈은 걷어냈다`);
+      assert.ok(!body.includes("resolvePortalDelegations"), `${where} 가 제 손으로 포털에 묻고 있다`);
+      assert.ok(!body.includes("portal-delegation\""), `${where} 가 「못 물었다」 그릇을 끌어온다 — 그 상태는 이제 없다`);
+    }
+    // 🔴 결재 함수가 **인자 없이** 판정 목록을 받는다 — 그릇을 들고 들어가던 길이 사라졌다.
+    assert.ok(decide.includes("actingApproverSubsFor(actor.sub, tx, now)"));
+    assert.ok(action.includes("await decidePartIssueApproval(id, decision, note, { id: session.user.id, name: session.user.name, sub: session.user.authSub })"), "서버 액션이 결재에 넘기는 인자가 달라졌다");
   });
 });
 
@@ -326,6 +335,8 @@ describe("⑥ 🔴 위임 조회는 **색인을 탄다** — 표를 통째로 �
     // 🔴 위임 표는 지워지지 않고 쌓인다(되돌리기도 깃발이다). 통째 읽기는 해가 갈수록 느려지고,
     //    느려지는 자리가 하필 모든 화면에 딸려 오는 알림 종이다. 조각 1이 깐 색인이
     //    `(delegate_sub, revoked_at, ends_at)` 이고 아래 차례가 그 차례다.
+    // 🔵 2026-11-16 저녁부터 **표가 둘**이다. 승인함 쪽 색인·조건은
+    //    `tests/portal-delegation.test.ts` ③이 같은 잣대로 잰다.
     assert.ok(fn.includes("eq(approvalDelegations.delegateSub, actorSub)"), "대신할 사람으로 좁히지 않는다");
     assert.ok(fn.includes("isNull(approvalDelegations.revokedAt)"), "되돌린 줄까지 읽는다");
     assert.ok(fn.includes("gt(approvalDelegations.endsAt, now)"), "이미 끝난 줄까지 읽는다 — 표가 통째로 딸려 온다");
