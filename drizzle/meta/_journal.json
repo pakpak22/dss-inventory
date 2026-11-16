@@ -183,6 +183,13 @@
       "when": 1792630371604,
       "tag": "0025_brave_grey_gargoyle",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1794815309765,
+      "tag": "0026_safe_wallflower",
+      "breakpoints": true
     }
   ]
 }

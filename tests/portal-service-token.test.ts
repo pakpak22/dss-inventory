@@ -134,7 +134,27 @@ describe("용도 글자 — 🔴 저장소 넷이 똑같아야 한다", () => {
       notificationsRead: "dss.notifications.read",
       notificationSettingsRead: "dss.notification-settings.read",
       notificationSettingsWrite: "dss.notification-settings.write",
+      /**
+       * 🔴 **2026-11-16 에 더했다**(조각 6, 결재권 위임 전파 — 설계 B-12). 승인함에서 맡긴
+       * 위임을 포털이 각 시스템에 **써 주는** 통로가 요구하는 글자다.
+       *
+       * 🔴 **포털(dss-auth)이 아직 이 글자를 굽지 않는다**(2026-11-16 실측: 저쪽
+       * `PORTAL_SERVICE_TOKEN_PURPOSES` 에는 알림 셋뿐이다). 포털·A/S·휴가에 **같은 글자**로
+       * 더해야 통로가 열린다. 어긋나면 그 통로만 401 이고, 포털은 그것을 전파 실패로 보아
+       * 지정 자체를 거절한다(B-13) — 조용히 틀리지는 않지만 고칠 자리가 네 저장소에 흩어진다.
+       */
+      delegationsWrite: "dss.delegations.write",
     });
+  });
+
+  it("🔴 종을 읽는 토큰으로는 위임을 쓸 수 없다 — 쓰임새를 나눈 까닭이 이것이다", async () => {
+    const readToken = await sign({ purpose: PORTAL_TOKEN_PURPOSES.notificationsRead });
+    assert.deepEqual(await verify(readToken, PORTAL_TOKEN_PURPOSES.delegationsWrite), { ok: false, reason: "wrong_purpose" });
+    // 🔵 거꾸로도 막힌다 — 위임을 쓰러 구운 토큰으로 남의 알림을 읽을 수 없다.
+    const writeToken = await sign({ purpose: PORTAL_TOKEN_PURPOSES.delegationsWrite });
+    assert.deepEqual(await verify(writeToken, PORTAL_TOKEN_PURPOSES.notificationsRead), { ok: false, reason: "wrong_purpose" });
+    // 🔵 맞으면 통과한다 — 「막히나」만 재면 서명이 통째로 깨져도 이 시험은 통과한다.
+    assert.equal((await verify(writeToken, PORTAL_TOKEN_PURPOSES.delegationsWrite)).ok, true);
   });
 });
 

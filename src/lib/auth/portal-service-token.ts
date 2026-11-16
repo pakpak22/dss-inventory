@@ -62,6 +62,22 @@ export const PORTAL_TOKEN_PURPOSES = {
   notificationSettingsRead: "dss.notification-settings.read",
   /** 알림 설정 저장. */
   notificationSettingsWrite: "dss.notification-settings.write",
+  /**
+   * 🔴 **결재권 위임 전파**(2026-11-16, 설계 B-12). 승인함에서 맡기거나 거둔 위임을 포털이
+   * 각 시스템에 **써 주는** 길이다 — `app/api/integration/delegations`.
+   *
+   * 🔴 **알림 쓰임새를 돌려쓰지 않는다.** 종을 읽으려고 굽는 토큰(`dss.notifications.read`)은
+   * 사람이 화면을 열 때마다 오가는 값이라 가장 흔하다. 그것으로 **남의 결재권을 넘기는 줄을
+   * 쓸 수 있게 되면** 이 통로가 그 토큰의 수명만큼 넓어진다 — 이 상수 묶음이 애초에 나뉜
+   * 까닭(최소 권한)을 통로 하나가 무너뜨린다.
+   *
+   * 🔴 **포털(dss-auth)이 아직 이 글자를 굽지 않는다**(2026-11-16 실측: 포털의
+   * `PORTAL_SERVICE_TOKEN_PURPOSES` 에는 알림 셋뿐이다). 포털 쪽 조각에서 **이 글자 그대로**
+   * 더해야 하고, A/S·휴가의 같은 통로도 **같은 글자**를 요구해야 한다. 어긋나면 그 통로만
+   * 401 이 되고, 포털은 그것을 전파 실패로 보아 **지정 자체를 거절한다**(설계 B-13) — 조용히
+   * 틀리지는 않지만, 고칠 자리가 네 저장소에 흩어져 있다.
+   */
+  delegationsWrite: "dss.delegations.write",
 } as const;
 
 export type PortalTokenPurpose = (typeof PORTAL_TOKEN_PURPOSES)[keyof typeof PORTAL_TOKEN_PURPOSES];

@@ -511,6 +511,37 @@ export function auditDetailLines(action: AuditAction, detail: Record<string, unk
         unknown: false,
       };
 
+    /**
+     * 🔴 **승인함에서 온 위임** (2026-11-16, 조각 6 · 설계 B-12). 위 둘과 **다른 표**이고, 이
+     * 줄은 **이 시스템 화면에서 거둘 수 없다**(승인함에서만). 그래서 글자에 「승인함」을 박는다 —
+     * 이력을 읽는 사람이 [되돌리기]를 어디서 찾아야 하는지가 그 한 낱말에 달려 있다.
+     *
+     * 🔵 행위자 칸에는 사람 대신 「통합 승인함」이 적힌다(쓰는 쪽에서). 그래서 **누가 맡겼는지는
+     *    이 시스템에 없다** — 승인함에 묻는 수밖에 없고, 그 사실을 숨기지 않으려고 「누가」를
+     *    지어내지 않는다.
+     */
+    case "PORTAL_DELEGATION_SYNCED": {
+      const period = formatDelegationPeriod(s(d.startDate), s(d.endDate));
+      const lines: AuditDetailLine[] = [
+        text(`${s(d.delegatorName)} 님의 결재권을 ${s(d.delegateName)} 님에게 ${period} 동안 맡김 (승인함에서 받음)`),
+      ];
+      // 사유는 선택이다 — 비면 줄을 그리지 않는다(「없음」을 지어내지 않는다).
+      if (d.reason) lines.push(text(`사유: ${s(d.reason)}`));
+      // 🔴 **거둬진 채로 들어온 줄**. 드물지만 있으면 반드시 보여야 한다 — 없으면 「받았는데 왜
+      //    안 듣지」의 답이 표에만 있고 이력에는 없다.
+      if (d.arrivedRevoked) lines.push(text("받을 때 이미 거둬진 상태였음"));
+      return { lines, unknown: false };
+    }
+    case "PORTAL_DELEGATION_REVOKED":
+      /**
+       * 🔵 **이름이 없다** — 철회 몸통에는 사람 칸이 아예 없다(통로 규약). 기간으로 가리키고,
+       *    누구였는지는 같은 번호의 「결재권 위임 받음(승인함)」 줄이 말해 준다.
+       */
+      return {
+        lines: [text(`승인함에서 맡겼던 위임(${s(d.endDate)}까지)을 거둠`)],
+        unknown: false,
+      };
+
     /* ── O/H 템플릿 ────────────────────────────────────────────── */
     // O/H 부품 템플릿 (조각 8a) — 🔴 줄을 통째로 갈아 끼우는 저장이라, **이 줄만 읽고도 그때 무엇이
     // 들어 있었는지** 보여야 한다. 지난 줄을 되찾을 다른 자리가 없다.

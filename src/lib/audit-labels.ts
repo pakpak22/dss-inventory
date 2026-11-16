@@ -54,6 +54,11 @@ export const AUDIT_ACTION_LABEL: Record<AuditAction, string> = {
   // 이력에서 사라진다.
   APPROVAL_DELEGATION_CREATED: "결재권 위임",
   APPROVAL_DELEGATION_REVOKED: "결재권 위임 되돌림",
+  // 🔴 위 둘과 **다른 글자여야 한다** (2026-11-16, 조각 6). 이 줄은 **승인함에서** 맡긴 위임이
+  // 포털을 거쳐 들어온 것이라 **여기서는 되돌릴 수 없다** — 같은 말로 보이면 설정 화면에서
+  // [되돌리기]를 찾다 못 찾는다. 표도 둘이고 둘 다 산다(설계 B-4).
+  PORTAL_DELEGATION_SYNCED: "결재권 위임 받음(승인함)",
+  PORTAL_DELEGATION_REVOKED: "결재권 위임 거둠(승인함)",
   OH_TEMPLATE_SAVED: "O/H 템플릿 저장",
   OH_TEMPLATE_DELETED: "O/H 템플릿 삭제",
   OH_TEMPLATE_MODEL_LINKED: "O/H 템플릿 모델 연결",
@@ -108,6 +113,9 @@ export function describeTarget(target: string | null): string {
   // "approval_delegations:<uuid>" → "결재권 위임". uuid 는 사람에게 뜻이 없어 붙이지 않는다
   // (위 issue_approvals 와 같은 까닭) — 누구에게 맡겼는지는 상세(detail)의 이름이 말해 준다.
   if (kind === "approval_delegations") return "결재권 위임";
+  // "portal_approval_delegations:<uuid>" → "결재권 위임 (승인함)". 🔴 **위와 다른 표다**
+  // (설계 B-4) — 거두는 곳이 다르므로 대상 글자도 달라야 한다. uuid 는 붙이지 않는다(위와 같은 까닭).
+  if (kind === "portal_approval_delegations") return "결재권 위임 (승인함)";
   // "approval_routes:PART_ISSUE" → "승인 절차 · 부품 불출". 용도 이름표가 적힌 곳은 approval/route.ts 하나다.
   if (kind === "approval_routes") {
     const label = isApprovalRouteScope(rest) ? APPROVAL_ROUTE_SCOPE_LABELS[rest] : rest;

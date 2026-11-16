@@ -80,6 +80,19 @@ export type AuditAction =
   | "APPROVAL_DELEGATION_CREATED"
   | "APPROVAL_DELEGATION_REVOKED"
   /**
+   * 승인함에서 맡긴 위임이 **포털을 거쳐 들어왔다**(2026-11-16, 조각 6. 설계 B-12).
+   *
+   * 🔴 **위 둘과 가른다.** 저쪽은 이 시스템 화면에서 맡긴 줄이라 **여기서 거둘 수 있고**,
+   *    이쪽은 승인함에서만 거둔다 — 이력에서 둘이 같은 글자로 보이면 「거두려면 어디로 가야
+   *    하나」의 답이 사라진다. 표도 둘이다(`portal_approval_delegations`, 설계 B-4).
+   * 🔵 행위자가 **사람이 아니다** — `actor_id` 는 비고 이름 자리에 「통합 승인함」이 적힌다.
+   *    이 집에서 사람 없이 쌓이는 줄은 로그인 거절에 이어 두 번째다.
+   * 🔴 **줄이 덮어써지기 때문에** 남긴다: 같은 번호로 다시 오면 표에는 마지막 상태만 남고,
+   *    「어떤 기간으로 왔다가 어떻게 바뀌었나」는 append-only 인 이 로그에만 있다.
+   */
+  | "PORTAL_DELEGATION_SYNCED"
+  | "PORTAL_DELEGATION_REVOKED"
+  /**
    * O/H 부품 템플릿 (조각 8a). 🔵 **마이그레이션이 필요 없다** — `audit_logs.action` 은 글자 칸이다.
    * 🔴 여기와 `audit-labels.ts` **둘 다**에 적어야 한다(한쪽만 더하면 타입 검사가 잡아 준다).
    *

@@ -212,6 +212,24 @@ const SAMPLES: Record<AuditAction, Record<string, unknown> | null> = {
     endDate: "2026-10-25",
     revokedAt: "2026-10-23T05:00:00.000Z",
   },
+  // src/lib/approval/portal-delegation-store.ts — 🔴 **위 둘과 다른 표다**(설계 B-4). 승인함에서
+  // 맡겨 포털이 써 준 줄이라 행위자가 사람이 아니고, 이 시스템 화면에서는 거둘 수 없다.
+  PORTAL_DELEGATION_SYNCED: {
+    delegatorName: "홍길동",
+    delegateName: "김철수",
+    startDate: "2026-11-17",
+    endDate: "2026-11-20",
+    startsAt: "2026-11-16T15:00:00.000Z",
+    endsAt: "2026-11-20T15:00:00.000Z",
+    reason: "출장",
+    arrivedRevoked: false,
+  },
+  // src/lib/approval/portal-delegation-store.ts — 🔵 **이름이 없다**(철회 몸통에 사람 칸이 없다).
+  PORTAL_DELEGATION_REVOKED: {
+    startDate: "2026-11-17",
+    endDate: "2026-11-20",
+    revokedAt: "2026-11-18T05:00:00.000Z",
+  },
   // src/lib/oh/mutations.ts:390 — 🔵 2026-10-15 에 기종 코드를 없애 `code` 칸이 **없다**
   OH_TEMPLATE_SAVED: {
     created: false,
@@ -443,6 +461,13 @@ describe("변경 이력 「내용」 칸 (audit-detail.ts)", () => {
     assert.equal(joined("APPROVAL_ROUTE_SAVED", SAMPLES.APPROVAL_ROUTE_SAVED), ["2번째 판 → 3번째 판", "승인 단계 1. 이영희 1. 김철수"].join("\n"));
     assert.equal(joined("APPROVAL_DELEGATION_CREATED", SAMPLES.APPROVAL_DELEGATION_CREATED), ["김철수 님에게 2026-10-24 ~ 2026-10-25 동안 내 결재권을 맡김", "사유: 출장"].join("\n"));
     assert.equal(joined("APPROVAL_DELEGATION_REVOKED", SAMPLES.APPROVAL_DELEGATION_REVOKED), "김철수 님에게 맡긴 위임(2026-10-25까지)을 되돌림");
+    // 🔴 승인함에서 온 줄에는 **「승인함」이 글자로 박혀 있어야 한다** (2026-11-16, 조각 6) —
+    //    이 시스템 화면에서는 거둘 수 없는 줄이라, 그 낱말이 [되돌리기]를 어디서 찾을지를 말해 준다.
+    assert.equal(
+      joined("PORTAL_DELEGATION_SYNCED", SAMPLES.PORTAL_DELEGATION_SYNCED),
+      ["홍길동 님의 결재권을 김철수 님에게 2026-11-17 ~ 2026-11-20 동안 맡김 (승인함에서 받음)", "사유: 출장"].join("\n"),
+    );
+    assert.equal(joined("PORTAL_DELEGATION_REVOKED", SAMPLES.PORTAL_DELEGATION_REVOKED), "승인함에서 맡겼던 위임(2026-11-20까지)을 거둠");
     assert.equal(joined("OH_PRICE_SET", SAMPLES.OH_PRICE_SET), "O/H 단가 예시 PCB-001 (정하지 않음) ₩15,000");
     assert.equal(joined("OH_TEMPLATE_MODEL_LINKED", SAMPLES.OH_TEMPLATE_MODEL_LINKED), "제품 모델 「예시 기종」 연결");
     assert.equal(joined("OH_TEMPLATE_MODEL_UNLINKED", SAMPLES.OH_TEMPLATE_MODEL_UNLINKED), "제품 모델 「예시 기종」 연결 해제");

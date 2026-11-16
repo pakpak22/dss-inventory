@@ -15,4 +15,6 @@ export * from "./workbook-apply-logs";
 export * from "./oh-templates";
 export * from "./approval-routes";
 export * from "./approval-delegations";
+// 🔴 **위와 다른 표다. 둘 다 산다**(설계 B-4) — 이쪽은 승인함에서 맡겨 포털이 써 주는 줄이다.
+export * from "./portal-approval-delegations";
 export * from "./stock-issue-approvals";
