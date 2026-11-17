@@ -1,8 +1,8 @@
 import "server-only";
-import { and, asc, count, desc, eq, gte, inArray, min, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, isNotNull, lt, min, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "@/db/client";
-import { approvalRouteSteps } from "@/db/schema/approval-routes";
+import { approvalRoutes, approvalRouteSteps } from "@/db/schema/approval-routes";
 import { auditLogs } from "@/db/schema/audit-logs";
 import { stockIssueApprovalSteps, stockIssueApprovals } from "@/db/schema/stock-issue-approvals";
 import { stockRequests } from "@/db/schema/stock-requests";
@@ -11,6 +11,9 @@ import { auditValues } from "@/lib/audit";
 //    적힌 곳은 `@/lib/notifications/approval-created-ping` 머리말이다.
 import { pingPortalApprovalCreated } from "@/lib/notifications/approval-created-ping";
 import { DECIDED_ISSUE_APPROVAL_STATUSES, type DecidedIssueApprovalStatus } from "@/lib/notifications/bell-items";
+// 🔴 「그 결재 하나로 가는 주소」는 저장소에 한 자리에서만 지어진다 — 승인함의 「결재할 건」과
+//    「결재 내역」이 서로 다른 곳으로 건너가지 않게 하는 자리다(그 함수의 머리말).
+import { partIssueApprovalHref } from "@/lib/notifications/portal-approvals";
 import { CLAIMABLE_REQUEST_STATUSES, isClaimableRequest } from "@/lib/stock/codes";
 import type { IssueQuantity } from "@/lib/stock/issue";
 import type { Actor } from "@/lib/stock/ledger";
@@ -22,6 +25,16 @@ import { actingApproverSubsFor } from "./delegation-queries";
 // 🔴 「그 자리를 실제로 누가 눌렀나」의 갈래 넷도 저장소에 한 자리에서만 갈린다 — 화면마다 다시
 //    적으면 옛 줄(`decided_by_sub` 가 `NULL`)이 「본인」으로 둔갑한다(그 함수의 머리말).
 import { approvalStepActor, type ApprovalStepActor } from "./delegation";
+// 🔴 「내가 한 결재인가 · 내가 대신한 것인가 · 내 자리를 남이 누른 것인가」도 한 자리에서만
+//    갈린다 — 그 함수가 다시 `approvalStepActor` 를 지난다(`./part-issue-history.ts` 머리말).
+import {
+  PART_ISSUE_DECIDED_STEP_STATUSES,
+  partIssueHistoryRole,
+  partIssueScopeLabel,
+  type PartIssueApprovalHistoryRow,
+  type PartIssueDecidedStepStatus,
+  type PartIssueHistoryStep,
+} from "./part-issue-history";
 import {
   checkCanCancelPartIssue,
   checkCanDecidePartIssue,
@@ -1278,4 +1291,160 @@ export async function listDecidedPartIssueApprovalsFor(requesterUserId: string, 
     })),
     total: rows[0].total,
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* 8. 결재 내역 — 「내가 한 결재 · 나를 대신해 한 결재」 (2026-11-17, 조각 10a) */
+/* 🔴 위의 조회들을 한 글자도 건드리지 않는다. **더하기만** 한다.          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * ⑦ **이 사람이 이 기간에 한 결재 전부** — 직접 누른 것 · 남을 대신해 누른 것 · 제 자리를 남이
+ * 눌러 준 것까지 **한 줄씩** (2026-11-17, 설계 C-4).
+ *
+ * 🔵 **화면은 이 집에 없다.** 통합 승인함 한 곳에서 세 시스템의 내역을 한 창에 모은다
+ * (2026-11-17 쓰는 분 결정) — 이 조각은 조회와 색인까지이고, 통로는 다음 조각이다.
+ *
+ * ── 🔴 줄의 단위가 **결재건이 아니라 단계**다 ──────────────────────────
+ * 위 조회 여섯은 전부 결재건 한 줄이지만, 「내가 한 결재」는 **내가 누른 그 단계**가 한 줄이다.
+ * 한 사람이 **같은 결재건에 두 줄**을 가질 수 있다 — 1단계는 제 자리로 직접 누르고 3단계는 제
+ * 자리를 대리인이 눌러 준 식이다(결재선이 같은 사람을 두 단계에 넣는 것을 막지 않는다). 그래서
+ * 결재건 id 하나로는 줄을 가리킬 수 없고, 열쇠가 필요한 쪽은 `stepOrder` 까지 함께 써야 한다.
+ *
+ * ── 🔴 「대신 눌렀다」 전용 칸이 이 집에는 없다 ─────────────────────────
+ * A/S 에는 `delegated_from_user_id` 가 있어 `decided_by_user_id = X OR delegated_from_user_id = X`
+ * 로 찾지만, 이 집은 **한 줄 안의 두 칸을 견준다**(설계 「C-4 보충」). 그래서 조건이
+ * `decided_by_sub = X OR approver_sub = X` 다:
+ *  · `decided_by_sub = X` — **내가 누른** 줄(내 자리였든 남의 자리였든).
+ *  · `approver_sub = X` — **내 자리였던** 줄(내가 눌렀든 대리인이 눌렀든).
+ * 🔴 **그 뒤 「셋 중 무엇인가」를 SQL 이 가르지 않는다** — `partIssueHistoryRole` 하나가 가린다.
+ *
+ * ── 🔴 결재가 **실제로 난** 줄만 ────────────────────────────────────────
+ * `REQUESTED` 이거나 `decided_at` 이 빈 줄은 내역이 아니라 **지금 할 일**이고, 그 목록은 따로
+ * 있다(①). 좁히는 묶음을 여기 손으로 적지 않는다 — `PART_ISSUE_DECIDED_STEP_STATUSES` 하나다.
+ * 🔵 `decided_at IS NOT NULL` 은 아래 기간 조건이 이미 지우는 줄이지만(NULL 은 어느 부등호에도
+ *    참이 되지 않는다) 그대로 둔다: 뒷날 기간을 선택으로 바꾸는 사람이 **이 한 줄까지 함께
+ *    지우지는 않도록** 뜻을 글자로 세워 두는 값이다.
+ *
+ * ── 🔴 기간은 **반열린 구간** `[from, to)` 다 ───────────────────────────
+ * 위임 판정(`isActiveDelegation`)이 쓰는 구간과 **같은 모양**이어야 한다. C-5(「끝난 위임의
+ * 기간을 눌러 그 기간의 결재 보기」)가 그 위임의 `[starts_at, ends_at)` 를 **그대로** 이 두 칸에
+ * 넣을 것이기 때문이다. 끝을 포함하면 잇대어 적은 두 위임의 경계 시각에 결재된 건이 **양쪽
+ * 기간에 모두** 뜬다 — 「누구의 권한으로 눌렀나」가 둘이 되는 바로 그 자리다.
+ *
+ * ── 🔵 결재건이 뒤에 어떻게 됐는지는 **보지 않는다** ────────────────────
+ * 올린 사람이 거둬 `CANCELLED` 가 된 건에도 그 전에 누른 단계가 남아 있다. 그 사람은 **실제로
+ * 그 결재를 했다** — 뒤에 무르는 일이 있었다고 해서 한 일이 없어지지는 않는다. 그래서 결재건
+ * 상태로 좁히지 않는다.
+ *
+ * ── 🔵 색인 ────────────────────────────────────────────────────────────
+ * `stock_issue_approval_steps_decided_by_history_idx`(`decided_by_sub`, `decided_at`) ·
+ * `stock_issue_approval_steps_approver_history_idx`(`approver_sub`, `decided_at`) 둘이다. 🔴 **OR
+ * 두 칸은 한 색인으로 못 탄다** — 각자 타고 PostgreSQL 이 BitmapOr 로 합친다(색인 쪽 주석에 왜
+ * 둘인지, 왜 기존 `(approver_sub, status)` 로는 안 되는지 적어 두었다).
+ *
+ * @param params.sub 🔴 **포털 번호**(`users.auth_sub` · 세션의 `sub`). `users.id` 나 A/S 번호를
+ *   넘기면 **영원히 빈 목록**이다 — 오류는 나지 않는다(①의 주석. 실제로 있었던 결함이다).
+ * @param params.from 기간의 시작(포함).
+ * @param params.to 기간의 끝(**포함하지 않는다**).
+ * @param params.baseUrl 이 시스템의 절대 주소(`env.ownBaseUrl`). 🔴 상대 주소면 던진다 —
+ *   승인함은 **다른 사이트**라 상대 주소를 받으면 제 주소로 읽는다.
+ * @param params.limit 몇 줄까지. 🔵 상한을 여기 적지 않는다 — 부르는 쪽(통로)이 정한다.
+ *
+ * 🔵 **이름 붙인 인자로 받는 까닭**: `sub` 와 `baseUrl` 이 둘 다 글자라, 차례로 받으면 바꿔
+ *    넣어도 컴파일이 통과하고 **빈 목록**이 조용히 돌아온다.
+ */
+export async function listPartIssueApprovalHistoryFor(params: {
+  sub: string;
+  from: Date;
+  to: Date;
+  baseUrl: string;
+  limit: number;
+}): Promise<{ rows: PartIssueApprovalHistoryRow[]; total: number }> {
+  const rows = await db()
+    .select({
+      approvalId: stockIssueApprovals.id,
+      stepOrder: stockIssueApprovalSteps.stepOrder,
+      // 🔴 갈래는 **결재선 판**에 적혀 있다(결재건은 어느 판으로 올렸는지만 들고 있다).
+      //    `route_id` 는 NOT NULL 이라 innerJoin 이 줄을 떨어뜨리지 않는다.
+      scope: approvalRoutes.scope,
+      summary: stockRequests.summary,
+      requestType: stockRequests.type,
+      requestedByName: stockIssueApprovals.requestedByName,
+      decision: stockIssueApprovalSteps.status,
+      decidedAt: stockIssueApprovalSteps.decidedAt,
+      note: stockIssueApprovalSteps.note,
+      /**
+       * 🔵 **번호 둘은 갈래를 가르는 데만 쓰고 아래에서 버린다** — 돌려주는 모양에는 포털 번호
+       *    칸이 없다(`PartIssueApprovalHistoryRow` 주석). 사람은 이름 사본으로만 말한다.
+       */
+      approverSub: stockIssueApprovalSteps.approverSub,
+      approverName: stockIssueApprovalSteps.approverName,
+      decidedBySub: stockIssueApprovalSteps.decidedBySub,
+      decidedByName: stockIssueApprovalSteps.decidedByName,
+      // 🔴 상한에 걸리기 전의 전체 개수. 창 함수는 WHERE 뒤·LIMIT 앞에 계산된다(⑥과 같은 수).
+      total: sql<number>`count(*) over ()`.mapWith(Number),
+    })
+    .from(stockIssueApprovalSteps)
+    .innerJoin(stockIssueApprovals, eq(stockIssueApprovals.id, stockIssueApprovalSteps.approvalId))
+    .innerJoin(approvalRoutes, eq(approvalRoutes.id, stockIssueApprovals.routeId))
+    .innerJoin(stockRequests, eq(stockRequests.id, stockIssueApprovals.requestId))
+    .where(
+      and(
+        // 🔴 가로지르는 두 칸(위 머리말). 한 색인으로는 못 타고 둘을 각자 탄다.
+        or(eq(stockIssueApprovalSteps.decidedBySub, params.sub), eq(stockIssueApprovalSteps.approverSub, params.sub)),
+        // 🔴 결재가 실제로 난 줄만. 묶음을 손으로 적지 않는다(`REQUESTED` 가 섞이는 자리).
+        inArray(stockIssueApprovalSteps.status, [...PART_ISSUE_DECIDED_STEP_STATUSES]),
+        isNotNull(stockIssueApprovalSteps.decidedAt),
+        // 🔴 **반열린 구간** `[from, to)` — `lt` 를 `lte` 로 고치지 마라(위 머리말).
+        gte(stockIssueApprovalSteps.decidedAt, params.from),
+        lt(stockIssueApprovalSteps.decidedAt, params.to),
+      ),
+    )
+    // 🔵 **최신이 위** — 「내가 무엇을 했나」를 되짚어 보는 자리다. 같은 시각이 겹쳐도 차례가
+    //    달라지지 않도록 결재건·단계 번호까지 묶어 둔다(값이 흔들리면 쪽 나누기가 어긋난다).
+    .orderBy(desc(stockIssueApprovalSteps.decidedAt), desc(stockIssueApprovals.id), desc(stockIssueApprovalSteps.stepOrder))
+    .limit(params.limit);
+
+  if (rows.length === 0) return { rows: [], total: 0 };
+
+  const out: PartIssueApprovalHistoryRow[] = [];
+  for (const r of rows) {
+    const step: PartIssueHistoryStep = {
+      approverSub: r.approverSub,
+      approverName: r.approverName,
+      decidedAt: r.decidedAt,
+      decidedBySub: r.decidedBySub,
+      decidedByName: r.decidedByName,
+    };
+    /**
+     * 🔴 **갈래를 가르는 자리는 `partIssueHistoryRole` 하나다** — 화면마다(또는 조회마다) 다시
+     *    적으면 `decided_by_sub` 가 빈 **옛 줄이 「대리인이 눌렀다」로 둔갑**한다. 그 줄에는 누가
+     *    눌렀는지가 어디에도 없다.
+     * 🔴 **`null` 이면 싣지 않는다.** 위 WHERE 가 이미 그런 줄을 거르므로 평소에는 닿지 않지만,
+     *    두 규칙이 어긋나는 날 **남의 결재가 조용히 섞이는 것**보다 여기서 떨어뜨리는 편이 낫다.
+     *    🔵 그래서 `total`(창 함수)이 실제 줄 수보다 클 수 있다 — 그 어긋남 자체가 결함의 신호다.
+     * 🔵 `decidedAt` 을 함께 보는 것은 타입을 좁히기 위해서다. `role` 이 있으면 그 칸도 반드시
+     *    있다(`approvalStepActor` 가 빈 줄을 `UNDECIDED` 로 돌려보낸다).
+     */
+    const role = partIssueHistoryRole(step, params.sub);
+    if (role === null || step.decidedAt === null) continue;
+    out.push({
+      approvalId: r.approvalId,
+      stepOrder: r.stepOrder,
+      scope: r.scope,
+      scopeLabel: partIssueScopeLabel(r.scope),
+      summary: r.summary,
+      requestType: r.requestType,
+      requestedByName: r.requestedByName,
+      // 🔵 WHERE 가 둘로 좁혔지만 drizzle 의 타입은 enum 전체다 — 좁혀 둔다(⑥과 같은 자리).
+      decision: r.decision as PartIssueDecidedStepStatus,
+      decidedAt: step.decidedAt.toISOString(),
+      note: r.note,
+      approverName: r.approverName,
+      role,
+      href: partIssueApprovalHref(r.approvalId, params.baseUrl),
+    });
+  }
+  return { rows: out, total: rows[0].total };
 }

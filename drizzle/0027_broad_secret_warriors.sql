@@ -1,0 +1,2 @@
+CREATE INDEX "stock_issue_approval_steps_decided_by_history_idx" ON "stock_issue_approval_steps" USING btree ("decided_by_sub","decided_at");--> statement-breakpoint
+CREATE INDEX "stock_issue_approval_steps_approver_history_idx" ON "stock_issue_approval_steps" USING btree ("approver_sub","decided_at");

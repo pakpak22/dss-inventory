@@ -102,6 +102,21 @@ export function portalApprovalItemId(approvalId: string): string {
 }
 
 /**
+ * 🔴 **「그 결재 하나로 가는 주소」가 적힌 유일한 자리다** (2026-11-17 에 아래
+ * `toPortalApprovalItem` 에서 꺼내 왔다 — 동작은 한 글자도 바뀌지 않았다).
+ *
+ * 꺼낸 까닭: **결재 내역 조회**(`approval/part-issue.ts` 의
+ * `listPartIssueApprovalHistoryFor`)가 같은 주소를 실어야 하는데, 두 곳에 각자 적으면 승인함의
+ * 「결재할 건」과 「결재 내역」이 **서로 다른 곳으로 건너가는** 날이 온다. 그 어긋남은 오류가
+ * 아니라 「눌렀더니 엉뚱한 화면」이라 조용하다.
+ *
+ * 🔵 주소 모양의 까닭(건별 화면이 없어 `#approval-{id}` 조각으로 간다)은 머리말의 href 절에 있다.
+ */
+export function partIssueApprovalHref(approvalId: string, baseUrl: string): string {
+  return `${requireAbsoluteBaseUrl(baseUrl)}${APPROVALS_PATH}#approval-${approvalId}`;
+}
+
+/**
  * 절대 주소인지 보고 끝의 슬래시를 떼어 낸다. bell-items.ts 의
  * `requireAbsoluteBaseUrl` 과 같은 규칙이다(그 파일 주석 참조) — 이 통로도 포털을
  * 거쳐 **다른 시스템의 종**에 실릴 수 있는 값이라 상대경로를 조용히 내보내지 않는다.
@@ -121,7 +136,6 @@ function requireAbsoluteBaseUrl(baseUrl: string): string {
  * 적을 뿐이다.
  */
 export function toPortalApprovalItem(row: PartIssueView, baseUrl: string): PortalApprovalItem {
-  const base = requireAbsoluteBaseUrl(baseUrl);
   return {
     id: portalApprovalItemId(row.id),
     kind: PART_ISSUE_APPROVAL_KIND,
@@ -130,7 +144,8 @@ export function toPortalApprovalItem(row: PartIssueView, baseUrl: string): Porta
     subject: row.requestSummary,
     detail: `${ENTRY_TYPE_LABEL[row.requestType]} · 결재 올린 사람 ${row.requestedByName}`,
     requestedAt: row.requestedAt,
-    href: `${base}${APPROVALS_PATH}#approval-${row.id}`,
+    // 🔴 주소를 여기서 짓지 않는다 — 결재 내역 조회와 **같은 함수**를 지난다(위 머리말).
+    href: partIssueApprovalHref(row.id, baseUrl),
   };
 }
 

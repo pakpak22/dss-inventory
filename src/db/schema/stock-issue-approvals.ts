@@ -344,6 +344,39 @@ export const stockIssueApprovalSteps = pgTable(
      * 더하기만 한다). 조회 경로는 위 색인으로 옮겼다.
      */
     index("stock_issue_approval_steps_approver_idx").on(t.approverUserId, t.status),
+    /**
+     * ── 🔴 **결재 내역**(「내가 한 / 나를 대신해 한 결재」)이 타는 색인 **둘** (2026-11-17) ──
+     *
+     * 조회(`src/lib/approval/part-issue.ts` 의 `listPartIssueApprovalHistoryFor`)의 조건은
+     * `(decided_by_sub = X OR approver_sub = X) AND decided_at >= A AND decided_at < B` 다.
+     *
+     * 🔴 **한 색인으로는 못 탄다.** `OR` 로 묶인 두 칸은 복합 색인의 앞칸이 될 수 없다 —
+     * `(decided_by_sub, approver_sub, decided_at)` 를 만들어도 `approver_sub` 쪽 조건만 있는 줄은
+     * 앞칸을 좁히지 못해 색인 전체를 훑게 된다. **칸마다 하나씩 두 개**를 두고 PostgreSQL 이
+     * `BitmapOr` 로 두 결과를 합치게 하는 것이 이 모양에서 유일하게 둘 다 타는 길이다.
+     *
+     * 🔴 **기존 `…_approver_sub_idx`(`approver_sub`, `status`) 로는 안 된다.** 그것은 「지금 내
+     * 차례인가」용이라 둘째 칸이 `status` 이고, 결재 내역은 **`decided_at` 범위**로 좁힌다 —
+     * 범위는 둘째 칸이어야 색인 안에서 끝나는데 그 자리에 다른 칸이 앉아 있으면 그 색인이 고른
+     * 줄을 전부 다시 읽어야 한다. 그래서 **지우지 않고 옆에 더한다**(그 색인은 지금도 「내가
+     * 결재할 건」·알림 종이 탄다).
+     *
+     * 🔵 **둘째 칸이 `decided_at` 인 까닭**: 앞칸은 등호 하나로 정해지고 뒤칸이 범위라, 색인
+     *    안에서 연속한 구간 하나로 읽힌다. 차례도 `decided_at` 내림차순이라 정렬이 공짜다.
+     * 🔵 **`status` 를 끼워 넣지 않았다**: 좁히는 값이 `APPROVED`·`REJECTED` **둘**이라 등호가
+     *    아니고, 범위 칸 앞에 두면 구간이 둘로 쪼개진다. 남는 줄은 어차피 몇 줄이라 그 몇 줄을
+     *    본체에서 보고 거르는 편이 싸다.
+     * 🔵 **부분 색인(`WHERE decided_at IS NOT NULL`)으로 줄이지 않았다**: 안 눌린 줄을 빼면
+     *    작아지지만, 그 색인을 쓸 수 있는지는 플래너가 조건을 **증명**해 줘야 정해진다. 색인이
+     *    조용히 안 쓰이는 쪽이 조금 큰 색인보다 나쁘다.
+     * 🔵 `decided_by_sub` 는 널 허용이라 옛 줄이 색인에 NULL 로 들어오지만, NULL 은 한쪽 끝에
+     *    몰려 있어 등호로 찾는 길을 가로막지 않는다.
+     *
+     * 🔵 **지금 개발 DB 는 작다**(단계 16행 — 2026-11-17 설계 B-17 실측). 체감은 없고, 운영
+     *    규모를 모르는 채로 쌓이기만 하는 표라 먼저 깔아 둔다.
+     */
+    index("stock_issue_approval_steps_decided_by_history_idx").on(t.decidedBySub, t.decidedAt),
+    index("stock_issue_approval_steps_approver_history_idx").on(t.approverSub, t.decidedAt),
     /** `stepOrderFromIndex`(index + 1) 와 짝이다. 0 이나 음수는 그 판의 어느 단계와도 짝지어지지 않는다. */
     check("stock_issue_approval_steps_step_order_positive", sql`${t.stepOrder} >= 1`),
     /**

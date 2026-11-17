@@ -199,7 +199,23 @@ describe("② 🔴 **넷이 같은 함수에서 번호 목록을 받는다** —
   it("🔴 **번호 하나로 좁히는 옛 꼴이 한 자리도 남아 있지 않다**", () => {
     // 🔴 한 자리만 `eq` 로 남으면 그 화면에서만 위임이 안 먹는다 — 오류가 아니라 「없음」이라
     //    아무도 신고하지 않는다. 셋이 전부 같은 글자인 것으로 그것을 막는다.
-    assert.ok(!server.includes("eq(stockIssueApprovalSteps.approverSub"), "결재자 번호를 아직 하나로 견주는 자리가 있다");
+    //
+    // ── 🔴 **예외가 딱 하나 있다 — 결재 「내역」 조회** (2026-11-17, 설계 C-4) ──
+    // 저 조회는 「이 사람이 **누를 수 있나**」를 가리는 자리가 아니라, 이미 눌린 줄을 두고
+    // 「그 자리가 **누구 자리였나**」를 묻는 자리다. 그래서 번호 **목록**(지금 대신할 수 있는
+    // 사람들)이 아니라 **보는 사람 번호 하나**로 견주는 것이 맞다 — 거기에 `actingSubs` 를
+    // 쓰면 「내가 지금 대신할 수 있는 사람이 **예전에** 한 결재」까지 내 내역으로 끌려온다.
+    // 🔴 그래서 그 함수만 떼어 내고 나머지를 전부 본다. **느슨하게 푼 것이 아니라 범위를
+    //    갈랐다** — 아래 두 줄이 그 함수가 자격 판정 흉내를 내지 않는지도 함께 잰다.
+    const history = bodyOf(server, "export async function listPartIssueApprovalHistoryFor(");
+    assert.ok(
+      history.includes("or(eq(stockIssueApprovalSteps.decidedBySub, params.sub), eq(stockIssueApprovalSteps.approverSub, params.sub))"),
+      "내역 조회가 두 칸을 가로지르는 꼴이 아니다 — 예외로 둘 까닭이 사라졌다",
+    );
+    assert.ok(!history.includes("actingApproverSubsFor("), "내역 조회가 자격 판정을 흉내 낸다 — 남이 한 옛 결재가 내 내역에 섞인다");
+
+    const decisionSites = server.replace(history, "");
+    assert.ok(!decisionSites.includes("eq(stockIssueApprovalSteps.approverSub"), "결재자 번호를 아직 하나로 견주는 자리가 있다");
     assert.equal(server.split(NARROW).length - 1, 3, "세 자리가 같은 글자로 좁히지 않는다(집행·목록·알림 종)");
   });
 
