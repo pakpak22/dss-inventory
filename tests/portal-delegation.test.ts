@@ -336,32 +336,62 @@ describe("④ 🔴 **어디서도 포털에 결재권 위임을 묻지 않는다
   });
 });
 
-describe("⑤ 🔴 위임 설정 화면의 **「승인함에도 N건」**(설계 D-2)", () => {
+describe("⑤ 🔴 위임 설정 화면이 **승인함 줄을 함께 읽는다**(설계 D-2)", () => {
   /**
-   * 🔴 **뒤집힌 자리다.** 조각 4 때 이 수는 **포털에 물어서** 받았고, 「못 물은 0」과 「진짜 0」을
-   * 가르려고 `unavailable` 칸이 함께 있었다 — 뭉개면 포털이 멎은 날 화면이 「맡긴 위임이 하나도
-   * 없습니다」라고 **거짓말**을 하기 때문이었다. 지금은 **제 표를 읽으므로 0 은 언제나 「없다」**다.
+   * 🔴 **두 번 뒤집힌 자리다.** 조각 4 때는 **포털에 물어서** 수를 받았고(「못 물은 0」과 「진짜
+   * 0」을 가르려고 `unavailable` 칸이 있었다), 조각 8 에서 **제 표를 읽는 수**가 됐다.
+   * 🔴 **2026-11-17(조각 3c)에 수 하나가 줄들이 됐다** — 화면이 그 수조차 안 그리고 있어서 쓰는
+   * 분에게는 「위임되었다는 내용이 안 뜬다」로 보였다. 줄을 그리면서 **세던 함수는 걷어냈다**:
+   * 같은 집합을 두 곳에서 세면 「N건이라는데 줄은 그보다 적은」 화면이 되고 오류는 안 난다.
    *
-   * 🔴 **수 자체는 걷어내지 않았다.** 이 화면이 제 표만 보여 주면 「분명 맡겼는데 여기엔 없다」가
-   * 되고(설계 D-2), 그것이 고지를 둘로 둔 대가다.
+   * 🔴 **읽는 일 자체는 걷어내지 않았다.** 이 화면이 제 표만 보여 주면 「분명 맡겼는데 여기엔
+   * 없다」가 되고(설계 D-2), 그것이 고지를 둘로 둔 대가다.
    */
   const screen = code("src/lib/approval/delegation-screen-data.ts");
   const queries = code(QUERIES);
 
-  it("🔴 수를 **제 표에서** 세고, 세는 자는 결재 판정과 **같은 순수 함수**다", () => {
-    assert.ok(screen.includes("countPortalDelegationsIActFor(actorSub, now)"), "화면이 승인함 쪽 수를 안 센다 — 「맡겼는데 여기엔 없다」가 된다");
-    const fnStart = queries.indexOf("export async function countPortalDelegationsIActFor(");
-    assert.notEqual(fnStart, -1, "세는 함수가 사라졌다 — 이 시험이 아무것도 안 재고 있다");
-    const fn = queries.slice(fnStart);
-    assert.ok(fn.includes(".from(portalApprovalDelegations)"), "제 표가 아니라 다른 데서 센다");
-    // 🔴 `count()` 로 세면 반열린 구간 규칙이 SQL 에 한 벌 더 생긴다 — 결재 판정과 갈린다.
-    assert.ok(fn.includes("delegatorSubsFor(rows, delegateSub, now).length"), "SQL 로 세고 있다 — 거르는 규칙이 두 벌이 된다");
-    assert.ok(!fn.includes("count()"), "SQL 집계로 바꿨다 — 끝난 줄·안 시작한 줄까지 세게 된다");
+  it("🔴 줄을 **제 표에서** 읽고, 거르는 자는 결재 판정과 **같은 순수 함수**다", () => {
+    assert.ok(screen.includes("listPortalDelegationsIMade(actorSub, now)"), "화면이 승인함에 맡긴 줄을 안 읽는다 — 「맡겼는데 여기엔 없다」가 된다");
+    assert.ok(screen.includes("listPortalDelegationsIActFor(actorSub, now)"), "화면이 승인함에서 맡은 줄을 안 읽는다");
+
+    for (const [name, mustHave] of [
+      ["listPortalDelegationsIMade", "eq(portalApprovalDelegations.delegatorSub, delegatorSub)"],
+      ["listPortalDelegationsIActFor", "eq(portalApprovalDelegations.delegateSub, delegateSub)"],
+    ] as const) {
+      const fnStart = queries.indexOf(`export async function ${name}(`);
+      assert.notEqual(fnStart, -1, `${name} 이 사라졌다 — 이 시험이 아무것도 안 재고 있다`);
+      // 🔴 다음 `export` 까지만 자른다. 안 끊으면 뒤 함수의 글자에 걸려 헛통과한다.
+      const rest = queries.slice(fnStart + 10);
+      const fnEnd = rest.indexOf("\nexport ");
+      const fn = fnEnd === -1 ? rest : rest.slice(0, fnEnd);
+      assert.ok(fn.includes(".from(portalApprovalDelegations)"), `${name}: 제 표가 아니라 다른 데서 읽는다`);
+      assert.ok(fn.includes(mustHave), `${name}: 방향이 뒤집혔다 — 맡긴 것과 맡은 것이 바뀌어 보인다`);
+      // 🔴 이름은 **이 집 users 에서** 붙인다. 포털 표에는 이름 칸이 없다(세 시스템 공통 모양).
+      assert.ok(fn.includes("counterpartName: users.name"), `${name}: 이름을 안 붙인다 — 화면에 포털 번호가 뜬다`);
+      assert.ok(fn.includes(".leftJoin(users,"), `${name}: inner join 이면 이름 못 찾는 줄이 통째로 사라진다`);
+    }
+
+    // 🔴 「지금 대신하고 있나」는 결재 판정이 쓰는 그 함수로 거른다 — SQL 에 손으로 적으면
+    //    반열린 구간 규칙이 한 벌 더 생긴다.
+    assert.ok(
+      queries.includes("return rows.filter((row) => isActiveDelegation(row, now)).map((row) => toPortalRowView(row, now));"),
+      "대신하고 있는 줄을 순수 함수로 안 거른다 — 아직 시작도 안 한 위임이 「지금 대신하는 중」으로 보인다",
+    );
+  });
+
+  it("🔴 **세는 자리가 하나다** — 걷어낸 수 세는 함수가 되살아나지 않았다", () => {
+    // 🔵 수는 그린 줄을 센다(`portal.acting.length`). 따로 세면 언젠가 갈린다.
+    assert.ok(!queries.includes("countPortalDelegationsIActFor"), "수를 따로 세는 함수가 돌아왔다 — 줄 수와 갈린다");
+    assert.ok(!screen.includes("countPortalDelegationsIActFor"), "화면이 수를 또 센다");
+    assert.ok(!queries.includes("count()"), "SQL 집계로 센다 — 끝난 줄·안 시작한 줄까지 세게 된다");
   });
 
   it("🔴 「못 물었다」 칸이 **없다** — 뜰 일 없는 경고를 그리지 않는다", () => {
     assert.ok(!screen.includes("unavailable"), "화면 자료에 「못 물었다」가 남아 있다 — 이제 못 물을 일이 없다");
-    assert.ok(screen.includes("portalActing: { count: portalActingCount }"), "화면이 받는 모양이 달라졌다");
+    assert.ok(
+      screen.includes("portal: { made: portalMade, acting: portalActing, href: approvalsDelegationHref(env.approvalsBaseUrl) }"),
+      "화면이 받는 모양이 달라졌다",
+    );
   });
 
   it("🔴 **번호는 서버에서 끝난다** — 화면이 받는 모양에 번호 칸이 없다", () => {

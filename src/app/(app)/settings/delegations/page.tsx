@@ -67,6 +67,9 @@ export default async function DelegationsSettingsPage({
         directory={delegation.directory}
         made={delegation.made}
         acting={delegation.acting}
+        /* 🔴 통합 승인함에서 맡긴 줄(2026-11-17, 설계 D-2) — **읽기만.** 거두는 곳은 승인함뿐이고,
+           그리로 가는 주소는 서버가 환경변수에서 읽어 함께 싣는다(없으면 `href` 가 `null` 이다). */
+        portal={delegation.portal}
         all={delegation.all}
         canDelegateForOthers={delegation.canDelegateForOthers}
         /* 🔵 「누구의 결재권」 고르개를 안 그릴 때 그 자리에 적는 이름. 서버가 보낸 세션의 이름 그대로다. */

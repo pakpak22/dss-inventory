@@ -5,8 +5,10 @@ import { approvalDelegations } from "@/db/schema/approval-delegations";
 // 🔴 **둘째 고지**다(2026-11-16, 설계 B-12). 승인함에서 맡긴 위임을 포털이 써 주는 표이고,
 //    여기서는 **읽기만** 한다 — 쓰는 자리는 `./portal-delegation-store.ts` 하나다.
 import { portalApprovalDelegations } from "@/db/schema/portal-approval-delegations";
-import type { Role } from "@/db/schema/users";
-import { actingApproverSubs, delegateSubsFor, delegatorSubsFor, isActiveDelegation, type ActingApproverSubs } from "./delegation";
+// 🔵 **이름을 붙이려고** 끌어온다(2026-11-17, 조각 3c). 포털 표에는 이름 칸이 없고
+//    이 집은 `users.auth_sub` 가 곧 포털 번호라 바로 맞댈 수 있다.
+import { users, type Role } from "@/db/schema/users";
+import { actingApproverSubs, delegateSubsFor, isActiveDelegation, type ActingApproverSubs } from "./delegation";
 import { mayManageOthersDelegations } from "./delegation-authority";
 import { seoulDateText, seoulEndDateText } from "./delegation-input";
 import {
@@ -15,6 +17,7 @@ import {
   type AllDelegationRowView,
   type AllDelegationsView,
   type DelegationRowView,
+  type PortalDelegationRowView,
 } from "./delegation-screen";
 
 /**
@@ -114,39 +117,6 @@ export async function actingApproverSubsFor(actorSub: string, conn: Conn = db(),
   // 🔴 **합치는 자리도 그 함수 하나다**(2026-11-16). 두 묶음을 여기서 이어 붙이면 합치는 규칙이
   //    두 벌이 되고, 두 겹(A→B·B→C)을 막는 자리도 함께 둘이 된다.
   return actingApproverSubs(rows, actorSub, now, portalRows);
-}
-
-/**
- * **승인함에 맡겨 둔 위임으로 지금 내가 대신할 수 있는 결재권자 수** (2026-11-16, 설계 D-2).
- *
- * 🔴 **판정에 쓰이지 않는다.** 「누를 수 있나」는 지금도 앞으로도 위 `actingApproverSubsFor`
- * 하나이고, 이 수는 위임 설정 화면이 **「저쪽에도 N건이 있습니다」**를 말해 주는 길잡이다 —
- * 그 화면이 제 표(`approval_delegations`)만 보여 주면 **「분명 맡겼는데 여기엔 없다」**가 된다.
- *
- * 🔵 거르는 자는 위와 **같은 순수 함수**다(`delegatorSubsFor` → `isActiveDelegation`). 수를
- *    SQL 의 `count()` 로 세지 않는 까닭이 그것이다 — 그러면 반열린 구간 규칙이 한 벌 더 생긴다.
- * 🔵 이름은 돌려주지 않는다 — 이 표에는 **이름 칸이 없다**(세 시스템 공통 모양, 표 쪽 머리말).
- *    자세한 것은 통합 승인함에서 본다.
- */
-export async function countPortalDelegationsIActFor(delegateSub: string, now: Date = new Date()): Promise<number> {
-  const rows = await db()
-    .select({
-      delegatorSub: portalApprovalDelegations.delegatorSub,
-      delegateSub: portalApprovalDelegations.delegateSub,
-      startsAt: portalApprovalDelegations.startsAt,
-      endsAt: portalApprovalDelegations.endsAt,
-      revokedAt: portalApprovalDelegations.revokedAt,
-    })
-    .from(portalApprovalDelegations)
-    .where(
-      and(
-        eq(portalApprovalDelegations.delegateSub, delegateSub),
-        isNull(portalApprovalDelegations.revokedAt),
-        gt(portalApprovalDelegations.endsAt, now),
-      ),
-    );
-
-  return delegatorSubsFor(rows, delegateSub, now).length;
 }
 
 /**
@@ -337,6 +307,131 @@ export async function listDelegationsIActFor(delegateSub: string, now: Date = ne
    */
   // 🔵 맡긴 사람이 아니므로 `canRevoke` 는 거짓이다 — 되돌리기는 맡긴 사람만 할 수 있다(toRowView 주석).
   return rows.filter((row) => isActiveDelegation(row, now)).map((row) => toRowView(row, now, false));
+}
+
+/* ------------------------------------------------------------------ */
+/* 통합 승인함에서 맡긴 위임 — 읽기만 (2026-11-17, 조각 3c)               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * ── 🔴 왜 이 두 조회가 생겼나 ───────────────────────────────────────────
+ * 전파는 2026-11-16 부터 제대로 돌고 있었다 — 승인함에서 맡긴 줄이 이 집 표에 **살아서**
+ * 들어오고, 판정(`actingApproverSubsFor`)도 그 줄을 본다. 그런데 **위임 화면이 제 표만
+ * 그리고 있었다**: 맡긴 사람이 재고관리를 열면 「맡긴 위임이 없습니다」가 떴다. 설계 D-2 가
+ * 「각 화면에서 **어디에 지정된 위임인가**를 구별해 보여 줄 것」이라고 못 박은 바로 그 자리다.
+ *
+ * ── 🔴 **수를 세는 함수를 이 둘로 바꿨다**(2026-11-17) ──────────────────
+ * 그 전에는 `countPortalDelegationsIActFor` 가 「저쪽에도 N건」만 세어 올렸다. 줄을 그리게
+ * 되면서 **같은 집합을 두 번 세게 되는데**, 두 벌이 되면 한쪽만 고치는 날 「N건이라면서 줄은
+ * 그보다 적게 보이는」 화면이 된다 — 오류는 한 번도 안 난다. 수는 이제 **그린 줄을 세어**
+ * 쓴다(`acting.length`). 🔵 그래서 **셈이 한 칸 달라질 수 있다**: 옛 함수는 사람 수(같은
+ * 결재권자가 두 줄이면 1)였고 지금은 줄 수다. 같은 화면의 다른 묶음들이 전부 **건수**라
+ * 그쪽에 맞췄다.
+ *
+ * ── 🔴 이름은 **이 집 `users` 에서 붙인다** ─────────────────────────────
+ * 포털 표에는 이름 칸이 없다(세 시스템 공통 모양 — 표 쪽 머리말). 이 집은 `users.auth_sub` 가
+ * 곧 포털 번호라 `LEFT JOIN` 한 번이면 된다. 🔵 유일 색인(`users_auth_sub_uq`)이 있어 줄이
+ * 불어나지 않는다.
+ * 🔴 **`is_deleted` 를 보지 않는 것은 일부러다.** 판정에 쓰는 `findActiveUserByAuthSub` 와
+ *    **다르다** — 저쪽은 「이 사람이 지금 자격이 있나」이고 여기는 **표시**다. 지워진 계정의
+ *    이름이라도 보이는 쪽이, 「이름을 알 수 없는 분」보다 지난 위임을 설명한다.
+ * 🔴 **못 찾아도 줄을 빼지 않는다** — 빼면 이 조각이 고치려던 「맡겼는데 여기엔 없다」가 그대로
+ *    돌아온다. 그릴 글자는 `portalDelegationCounterpartLabel` 이 정한다.
+ *
+ * ── 🔴 색인이 한쪽에만 있다 ─────────────────────────────────────────────
+ * 표의 색인은 받는 쪽(`delegate_sub`)으로 깔려 있어 **「내가 맡긴 것」에는 없다** — 제 표 위임의
+ * `listDelegationsIMade` 와 똑같은 사정이고 같은 판단을 한다(설정 탭을 열 때 한 번, 한 사람이
+ * 맡기는 줄은 몇 줄). 늘어나면 `(delegator_sub, …)` 색인을 더해야 하고 그것은 스키마 변경이다.
+ */
+const PORTAL_ROW_COLUMNS = {
+  id: portalApprovalDelegations.id,
+  /** 🔵 판정 함수(`delegationState` → `isActiveDelegation`)가 **위임 한 줄 전체**를 받는다(위 `toRowView` 와 같은 까닭). */
+  delegatorSub: portalApprovalDelegations.delegatorSub,
+  delegateSub: portalApprovalDelegations.delegateSub,
+  startsAt: portalApprovalDelegations.startsAt,
+  endsAt: portalApprovalDelegations.endsAt,
+  revokedAt: portalApprovalDelegations.revokedAt,
+  reason: portalApprovalDelegations.reason,
+} as const;
+
+/**
+ * 표 한 줄 → 승인함 줄 한 줄. 🔴 **번호 두 칸이 여기서 끝난다**(위 `toRowView` 와 같은 규약).
+ *
+ * 🔴 **`canRevoke` 를 싣지 않는다 — 실을 칸이 없다.** 돌려주는 타입에 그 칸이 아예 없어서
+ * (`./delegation-screen.ts` 의 `PortalDelegationRowView`), 「거짓을 실어야 한다」를 약속으로
+ * 지키지 않는다. 이 줄을 거두는 곳은 승인함뿐이고 이 집에는 되돌리는 통로 자체가 없다.
+ */
+function toPortalRowView(
+  row: {
+    id: string;
+    delegatorSub: string;
+    delegateSub: string;
+    counterpartName: string | null;
+    startsAt: Date;
+    endsAt: Date;
+    revokedAt: Date | null;
+    reason: string;
+  },
+  now: Date,
+): PortalDelegationRowView {
+  return {
+    id: row.id,
+    counterpartName: row.counterpartName,
+    startDate: seoulDateText(row.startsAt),
+    // 🔴 사람이 보는 마지막 날로 되돌려 적는다 — `ends_at` 을 그대로 그리면 **하루 뒤**가 보인다.
+    endDate: seoulEndDateText(row.endsAt),
+    reason: row.reason,
+    // 🔴 상태도 **제 표 위임과 같은 자**로 잰다(`delegationState` → `isActiveDelegation`).
+    //    여기 조건을 손으로 적으면 반열린 구간 규칙이 한 벌 더 생긴다.
+    state: delegationState(row, now),
+  };
+}
+
+/**
+ * **승인함에서 내가 맡긴 것** — 되돌린 줄과 끝난 줄까지 **전부**.
+ *
+ * 🔵 제 표 쪽 `listDelegationsIMade` 와 **같은 규칙·같은 차례**다(지난 줄을 감추지 않는 까닭도
+ *    그쪽 머리말 그대로다: 「분명 맡겼는데 흔적이 없다」가 되지 않게).
+ */
+export async function listPortalDelegationsIMade(delegatorSub: string, now: Date = new Date()): Promise<PortalDelegationRowView[]> {
+  const rows = await db()
+    .select({ ...PORTAL_ROW_COLUMNS, counterpartName: users.name })
+    .from(portalApprovalDelegations)
+    // 맡긴 목록에서 보이는 상대방은 **대신할 사람**이다.
+    .leftJoin(users, eq(users.authSub, portalApprovalDelegations.delegateSub))
+    .where(eq(portalApprovalDelegations.delegatorSub, delegatorSub))
+    .orderBy(desc(portalApprovalDelegations.startsAt))
+    .limit(DELEGATION_LIST_LIMIT);
+
+  return rows.map((row) => toPortalRowView(row, now));
+}
+
+/**
+ * **승인함에서 맡아 지금 내가 대신하고 있는 것**.
+ *
+ * 🔵 조건절도 뒤의 거르기도 제 표 쪽 `listDelegationsIActFor` 와 **글자까지 같은 모양**이다 —
+ *    색인 차례(`portal_approval_delegations_delegate_idx`)도 같다.
+ * 🔴 **아직 시작하지 않은 줄은 여기서 뺀다**(그쪽과 같은 까닭): WHERE 가 색인에 맞춰
+ *    `starts_at` 을 안 보므로 미리 적어 둔 위임이 섞여 들어오고, 「지금 대신하고 있는 것」이라
+ *    적어 놓고 그 줄을 보이면 대리인은 **지금 누를 수 있다고 믿는다.**
+ */
+export async function listPortalDelegationsIActFor(delegateSub: string, now: Date = new Date()): Promise<PortalDelegationRowView[]> {
+  const rows = await db()
+    .select({ ...PORTAL_ROW_COLUMNS, counterpartName: users.name })
+    .from(portalApprovalDelegations)
+    // 대신하는 목록에서 보이는 상대방은 **결재권자**다.
+    .leftJoin(users, eq(users.authSub, portalApprovalDelegations.delegatorSub))
+    .where(
+      and(
+        eq(portalApprovalDelegations.delegateSub, delegateSub),
+        isNull(portalApprovalDelegations.revokedAt),
+        gt(portalApprovalDelegations.endsAt, now),
+      ),
+    )
+    .orderBy(desc(portalApprovalDelegations.startsAt))
+    .limit(DELEGATION_LIST_LIMIT);
+
+  return rows.filter((row) => isActiveDelegation(row, now)).map((row) => toPortalRowView(row, now));
 }
 
 /* ------------------------------------------------------------------ */

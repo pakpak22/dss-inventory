@@ -7,15 +7,24 @@ import {
   delegationFinishedTruncatedNotice,
   delegationStateBadge,
   formatDelegationPeriod,
+  portalDelegationCounterpartLabel,
   DELEGATION_DIRECTORY_UNREACHABLE_SUFFIX,
   DELEGATION_NOTHING_ACTING,
   DELEGATION_NOTHING_FINISHED_ALL,
   DELEGATION_NOTHING_I_MADE,
   DELEGATION_NOTHING_LIVE_ALL,
+  DELEGATION_SOURCE_PORTAL,
+  PORTAL_DELEGATION_HEADING,
+  PORTAL_DELEGATION_LINK_LABEL,
+  PORTAL_DELEGATION_NOTHING_ACTING,
+  PORTAL_DELEGATION_NOTHING_MADE,
+  PORTAL_DELEGATION_REVOKE_HINT,
   type AllDelegationRowView,
   type AllDelegationsView,
   type DelegationNotice,
   type DelegationRowView,
+  type PortalDelegationRowView,
+  type PortalDelegationsView,
 } from "@/lib/approval/delegation-screen";
 import { DELEGATION_REASON_MAX } from "@/lib/approval/delegation-input";
 import { asUserChoiceLabel, AS_DIRECTORY_MESSAGES, type AsUserChoiceDirectory } from "@/lib/approval/directory";
@@ -32,13 +41,22 @@ import { asUserChoiceLabel, AS_DIRECTORY_MESSAGES, type AsUserChoiceDirectory } 
  * **한 줄 링크**를 남겼다. 🔴 그 탭의 문은 `requireSession` 이다 — 설정의 다른 탭처럼
  * `requireRole("ADMIN")` 으로 막으면 결재선에 든 보기 권한자가 자기 위임을 영영 못 만든다.
  *
- * ── 🔴 묶음 넷 ─────────────────────────────────────────────────────────
+ * ── 🔴 묶음 다섯 ───────────────────────────────────────────────────────
  *  (가) **새 위임 만들기** — **누구의 결재권**(관리자만) · 누구에게 · 기간 · 사유(선택)
  *  (나) **내가 맡긴 것** — 살아 있음/시작 전/끝남/되돌림이 **갈려 보이고**, 되돌릴 수 있는 것에 단추
  *  (다) **내가 대신하고 있는 것**(읽기 전용) — 🔴 **이것이 없으면 대리인은 「왜 이 건이 내 결재
  *       목록에 떴는지」를 알 수 없다.** 결재건 카드에는 결재선의 **원래 사람** 이름이 적혀 있어
  *       자기 이름이 없는 건이 자기 목록에 뜬다. 까닭이 적힌 곳이 이 묶음뿐이다.
- *  (라) **모두의 결재권 위임**(2026-10-26, 관리 권한이 있을 때만)
+ *  (라) **통합 승인함에서 맡긴 것**(2026-11-17) — 🔴 **읽기만.** 아래 그 묶음 머리말.
+ *  (마) **모두의 결재권 위임**(2026-10-26, 관리 권한이 있을 때만)
+ *
+ * ── 🔴 2026-11-17: 고지가 둘인데 **한쪽만 그리고 있었다**(설계 D-2) ─────
+ * 승인함에서 맡긴 위임은 포털이 이 집 표(`portal_approval_delegations`)에 **써 주고** 결재
+ * 판정도 그 줄을 본다(조각 8). 그런데 이 화면은 제 표만 그려서, 맡긴 분이 재고관리를 열면
+ * 「맡겨 둔 결재권이 없습니다」가 떴다 — 쓰는 분의 말로 「위임되었다는 내용이 안 뜬다」.
+ * 🔴 **그래서 묶음을 섞지 않고 따로 세웠다.** 섞으면 [되돌리기]를 그릴지가 **줄마다** 갈리고,
+ *    그 판정을 한 번 잘못 읽는 날 **거둘 수 없는 줄에 단추가 뜬다**(표 머리말 ⓑ). 따로 두면
+ *    그 묶음을 그리는 부품에 단추를 그릴 길 자체가 없다(아래 `PortalDelegationRow`).
  *
  * ── 🔴 2026-10-26: 관리자가 **남의 결재권도** 맡긴다 ────────────────────
  * 자리를 갑자기 비우게 된 사람(병가·사고)은 본인이 설정할 수 없어서 넓혔다(사용자 결정).
@@ -133,10 +151,50 @@ function AllDelegationRow({ row, action }: { row: AllDelegationRowView; action: 
   );
 }
 
+/**
+ * 승인함에서 온 위임 한 줄 — 🔴 **단추가 없다. 넘겨받을 자리조차 없다.**
+ *
+ * 위 `DelegationRow` 는 `action` 을 받아 그리는데, 이 부품에는 그 칸이 없다. 돌려받는 줄의
+ * 타입(`PortalDelegationRowView`)에도 `canRevoke` 가 없다 — 그래서 「여기서는 거두지 않는다」가
+ * **약속이 아니라 모양**으로 지켜진다. 이 줄을 거두는 곳은 통합 승인함뿐이고
+ * (`portal_approval_delegations` 표 머리말 ⓑ), 이 집에는 되돌리는 통로 자체가 없어서
+ * 단추를 그리면 **눌러도 거절조차 안 되는 단추**가 된다.
+ *
+ * 🔴 **줄마다 출처 딱지를 붙인다**(설계 D-2). 묶음 제목이 있어도 붙이는 까닭: 줄을 하나씩 읽는
+ * 사람에게는 제목이 멀고, 되돌리려고 찾을 때 **어느 줄이 어디 것인지**가 그 자리에서 보여야 한다.
+ * 🔵 딱지는 **테두리만** 둘렀다 — 옆의 상태 배지는 색이 꽉 찬 모양이라(주황=기다림·파랑=지금·
+ *    회색=끝남), 출처에 또 색을 채우면 그 색 규칙을 읽는 눈과 부딪힌다.
+ */
+function PortalDelegationRow({ row, lead }: { row: PortalDelegationRowView; lead: string }) {
+  const badge = delegationStateBadge(row.state);
+  return (
+    <li className="flex flex-col gap-1 rounded-lg border border-zinc-200 bg-white p-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="flex flex-col gap-0.5">
+          <span className="text-sm text-zinc-900">
+            {/* 🔴 이름을 못 찾아도 **줄을 그린다** — 감추면 「맡겼는데 여기엔 없다」가 그대로 돌아온다. */}
+            <b>{portalDelegationCounterpartLabel(row.counterpartName)}</b> 님{lead}
+          </span>
+          <span className="tabular text-[11px] text-zinc-500">{formatDelegationPeriod(row.startDate, row.endDate)}</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={`${BADGE} border border-zinc-300 bg-white text-zinc-600`}>{DELEGATION_SOURCE_PORTAL}</span>
+          {/* 🔴 색과 글자를 **함께** 그린다 — 색만으로 상태를 구분하지 않는다(CLAUDE.md 9-7절). */}
+          <span className={`${BADGE} ${badge.className}`}>{badge.label}</span>
+        </div>
+      </div>
+      {/* 🔵 사유는 비어 있을 수 있다. 비면 **이 줄을 아예 그리지 않는다**(위 두 부품과 같은 규칙). */}
+      {row.reason ? <p className="rounded-md bg-zinc-50 px-2 py-1 text-xs break-keep text-zinc-700">사유: {row.reason}</p> : null}
+      {/* 🔵 「누가 되돌렸나」 줄이 **없다** — 포털이 보내는 몸통에 그 칸이 없다(통로 규약). */}
+    </li>
+  );
+}
+
 export function DelegationSection({
   directory,
   made,
   acting,
+  portal,
   all,
   canDelegateForOthers,
   meName,
@@ -147,6 +205,12 @@ export function DelegationSection({
   directory: AsUserChoiceDirectory;
   made: DelegationRowView[];
   acting: DelegationRowView[];
+  /**
+   * 🔴 **통합 승인함에서 맡긴 줄**(2026-11-17, 설계 D-2). 🔴 **`null` 이 아니다** — 0건이어도
+   * 묶음을 그린다. 「승인함에서 맡긴 것 0건」이 보여야 **전파가 안 닿았다**는 것을 알 수 있고,
+   * 묶음을 통째로 감추면 쓰는 분이 본 그 화면(「위임되었다는 내용이 안 뜬다」)으로 돌아간다.
+   */
+  portal: PortalDelegationsView;
   /**
    * 🔴 **모두의 줄. `null` 이면 묶음을 아예 그리지 않는다** — 감추는 것이 아니라 없는 것이다.
    * 🔴 **화면이 판정해서 `null` 이 되는 것이 아니다**(머리말) — 조회가 거절한 것을 서버
@@ -341,7 +405,49 @@ export function DelegationSection({
         )}
       </div>
 
-      {/* (라) 모두의 결재권 위임 — 🔴 자료가 없으면 이 묶음은 **없다**(머리말). */}
+      {/* (라) 통합 승인함에서 맡긴 것 — 🔴 **읽기만.** 거두는 곳은 승인함뿐이다(머리말). */}
+      <div className="flex flex-col gap-2 border-t border-zinc-200 pt-4">
+        <h3 className="text-xs font-medium text-zinc-700">{PORTAL_DELEGATION_HEADING}</h3>
+        <p className="text-[11px] text-zinc-500">
+          {/* 🔴 **「못 거둔다」와 「어디로 가면 되나」를 한 줄에.** 「못 합니다」만 적으면 막다른 길이다. */}
+          {PORTAL_DELEGATION_REVOKE_HINT}{" "}
+          {/* 🔴 **주소를 모르면 링크만 빠진다** — 위 안내 글자는 이 조건 **밖**에 있어 그대로 보인다.
+              승인함 주소는 환경변수(`APPROVALS_BASE_URL`)에서 오고, 안 넣은 곳에서도 화면은 멀쩡해야 한다. */}
+          {portal.href ? (
+            <a href={portal.href} className="underline">
+              {PORTAL_DELEGATION_LINK_LABEL}
+            </a>
+          ) : null}
+        </p>
+
+        <h4 className="text-[11px] font-medium text-zinc-600">
+          내가 맡긴 것 <span className="tabular text-zinc-500">{portal.made.length}건</span>
+        </h4>
+        {portal.made.length === 0 ? (
+          <p className={EMPTY_BOX}>{PORTAL_DELEGATION_NOTHING_MADE}</p>
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {portal.made.map((row) => (
+              <PortalDelegationRow key={row.id} row={row} lead="에게 맡김" />
+            ))}
+          </ul>
+        )}
+
+        <h4 className="text-[11px] font-medium text-zinc-600">
+          내가 대신하고 있는 것 <span className="tabular text-zinc-500">{portal.acting.length}건</span>
+        </h4>
+        {portal.acting.length === 0 ? (
+          <p className={EMPTY_BOX}>{PORTAL_DELEGATION_NOTHING_ACTING}</p>
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {portal.acting.map((row) => (
+              <PortalDelegationRow key={row.id} row={row} lead="의 결재권을 대신하는 중" />
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* (마) 모두의 결재권 위임 — 🔴 자료가 없으면 이 묶음은 **없다**(머리말). */}
       {all && (
         <div className="flex flex-col gap-2 border-t border-zinc-200 pt-4">
           <h3 className="text-xs font-medium text-zinc-700">

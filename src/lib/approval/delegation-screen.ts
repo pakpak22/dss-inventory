@@ -203,6 +203,119 @@ export function delegationFinishedTruncatedNotice(limit: number): string {
 }
 
 /* ------------------------------------------------------------------ */
+/* 통합 승인함에서 맡긴 위임 — 읽기만 (2026-11-17, 조각 3c)               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 승인함에서 맡긴 위임 한 줄.
+ *
+ * ── 🔴 **`canRevoke` 칸이 없다. 일부러 없다.** ─────────────────────────
+ * 이 줄은 포털이 써 준 것이고 거두는 곳은 **승인함뿐**이다(`portal_approval_delegations` 표
+ * 머리말 ⓑ). 위 `DelegationRowView` 를 돌려쓰면 그 칸이 따라오고, 그러면 「언제나 거짓을
+ * 실어야 한다」는 **약속으로만** 지켜진다 — 다음 사람이 참을 실어 보내는 날 **눌러도 거절조차
+ * 안 되는 단추**가 뜬다(이 집에는 되돌리는 통로 자체가 없다). 칸이 없으면 실어 보낼 수 없고,
+ * 실으려 하면 `tsc` 가 멈춘다.
+ *
+ * 🔴 **`revokedByName` 도 없다.** 포털이 보내는 몸통에 「누가 거뒀나」가 없고 표에도 칸이 없다
+ * (통로 규약). 칸을 두면 영원히 `null` 이라, 다음 사람은 「왜 아무도 안 적히나」를 찾게 된다.
+ */
+export type PortalDelegationRowView = {
+  id: string;
+  /**
+   * 상대방 이름 — 🔴 **`null` 일 수 있다.** 이 표에는 이름 칸이 없어서(세 시스템 공통 모양)
+   * 포털 번호를 이 집 `users` 에서 되짚어 붙인다. 그 사람이 지워졌거나 번호가 안 맞으면 못 찾는다.
+   * 🔴 **못 찾았다고 줄을 감추지 않는다** — 그러면 이 조각이 고치려던 「맡겼는데 여기엔 없다」가
+   * 그대로 돌아온다. 그릴 글자는 `portalDelegationCounterpartLabel` 이 정한다.
+   */
+  counterpartName: string | null;
+  startDate: string;
+  /**
+   * 🔴 사람이 보는 **마지막 날**이다 — 표의 `ends_at`(구간 밖 첫 순간)이 아니다.
+   * 🔵 제 표 위임과 달리 이 끝은 한국 시각 0시가 아닐 수 있다(날짜를 환산해 보내는 것이
+   *    포털이다 — `./portal-delegation-store.ts` 의 같은 주의). 그래서 「그 구간에 걸린
+   *    마지막 날」로 읽어야 맞다.
+   */
+  endDate: string;
+  reason: string;
+  state: DelegationState;
+};
+
+/** 화면이 한 번에 받는 승인함 쪽 한 벌. 🔴 두 묶음과 **갈 곳**이 함께 온다. */
+export type PortalDelegationsView = {
+  /** 내가 맡긴 것 — 끝난 것·거둔 것까지 **전부**(제 표 쪽 「내가 맡긴 것」과 같은 규칙). */
+  made: PortalDelegationRowView[];
+  /** 내가 지금 대신하고 있는 것 — 살아 있는 줄만(제 표 쪽 「대신하고 있는 것」과 같은 규칙). */
+  acting: PortalDelegationRowView[];
+  /**
+   * 통합 승인함의 위임 화면 주소. 🔴 **`null` 이면 링크 없이 글자만 그린다** — 주소를 아직
+   * 안 넣은 곳에서도 화면은 멀쩡해야 한다(`approvalsDelegationHref`).
+   */
+  href: string | null;
+};
+
+/** 🔴 이름을 못 찾았을 때. 「(없음)」이나 빈칸이 아니라 **사람이 읽는 말**이어야 한다. */
+export const PORTAL_DELEGATION_UNKNOWN_NAME = "이름을 알 수 없는 분";
+
+/**
+ * 상대방 이름을 **그릴 글자로**.
+ *
+ * 🔴 **못 찾는 일이 드물다고 지어내지 않는다.** 받는 통로가 두 사람 다 이 시스템에 계정이
+ * 있을 때만 저장하므로(`not_applicable`) 보통은 찾아진다 — 남는 길은 **저장한 뒤에 그 계정이
+ * 지워진 경우**다. 그때 번호를 그대로 그리면 사람에게 아무 뜻이 없고, 줄을 감추면 「맡겼는데
+ * 없다」가 된다. 그래서 **줄은 그리고 이름 자리에만** 이 말을 쓴다.
+ * 🔵 빈 글자도 못 찾은 것으로 친다 — 이름 칸이 비어 있는 계정은 `<b></b>` 만 남겨 더 헷갈린다.
+ */
+export function portalDelegationCounterpartLabel(name: string | null): string {
+  return name === null || name.trim() === "" ? PORTAL_DELEGATION_UNKNOWN_NAME : name.trim();
+}
+
+/**
+ * 🔴 **줄마다 붙는 출처 딱지**(설계 D-2). 묶음 제목만으로 가르지 않는 까닭: 줄을 하나씩 읽는
+ * 사람에게는 제목이 멀고, 되돌리려고 찾을 때 **어느 줄이 어디 것인지**가 그 자리에서 보여야 한다.
+ */
+export const DELEGATION_SOURCE_PORTAL = "통합 승인함";
+
+/** 묶음 제목. 🔵 위 두 묶음(「내가 맡긴 것」·「내가 대신하고 있는 것」)과 **글자가 겹치지 않는다.** */
+export const PORTAL_DELEGATION_HEADING = "통합 승인함에서 맡긴 결재권 위임";
+
+/**
+ * 🔴 **여기서는 못 거둔다는 말과, 어디로 가야 하는지를 한 줄에 함께** 적는다. 「못 합니다」만
+ * 적으면 사람은 막다른 길에서 멈춘다 — 이 줄이 가리키는 곳이 유일한 길이다.
+ */
+export const PORTAL_DELEGATION_REVOKE_HINT = "이 줄은 여기서 거둘 수 없습니다. 통합 승인함에서 거둘 수 있습니다.";
+
+/** 🔵 링크 글자. 주소가 없으면 이 글자도 안 그린다(누를 것이 없다). */
+export const PORTAL_DELEGATION_LINK_LABEL = "통합 승인함 열기";
+
+/** 🔴 0건을 감추지 않는다(위 두 묶음과 같은 규칙) — 0건이 보여야 「전파가 안 됐구나」를 안다. */
+export const PORTAL_DELEGATION_NOTHING_MADE = "통합 승인함에서 맡긴 결재권이 없습니다.";
+export const PORTAL_DELEGATION_NOTHING_ACTING = "통합 승인함에서 맡은 결재권이 없습니다.";
+
+/**
+ * 승인함에서 위임을 다루는 화면의 경로. 🔵 **주소가 아니라 그 앱의 길 이름**이다 —
+ * 앞머리(호스트·포트)는 환경변수에서 오고(`env.approvalsBaseUrl`), 여기 있는 것은
+ * `dss-approvals` 의 `src/app/(app)/delegations/page.tsx` 가 서는 자리다.
+ * 🔴 그 앱이 길 이름을 바꾸면 여기도 함께 고쳐야 한다 — 틀려도 오류가 아니라 **404** 라서
+ * 눌러 보기 전에는 아무도 모른다.
+ */
+export const APPROVALS_DELEGATION_PATH = "/delegations";
+
+/**
+ * 「통합 승인함 열기」가 갈 곳. 🔴 **주소를 모르면 `null`** 이고, 그때 화면은 링크 없이
+ * 안내 글자만 그린다.
+ *
+ * 🔵 끝 슬래시를 벗기는 까닭은 `src/lib/env.ts` 의 `stripTrailingSlash` 와 같다 — 사람이
+ *    `.env` 에 슬래시를 붙여도 `//delegations` 가 되지 않게.
+ * 🔵 공백만 든 값도 **없는 것으로** 친다. `env` 쪽이 이미 걸러 주지만, 이 함수는 그 사정을
+ *    모르는 자리에서도 불릴 수 있고 「빈 주소로 가는 링크」는 눌렀을 때가 더 나쁘다.
+ */
+export function approvalsDelegationHref(baseUrl: string | null): string | null {
+  if (baseUrl === null) return null;
+  const trimmed = baseUrl.trim().replace(/\/+$/, "");
+  return trimmed === "" ? null : `${trimmed}${APPROVALS_DELEGATION_PATH}`;
+}
+
+/* ------------------------------------------------------------------ */
 /* 0건일 때 하는 말                                                      */
 /* ------------------------------------------------------------------ */
 
