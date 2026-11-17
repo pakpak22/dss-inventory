@@ -36,6 +36,11 @@ import { notifyPortalApprovalCreated } from "./portal";
  * 할 사람은 주기 작업을 기다린다. 뒤집어 보는 함수는 저장소에 하나뿐이고
  * (`approval/delegation.ts` 의 `delegateSubsFor`), 거르는 규칙은 결재 판정이 쓰는 그
  * `isActiveDelegation` 그대로다.
+ *
+ * 🟢 **고지 둘을 다 본다**(2026-11-17, 설계 D-8 ①). 이 집에서 맡긴 위임과 **통합 승인함에서
+ * 맡긴 위임**(`portal_approval_delegations`)을 아래 조회가 함께 읽는다 — 2026-11-17 전에는 제
+ * 표만 읽어서 **승인함 쪽 대리인에게만 이 즉시 메일이 안 갔다.** 합치는 자리는 순수 함수
+ * `activeDelegateSubs` 하나이고, 판정 쪽(`actingApproverSubs`)과 **같은 넓이**다.
  * ============================================================================
  */
 

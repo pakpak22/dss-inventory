@@ -148,6 +148,10 @@ export function delegatorSubsFor(
  * 🔵 **알림에만 쓴다.** 이 목록은 「누를 수 있나」를 가르는 데 쓰이지 않는다 — 그 판정은 지금도
  * 앞으로도 `actingApproverSubs` 한 자리다.
  *
+ * 🔵 **한 묶음만 본다.** 고지가 둘이 된 뒤(2026-11-16, 설계 B-12) 두 묶음을 합치는 일은 바로
+ * 아래 `activeDelegateSubs` 가 한다 — 정방향에서 `delegatorSubsFor` 와 `actingApproverSubs` 가
+ * 나뉘어 있는 것과 **같은 자리**다.
+ *
  * @param delegations 볼 위임 줄들. 상관없는 줄이 섞여 있어도 된다(위 함수와 같은 약속).
  * @param delegatorSub 자리의 주인 — **결재선 단계에 적힌 결재자의 포털 번호**.
  * @param now 지금 시각.
@@ -167,6 +171,52 @@ export function delegateSubsFor(
     out.push(delegation.delegateSub);
   }
   return out;
+}
+
+/**
+ * 바로 위 `delegateSubsFor` 를 **두 고지에 걸쳐** 본 것 — 이 결재권자를 지금 대신할 수 있는
+ * 사람 전부 (2026-11-17, 설계 D-8 ①).
+ *
+ * ── 🔴 아래 `actingApproverSubs` 의 **거꾸로 방향**이다 ──────────────────
+ * 정방향이 두 고지를 합치는 자리가 거기 하나이듯, 거꾸로 방향이 합치는 자리도 **여기 하나**다.
+ * 🔴 두 방향이 보는 넓이가 갈리면 「결재함에는 뜨는데 메일은 안 오는」(또는 그 반대의) 사람이
+ * 생기고, 그 어긋남은 **신고로만 드러난다** — 안 온 메일이 있었다는 것은 아무도 알 수 없다.
+ *
+ * 🔴 **규칙을 한 줄도 새로 적지 않는다.** 기간·되돌림 판정은 위 `delegateSubsFor` 가(그 안의
+ * `isActiveDelegation` 이) **두 묶음에 똑같이** 건다. 이 함수가 제 손으로 하는 일은 **합치고
+ * 겹침을 걷는 것**뿐이다 — 조건을 여기 한 줄이라도 적는 순간 반열린 구간 규칙이 한 벌 더 생긴다.
+ *
+ * 🔴 **여기서도 이어 붙이지 않는다.** 두 묶음을 각각 **한 겹으로만** 쓴다(정방향과 같은
+ * 까닭 — 위 `delegatorSubsFor` 의 둘). 알림이 판정보다 넓으면 「알림은 왔는데 눌러 보니 내
+ * 차례가 아니다」가 되고, 좁으면 자리를 비운 사람에게만 메일이 간다.
+ *
+ * 🔵 **알림에만 쓴다**(위 `delegateSubsFor` 와 같은 약속). 「누를 수 있나」를 가르는 자리는
+ * 지금도 앞으로도 아래 `actingApproverSubs` 하나다.
+ *
+ * @param delegations 이 시스템의 `approval_delegations` 를 읽은 줄들(여기서 맡긴 위임).
+ * @param delegatorSub 자리의 주인 — **결재선 단계에 적힌 결재자의 포털 번호**.
+ * @param now 지금 시각.
+ * @param portalDelegations `portal_approval_delegations` 를 읽은 줄들(승인함에서 맡겨 **포털이
+ *   써 준** 위임 — 설계 B-12). 🔴 **선택 인자가 아니다.** 기본값을 두면 빠뜨린 자리에서만
+ *   승인함 대리인이 조용히 빠지고, 그 증상은 「메일이 안 온다」 하나뿐이라 아무도 신고하지
+ *   않는다(아래 `actingApproverSubs` 의 같은 주의).
+ */
+export function activeDelegateSubs(
+  delegations: readonly ApprovalDelegationPeriod[],
+  delegatorSub: string,
+  now: Date,
+  portalDelegations: readonly ApprovalDelegationPeriod[],
+): string[] {
+  /**
+   * 🔴 **겹침을 여기서 걷는다.** 한 사람에게 두 고지로 겹쳐 맡기는 일은 실제로 생기고(설계
+   *    D-2 — 해롭지 않다), 그대로 두면 같은 사람이 목록에 두 번 들어간다.
+   * 🔵 지금 부르는 쪽(결재 생김 알림)은 보내기 직전에 한 번 더 걷지만
+   *    (`notifications/portal.ts` 의 `notifyPortalApprovalCreated`), **그 손에 기대지 않는다** —
+   *    걷는 자리가 거기 하나뿐이면 이 목록을 다른 데서 쓰는 날 같은 사람에게 두 번 간다.
+   * 🔵 차례에는 뜻이 없다 — 이 집 위임이 먼저, 그다음이 승인함 위임이고, 겹치면 **먼저 나온
+   *    쪽 한 번만** 남는다(아래 `actingApproverSubs` 와 같은 자리).
+   */
+  return [...new Set([...delegateSubsFor(delegations, delegatorSub, now), ...delegateSubsFor(portalDelegations, delegatorSub, now)])];
 }
 
 /**

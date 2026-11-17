@@ -8,7 +8,7 @@ import { portalApprovalDelegations } from "@/db/schema/portal-approval-delegatio
 // 🔵 **이름을 붙이려고** 끌어온다(2026-11-17, 조각 3c). 포털 표에는 이름 칸이 없고
 //    이 집은 `users.auth_sub` 가 곧 포털 번호라 바로 맞댈 수 있다.
 import { users, type Role } from "@/db/schema/users";
-import { actingApproverSubs, delegateSubsFor, isActiveDelegation, type ActingApproverSubs } from "./delegation";
+import { actingApproverSubs, activeDelegateSubs, isActiveDelegation, type ActingApproverSubs } from "./delegation";
 import { mayManageOthersDelegations } from "./delegation-authority";
 import { seoulDateText, seoulEndDateText } from "./delegation-input";
 // 🔵 **몸통 모양과 상한**은 순수 모듈이 쥔다(2026-11-17, 조각 9a). 이 파일은 `server-only` 을
@@ -46,7 +46,8 @@ import {
  * 뒤로는 포털이 지정·철회할 때 **써 주고**, 우리는 `portal_approval_delegations` 를 읽는다.
  * 🟢 그래서 **결재 길목에 망 호출이 하나도 없다** — 이 파일의 함수가 결재 트랜잭션 **안에서**
  * 도는데도 안심인 까닭이고, 「포털이 멎으면 대리인만 조용히 막힌다」(옛 B-6)는 상태 자체가
- * 없어졌다. 🔵 두 표는 색인 모양도 조건절도 같다 — 아래 두 질의가 글자까지 닮은 것이 그 때문이다.
+ * 없어졌다. 🔵 두 표는 색인 모양도 조건절도 같다 — 아래 질의들이 짝지어 글자까지 닮은 것이 그
+ * 때문이다(판정 둘 · 알림 둘 · 화면 둘).
  * ============================================================================
  */
 
@@ -130,7 +131,7 @@ export async function actingApproverSubsFor(actorSub: string, conn: Conn = db(),
  * `actingApproverSubsFor` 하나다 — 까닭은 `./delegation.ts` 의 `delegateSubsFor` 머리말.
  * 거르는 규칙(되돌림·반열린 구간)은 그 순수 함수가 **위 둘과 똑같이** 쥔다.
  *
- * 🔴 **이 조회에는 색인이 없다.** 표의 색인은 받는 쪽(`delegate_sub`)으로 깔려 있다
+ * 🔴 **이 조회에는 색인이 없다.** 두 표 모두 색인은 받는 쪽(`delegate_sub`)으로 깔려 있다
  * (`listDelegationsIMade` 와 같은 사정). 🔵 그래도 여기 두는 까닭: 이 조회는 **결재가 한 건
  * 생길 때 한 번**만 돈다 — 모든 화면에 딸려 오는 알림 종의 길이 아니다. 한 사람이 맡기는 줄은
  * 몇 줄이고 표 전체도 아직 두 자릿수다. 늘어나면 `(delegator_sub, …)` 색인을 더해야 하고,
@@ -139,40 +140,72 @@ export async function actingApproverSubsFor(actorSub: string, conn: Conn = db(),
  * 🔴 **`starts_at` 은 WHERE 에 넣지 않는다** — 위 둘과 같은 까닭이고(색인에 없다), 아직
  * 시작하지 않은 줄은 순수 함수가 거른다. 여기 조건을 손으로 적으면 반열린 구간이 세 벌이 된다.
  *
- * ── 🔴 **승인함 위임은 아직 여기 안 붙어 있다** (2026-11-16) ─────────────
- * 위 `actingApproverSubsFor` 는 두 표를 합치는데(설계 B-4) 이쪽은 **제 표만** 읽는다.
- * 🔴 **까닭이 2026-11-16 저녁에 바뀌었다.** 그 전에는 **길이 없어서** 못 했다 — 포털의 통로가
- * 받는 일 다섯 가운데 이 방향(「이 사람을 **대신할 수 있는** 사람들」)이 없었고, 설계 D-8 ①이
- * 그 구멍을 적어 두었다. 지금은 표가 **이 집에 있으므로** `portal_approval_delegations` 를
- * `delegator_sub` 로 읽으면 그만이다 — **못 하는 것이 아니라 아직 안 한 것**이다.
+ * ── 🟢 **승인함 위임도 2026-11-17 에 여기 붙었다** (설계 D-8 ①) ──────────
+ * 표가 이 집에 들어온 2026-11-16 저녁(설계 B-12)부터 판정(위 `actingApproverSubsFor`)은 두 표를
+ * 봤는데 **이 방향만 제 표 하나를 읽고 있었다.** 그래서 승인함에서 맡은 대리인에게는 「결재가
+ * 생겼다」 **즉시 알림(메일)만** 안 갔다 — 종·결재 화면·[승인] 단추는 판정이 두 표를 합치게
+ * 되면서 이미 멀쩡했고, 포털의 주기 작업도 평소처럼 주웠다.
+ * 🔴 **그래서 증상이 「메일이 한 바퀴 늦게 온다」 하나뿐이라 아무도 신고하지 않는 모양이었다.**
+ * 위임이 없애려던 기다림이 바로 그 한 바퀴다.
  *
- * 🔵 **그래서 지금 무엇이 빠지나**: 승인함 쪽 대리인에게 **「결재가 생겼다」 즉시 알림(메일)만**
- * 안 간다. 🟢 그 사람의 **알림 종·결재 화면·[승인] 단추는 이제 멀쩡히 돈다**(위 함수가 두 표를
- * 본다). 적힌 결재자에게는 그대로 가고, 포털의 주기 작업도 평소처럼 줍는다.
- * 🔴 **잇는 것은 이 조각의 일이 아니다** — 알림이 가는 사람 수가 달라지는 변경이라 따로 다룬다.
- * 🔵 이을 때는 **색인을 먼저 봐야 한다**: 두 표 다 색인이 받는 쪽(`delegate_sub`)으로 깔려 있어
- *    이 방향에는 없다(아래 주석).
+ * 🔴 **거르는 규칙을 한 줄도 새로 적지 않았다.** 아래 두 질의의 조건절은 위
+ * `actingApproverSubsFor` 가 거는 셋과 **글자까지 같고**(안 거둔 줄 · 아직 안 끝난 줄), 다른
+ * 것은 찾는 칸 하나(`delegate_sub` ↔ `delegator_sub`)뿐이다. 합치고 겹침을 걷는 일도 순수 함수
+ * `activeDelegateSubs` **한 자리**에서 하고, 그 안에서 두 묶음을 같은 `delegateSubsFor` 로
+ * 거른다 — 정방향이 `actingApproverSubs` 한 자리에서 합치는 것과 같은 모양이다.
+ * 🔴 **`revoked_at` 은 읽는 쪽에서 「깃발이 섰으면 빠진다」만 본다** — 한 방향 규칙(B-15)은
+ *    쓰는 쪽(`./portal-delegation-sync.ts`)의 일이고, 두 표가 여기서 똑같이 다뤄진다.
  */
 export async function activeDelegateSubsFor(delegatorSub: string, now: Date = new Date()): Promise<string[]> {
-  const rows = await db()
-    .select({
-      delegatorSub: approvalDelegations.delegatorSub,
-      delegateSub: approvalDelegations.delegateSub,
-      startsAt: approvalDelegations.startsAt,
-      endsAt: approvalDelegations.endsAt,
-      revokedAt: approvalDelegations.revokedAt,
-    })
-    .from(approvalDelegations)
-    .where(
-      and(
-        eq(approvalDelegations.delegatorSub, delegatorSub),
-        isNull(approvalDelegations.revokedAt),
-        gt(approvalDelegations.endsAt, now),
+  /**
+   * 🔴 **나란히 세우는 것이 짝 함수와 다른 유일한 점이다.** 위 `actingApproverSubsFor` 가 두
+   *    질의를 차례로 미는 까닭은 그 함수가 **결재 트랜잭션 안에서도** 불리기 때문이다(`conn`) —
+   *    한 거래는 연결 하나를 잡고 있어 겹쳐 밀어 넣는 꼴이 된다. 이 함수는 `conn` 을 받지
+   *    않는다: 부르는 자리가 **커밋이 끝난 뒤의 알림**(`src/lib/notifications/approval-created-ping.ts`)
+   *    하나뿐이라 언제나 트랜잭션 밖이고, 그래서 아래 `listAllDelegations` 처럼 함께 읽는다.
+   * 🔴 **이 함수가 `conn` 을 받게 되는 날 이 자리를 차례로 되돌려야 한다.**
+   * 🔵 「지금」은 **한 번 만들어 둘 다에 같은 값**을 넘긴다(`now` 매개변수) — 질의마다 제각기
+   *    재면 두 질의 사이에 끝난 줄이 한쪽에서만 빠진다.
+   */
+  const [rows, portalRows] = await Promise.all([
+    db()
+      .select({
+        delegatorSub: approvalDelegations.delegatorSub,
+        delegateSub: approvalDelegations.delegateSub,
+        startsAt: approvalDelegations.startsAt,
+        endsAt: approvalDelegations.endsAt,
+        revokedAt: approvalDelegations.revokedAt,
+      })
+      .from(approvalDelegations)
+      .where(
+        and(
+          eq(approvalDelegations.delegatorSub, delegatorSub),
+          isNull(approvalDelegations.revokedAt),
+          gt(approvalDelegations.endsAt, now),
+        ),
       ),
-    );
+    db()
+      .select({
+        delegatorSub: portalApprovalDelegations.delegatorSub,
+        delegateSub: portalApprovalDelegations.delegateSub,
+        startsAt: portalApprovalDelegations.startsAt,
+        endsAt: portalApprovalDelegations.endsAt,
+        revokedAt: portalApprovalDelegations.revokedAt,
+      })
+      .from(portalApprovalDelegations)
+      .where(
+        and(
+          eq(portalApprovalDelegations.delegatorSub, delegatorSub),
+          isNull(portalApprovalDelegations.revokedAt),
+          gt(portalApprovalDelegations.endsAt, now),
+        ),
+      ),
+  ]);
 
   // 🔵 `delegator_sub` 로 이미 좁혔지만 그 조건을 순수 함수에 **다시 맡긴다**(위와 같은 약속).
-  return delegateSubsFor(rows, delegatorSub, now);
+  // 🔴 **합치는 자리도 그 함수 하나다** — 여기서 이어 붙이면 겹침을 걷는 규칙이 두 벌이 되고,
+  //    두 겹(A→B·B→C)을 막는 자리도 함께 둘이 된다(`actingApproverSubsFor` 와 같은 까닭).
+  return activeDelegateSubs(rows, delegatorSub, now, portalRows);
 }
 
 /* ------------------------------------------------------------------ */
