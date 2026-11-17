@@ -3,6 +3,11 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { cache } from "react";
 import type { Role, User } from "@/db/schema/users";
+// 🔴 **역할 위임**(2026-11-17, 설계 B-10). 판정은 순수 모듈이, 표를 읽는 일은 위임 쪽 읽기 층이
+//    한다 — 이 파일은 **역할을 읽는 자리**라서 그 둘을 여기서 잇는다. 세션 쿠키의 역할은 표시용
+//    사본이고 진짜 판정은 아래 DB 값이다(설계 D-7 ④).
+import { activeDelegatorRolesFor } from "@/lib/approval/delegation-queries";
+import { DELEGATED_ADMIN_SOURCE_ROLE, decideDelegatedRole } from "@/lib/approval/delegated-role";
 import type { DssService } from "./oidc";
 import { roleAtLeast } from "./role";
 import { DEV_ROLE_COOKIE, SERVICE_MENU_COOKIE, SESSION_COOKIE } from "./cookies";
@@ -21,10 +26,22 @@ import { findActiveUserById } from "./users";
  * 같은 요청 안에서 레이아웃·페이지·액션이 여러 번 불러도 React `cache()` 가 한 번만 읽게 해 준다.
  */
 export interface CurrentSession {
-  /** `user.role` 은 **지금 쓰이는 역할**. 개발 전용 역할 바꿔 보기가 켜져 있으면 낮춰진 값일 수 있다. */
+  /**
+   * `user.role` 은 **지금 쓰이는 역할**. 개발 전용 역할 바꿔 보기가 켜져 있으면 낮춰진 값일 수
+   * 있고, **결재권 위임으로 올라간 값**일 수도 있다(아래 `delegatedAdmin`).
+   */
   user: User;
   /** 포털이 준 진짜 역할. 바꿔 보기 중이 아니면 user.role 과 같다. */
   actualRole: Role;
+  /**
+   * 🔴 **이 요청의 `ADMIN` 이 결재권 위임에서 왔는가** (2026-11-17, 설계 B-10·B-11).
+   *
+   * 「권한이 있나」가 아니라 **「승인 절차(결재선)를 고칠 수 있나」를 가르는 값**이다 — 임시
+   * 관리자에게 주지 않는 문이 그 하나뿐이라서다(까닭은 `@/lib/approval/delegated-role` 머리말).
+   * 🔴 **진짜 `ADMIN` 은 위임을 받았든 안 받았든 언제나 `false`** 다. 역할이 둘이면 높은 쪽이
+   * 이긴다 — 여기가 `true` 가 되면 그 사람은 위임을 받았다는 이유만으로 결재선을 잃는다.
+   */
+  delegatedAdmin: boolean;
   payload: SessionPayload;
   services: DssService[];
 }
@@ -54,7 +71,43 @@ export const getSession = cache(async (): Promise<CurrentSession | null> => {
     const v = verifyValue<{ role: string }>(store.get(DEV_ROLE_COOKIE)?.value, env.authSessionSecret);
     if (v && isRole(v.role) && roleAtLeast(actualRole, v.role) && v.role !== actualRole) effective = { ...user, role: v.role };
   }
-  return { user: effective, actualRole, payload, services: decodeServiceMenu(store.get(SERVICE_MENU_COOKIE)?.value) };
+
+  /**
+   * 🔴 **결재권 위임이 역할까지 넘긴다** (2026-11-17, 설계 B-10). `ADMIN` 이 맡긴 위임의
+   *    대리인은 **그 기간 동안** `ADMIN` 이다. 뜻과 까닭은 `@/lib/approval/delegated-role` 머리말.
+   *
+   * 🔴 **DB 의 역할 칸을 바꿔 쓰지 않는다.** 이 함수가 매 요청마다 돌기 때문에(위 머리말) 여기서
+   *    계산하면 기간이 끝날 때 **저절로** 닫힌다 — 야간 작업도 만료 처리도 필요 없고, 「여는
+   *    조건과 닫는 조건이 다른 곳에」 생기지도 않는다.
+   * 🔴 **진짜 `ADMIN` 에게는 아예 묻지 않는다.** 더 얻을 것이 없고(판정도 `false` 로 끝난다),
+   *    위임 질의 둘을 매 요청마다 돌릴 까닭도 없다. 🔵 개발 전용 「역할 바꿔 보기」로 낮춰 본
+   *    관리자도 여기에 걸린다 — `actualRole` 이 `ADMIN` 이라 안 묻고, 그래서 **낮춰 본 역할이
+   *    위임으로 도로 올라가지 않는다.** 그 도구가 쓸모를 잃는 자리가 거기였다.
+   */
+  let delegatorRoles: Role[] = [];
+  if (!roleAtLeast(actualRole, DELEGATED_ADMIN_SOURCE_ROLE)) {
+    try {
+      delegatorRoles = await activeDelegatorRolesFor(payload.sub);
+    } catch (e) {
+      /**
+       * 🔴 **못 읽었으면 안 올린다**(fail-close). 위 users 조회가 「DB 가 죽었으면 세션도 없는
+       *    것으로」 보는 것과 같은 쪽이다 — 여기서 던지면 위임과 아무 상관 없는 사람까지 모든
+       *    화면이 500 이 된다. 🔴 대신 **반드시 로그에 남긴다**: 증상이 「위임받았는데 관리자
+       *    기능이 안 열린다」 하나뿐이라, 이 줄이 없으면 아무 단서도 남지 않는다.
+       */
+      console.error("[session] 역할 위임 조회 실패:", e instanceof Error ? e.message : e);
+    }
+  }
+  const delegated = decideDelegatedRole(actualRole, delegatorRoles);
+  if (delegated.delegatedAdmin) effective = { ...effective, role: delegated.role };
+
+  return {
+    user: effective,
+    actualRole,
+    delegatedAdmin: delegated.delegatedAdmin,
+    payload,
+    services: decodeServiceMenu(store.get(SERVICE_MENU_COOKIE)?.value),
+  };
 });
 
 /**

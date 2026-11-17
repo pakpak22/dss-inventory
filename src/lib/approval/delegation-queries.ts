@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, desc, eq, gt, isNotNull, isNull, lte, or } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lte, or } from "drizzle-orm";
 import { db } from "@/db/client";
 import { approvalDelegations } from "@/db/schema/approval-delegations";
 // 🔴 **둘째 고지**다(2026-11-16, 설계 B-12). 승인함에서 맡긴 위임을 포털이 써 주는 표이고,
@@ -10,6 +10,9 @@ import { portalApprovalDelegations } from "@/db/schema/portal-approval-delegatio
 import { users, type Role } from "@/db/schema/users";
 import { actingApproverSubs, activeDelegateSubs, isActiveDelegation, type ActingApproverSubs } from "./delegation";
 import { mayManageOthersDelegations } from "./delegation-authority";
+// 🔵 **역할 위임**(2026-11-17, 설계 B-10). 본인을 빼는 규칙만 가져온다 — 「임시 관리자인가」를
+//    가르는 판정 자체는 그 순수 모듈이 쥐고, 여기서는 **읽어다 넘기기**만 한다.
+import { delegatorSubsOf } from "./delegated-role";
 import { seoulDateText, seoulEndDateText } from "./delegation-input";
 // 🔵 **몸통 모양과 상한**은 순수 모듈이 쥔다(2026-11-17, 조각 9a). 이 파일은 `server-only` 을
 //    물고 있어 시험이 못 불러오는데, 저쪽은 안 물어서 그대로 돌려 볼 수 있다.
@@ -124,8 +127,62 @@ export async function actingApproverSubsFor(actorSub: string, conn: Conn = db(),
 }
 
 /**
- * 바로 위를 **거꾸로** — 이 결재권자의 자리를 지금 대신 누를 수 있는 사람들의 포털 번호
- * (2026-10-24, 결재 생김 알림).
+ * 「지금 이 사람이 **대신하는 사람들의 역할**」 — 역할 위임(2026-11-17, 설계 B-10)이 묻는 단
+ * 하나의 질문이다. 그 가운데 `ADMIN` 이 있으면 이 사람은 **기간 동안 임시 `ADMIN`** 이고,
+ * 그 판정은 순수 모듈(`./delegated-role.ts` 의 `decideDelegatedRole`)이 한다.
+ *
+ * ── 🔴 판정을 **새로 짓지 않는다** ─────────────────────────────────────
+ * 기간(반열린 구간) · 되돌림 · 두 고지 합치기 · 두 겹 막기는 **바로 위 함수가 이미** 한다.
+ * 이 함수가 제 손으로 하는 일은 둘뿐이다: 그 목록에서 **본인을 빼고**(순수 함수), 남은 번호의
+ * **역할을 읽어 온다.** 🔴 거르는 조건을 여기 한 줄이라도 적으면 반열린 구간 규칙이 한 벌 더
+ * 생기고, 「결재는 되는데 역할은 안 넘어오는」(또는 그 반대의) 짝이 조용히 생긴다.
+ *
+ * ── 🔴 `users.role` 을 **바꿔 쓰지 않는다** (설계 D-7 ④) ────────────────
+ * 역할 칸은 **읽기만** 한다. 이 집은 역할을 매 요청마다 다시 읽으므로 여기서 계산하면 기간이
+ * 끝날 때 **저절로** 닫힌다 — 칸에 적어 두는 길로 가면 여는 조건과 닫는 조건이 다른 곳에
+ * 생기고, 화면에서 내릴 수 없는 권한이 남는다.
+ *
+ * ── 🔴 **지워진 사람은 역할을 넘기지 않는다** ───────────────────────────
+ * 세션(`findActiveUserById`)과 포털 통로(`findActiveUserByAuthSub`)가 지워진 사람을 「못 찾은
+ * 것」으로 치는 것과 **같은 줄**이다. 한쪽만 느슨하면 **그만둔 사람의 계정이 임시 관리자를 계속
+ * 찍어 낸다** — 그 사람은 로그인도 못 하므로 아무도 알아채지 못한다.
+ *
+ * 🔵 **이 집에 로그인한 적 없는 위임자는 역할이 없다.** 결재선·위임은 A/S 명부에서 고르므로
+ *    `users` 에 줄이 없는 사람도 결재권자가 될 수 있고(`./directory.ts` 머리말), 그 위임은
+ *    **결재권만** 넘긴다. 아래 질의가 그런 번호를 그냥 못 찾을 뿐이라 따로 다룰 것이 없다.
+ * 🔵 **질의는 많아야 셋**이다(두 고지 + 역할 한 번). 대신하는 사람이 없으면 셋째는 안 돈다.
+ *    🔴 **진짜 `ADMIN` 에게는 아예 부르지 않는다** — 더 얻을 것이 없어서이고, 거르는 자리는
+ *    부르는 쪽(`src/lib/auth/session.ts`) 한 곳이다.
+ *
+ * @param actorSub 「지금 그 사람」의 포털 번호(세션의 `sub` · `users.auth_sub`).
+ * @param now 🔴 **한 번 만들어 둘 다에 같은 값**을 넘긴다 — 위임 판정과 역할 읽기가 같은 순간을
+ *   봐야 기간이 끝나는 즈음의 요청을 나중에 설명할 수 있다.
+ */
+export async function activeDelegatorRolesFor(actorSub: string, now: Date = new Date()): Promise<Role[]> {
+  /**
+   * 🔴 **트랜잭션 밖이다.** 부르는 자리가 세션을 읽는 길 하나뿐이고(화면·액션이 시작하기
+   *    전이다), 그래서 위 함수에 이 집의 연결을 그대로 넘긴다 — 결재 길목이 제 거래를 넘기는
+   *    것과 다른 점이 여기 하나다.
+   * 🔴 **본인 번호를 빼는 일은 순수 함수에 맡긴다**(`delegatorSubsOf`). 맨 앞이 본인이라는
+   *    약속에 기대 `slice(1)` 로 적으면 차례가 바뀌는 날 엉뚱한 사람의 역할을 물려받는다.
+   */
+  const delegatorSubs = delegatorSubsOf(await actingApproverSubsFor(actorSub, db(), now), actorSub);
+  // 🔵 대신하는 사람이 없으면 읽을 역할도 없다. `inArray(…, [])` 를 피하는 뜻도 있다 — drizzle 은
+  //    그것을 `false` 로 구워 조용히 0행을 돌려준다(`actingApproverSubs` 머리말의 같은 함정).
+  if (delegatorSubs.length === 0) return [];
+
+  const rows = await db()
+    .select({ role: users.role })
+    .from(users)
+    .where(and(inArray(users.authSub, delegatorSubs), eq(users.isDeleted, false)));
+  // 🔵 누구의 역할인지는 버린다 — 묻는 것이 「그 가운데 `ADMIN` 이 있나」 하나라서다. 사람과
+  //    역할을 짝지어 들고 가면 그 짝을 화면에 그리고 싶어지고, 그러면 번호가 따라 내려간다.
+  return rows.map((row) => row.role);
+}
+
+/**
+ * 위 `actingApproverSubsFor` 를 **거꾸로** — 이 결재권자의 자리를 지금 대신 누를 수 있는
+ * 사람들의 포털 번호 (2026-10-24, 결재 생김 알림).
  *
  * 🔴 **알림에만 쓴다.** 「누를 수 있나」를 가르는 자리는 지금도 앞으로도 위
  * `actingApproverSubsFor` 하나다 — 까닭은 `./delegation.ts` 의 `delegateSubsFor` 머리말.
