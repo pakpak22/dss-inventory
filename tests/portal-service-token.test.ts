@@ -144,6 +144,18 @@ describe("용도 글자 — 🔴 저장소 넷이 똑같아야 한다", () => {
        * 지정 자체를 거절한다(B-13) — 조용히 틀리지는 않지만 고칠 자리가 네 저장소에 흩어진다.
        */
       delegationsWrite: "dss.delegations.write",
+      /**
+       * 🔴 **2026-11-17 에 더했다**(조각 9a, 어긋남 점검 — 설계 B-14). 포털이 「이 집이 지금
+       * 가진 위임 전부를 다오」라고 물을 때의 글자다. 같은 통로의 `action=list` 갈래 하나만
+       * 이것을 요구한다.
+       *
+       * 🔴 **쓰기와 글자가 달라야 한다.** 같아지면 「남에게 결재권을 맡기러」 구운 토큰이
+       * **회사 전체의 위임 장부**를 여는 열쇠가 된다(아래 시험이 양쪽 방향으로 센다).
+       * 🟢 휴가(dss-leave)가 2026-11-17 에 **이 글자 그대로** 열었다(커밋 `09fe333`).
+       * 🔴 포털·A/S 에도 같은 글자가 서야 열린다 — 어긋나면 그 집만 401 이고, 점검은 그것을
+       * 「못 쟀다」로 읽어 **어긋남과 섞인다.**
+       */
+      delegationsRead: "dss.delegations.read",
     });
   });
 
@@ -155,6 +167,27 @@ describe("용도 글자 — 🔴 저장소 넷이 똑같아야 한다", () => {
     assert.deepEqual(await verify(writeToken, PORTAL_TOKEN_PURPOSES.notificationsRead), { ok: false, reason: "wrong_purpose" });
     // 🔵 맞으면 통과한다 — 「막히나」만 재면 서명이 통째로 깨져도 이 시험은 통과한다.
     assert.equal((await verify(writeToken, PORTAL_TOKEN_PURPOSES.delegationsWrite)).ok, true);
+  });
+
+  /**
+   * 🔴 **위임 통로 안에서도 갈린다**(2026-11-17, 조각 9a). 같은 주소·같은 메서드인데 쓰기
+   * 갈래(`upsert`·`revoke`)와 읽기 갈래(`list`)가 **다른 쓰임새**를 요구한다 — 그 울타리는
+   * 통째로 이 `purpose` 한 칸에 달려 있다.
+   * 🔵 통로가 어느 갈래에 어느 글자를 대는지는 `tests/portal-delegation-list.test.ts` 가 본다.
+   */
+  it("🔴 위임을 **쓰는** 토큰으로 장부를 **읽을 수 없다** — 거꾸로도 막힌다", async () => {
+    const writeToken = await sign({ purpose: PORTAL_TOKEN_PURPOSES.delegationsWrite });
+    assert.deepEqual(await verify(writeToken, PORTAL_TOKEN_PURPOSES.delegationsRead), { ok: false, reason: "wrong_purpose" });
+    // 🔴 거꾸로 — 읽으러 구운 토큰으로 **남의 결재권을 넘기는 줄**을 쓸 수 없어야 한다.
+    const readToken = await sign({ purpose: PORTAL_TOKEN_PURPOSES.delegationsRead });
+    assert.deepEqual(await verify(readToken, PORTAL_TOKEN_PURPOSES.delegationsWrite), { ok: false, reason: "wrong_purpose" });
+    // 🔵 종을 읽는 토큰으로도 장부가 안 열린다.
+    assert.deepEqual(await verify(await sign({ purpose: PORTAL_TOKEN_PURPOSES.notificationsRead }), PORTAL_TOKEN_PURPOSES.delegationsRead), {
+      ok: false,
+      reason: "wrong_purpose",
+    });
+    // 🔵 맞으면 통과한다 — 「막히나」만 재면 서명이 통째로 깨져도 이 시험은 통과한다.
+    assert.equal((await verify(readToken, PORTAL_TOKEN_PURPOSES.delegationsRead)).ok, true);
   });
 });
 

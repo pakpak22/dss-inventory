@@ -12,8 +12,16 @@ import { describe, it } from "node:test";
  * 판단 자체는 실제로 돌려 본다 — `tests/portal-delegation-sync.test.ts`(멱등·`not_applicable`·
  * 거절), `tests/portal-service-token.test.ts`(토큰).
  *
+ * ── 🔴 2026-11-17 에 이 통로에 **읽기 갈래**가 생겼다 (조각 9a · 설계 B-14) ───
+ * 그래서 ①의 뜻이 **한 칸 좁아졌다.** 옛 단언은 「토큰 없이 부르면 **몸통도 안 읽고** 401」
+ * 이었는데, 지금은 어느 쓰임새를 요구할지가 갈래에 달려 있어 **`action` 한 칸을 먼저 엿본다.**
+ * 🔵 엿보는 것은 **복제본**이고 표도 토큰도 건드리지 않는다 — 원본 몸통을 읽으면 아래 쓰기
+ * 갈래의 `request.json()` 이 빈 몸통을 받아 **모든 쓰기가 조용히 400** 이 된다.
+ * 🔴 그래서 ①은 이제 **갈래마다** 「그 갈래의 일은 그 갈래의 토큰 뒤에만」을 잰다. 읽기 갈래
+ * 자체(쓰임새·사람 안 싣기·빈 목록으로 안 답하기)는 `tests/portal-delegation-list.test.ts` 다.
+ *
  * 여기서 지키는 것:
- *  1. 🔴 자격 검증이 **먼저**다 — 토큰 없이 부르면 몸통도 안 읽고 401.
+ *  1. 🔴 자격 검증이 **먼저**다 — 갈래를 가린 뒤, **그 갈래의 일**은 토큰 뒤에만 한다.
  *  2. 🔴 **위임 전파 전용 쓰임새**만 받는다(알림 토큰으로 남의 결재권을 넘길 수 없다).
  *  3. 🔴 **누구에 대한 줄인지는 몸통에서** 온다 — 쿼리 문자열을 읽지 않는다.
  *  4. 모양이 틀리면 **400**(500 이 아니다 — 포털이 영원히 되쏜다).
@@ -38,17 +46,32 @@ const store = source("src/lib/approval/portal-delegation-store.ts");
 const schema = source("src/db/schema/portal-approval-delegations.ts");
 
 describe("승인함 위임 받는 통로 — 소스", () => {
-  it("🔴 자격 검증이 먼저다 — 실패하면 401 로 끝나고 몸통에 닿지 않는다", () => {
-    const verifyAt = route.indexOf("await verifyPortalServiceToken(");
+  it("🔴 쓰기 갈래 — 자격 검증이 먼저다. 실패하면 401 로 끝나고 **원본 몸통에 닿지 않는다**", () => {
+    /**
+     * 🔴 **갈래가 생겨서 자리를 갈라 잰다**(머리말). 쓰기 쪽 차례는 2026-11-16 그대로여야
+     *    한다 — 검증 → 거절 → 몸통 → 저장.
+     */
+    const verifyAt = route.indexOf("PORTAL_TOKEN_PURPOSES.delegationsWrite");
     const rejectAt = route.indexOf("if (!verified.ok) {");
     const readAt = route.indexOf("await request.json()");
     const workAt = route.indexOf("applyPortalDelegation({");
-    assert.ok(verifyAt > 0, "검증하는 자리를 찾지 못했다");
+    assert.ok(verifyAt > 0, "쓰기 갈래가 검증하는 자리를 찾지 못했다");
     assert.ok(rejectAt > verifyAt, "검증 결과를 확인하지 않는다");
     assert.ok(readAt > rejectAt, "거절하기 전에 몸통을 읽는다");
     assert.ok(workAt > readAt, "읽기도 전에 저장한다");
     assert.match(route, /status: 401/);
     assert.match(route, /readBearerToken\(request\.headers\.get\("authorization"\)\)/);
+  });
+
+  it("🔴 갈래 엿보기는 **복제본**이다 — 원본을 읽으면 모든 쓰기가 조용히 400 이 된다", () => {
+    const peekAt = body(route).indexOf("request.clone().text()");
+    const branchAt = body(route).indexOf("isDelegationListAction(");
+    assert.ok(peekAt > 0, "갈래를 엿보는 자리를 찾지 못했다 — 이 시험이 아무것도 안 재고 있다");
+    assert.ok(branchAt > peekAt, "엿보기 전에 갈래를 가른다");
+    // 🔴 원본을 읽는 자리는 **쓰기 갈래의 `request.json()` 하나뿐**이어야 한다. 위에서
+    //    `request.text()`·`request.json()` 을 한 번이라도 부르면 그 몸통은 이미 비어 있다.
+    assert.equal(body(route).split("await request.json()").length - 1, 1, "원본 몸통을 두 번 읽는다");
+    assert.ok(!/await request\.text\(\)/.test(body(route)), "원본 몸통을 글자로 읽는다 — 아래 json() 이 빈 몸통을 받는다");
   });
 
   it("🔴 위임 전파 전용 쓰임새만 받는다 — 종을 읽는 토큰으로 결재권을 넘길 수 없다", () => {
@@ -92,7 +115,12 @@ describe("승인함 위임 받는 통로 — 소스", () => {
     assert.match(route, /store: portalDelegationStore/);
   });
 
-  it("읽는 메서드가 없다 — 이 통로는 받아 적기만 한다", () => {
+  it("🔴 메서드는 POST 하나다 — 읽기도 **POST 의 갈래**이지 새 메서드가 아니다", () => {
+    /**
+     * 🔴 2026-11-17 에 읽기 갈래가 생겼지만 **GET 을 만들지 않았다**(조각 9a). 읽기를 GET 으로
+     *    열면 토큰이 쿼리로 다니기 쉬워지고(접근 로그에 그대로 남는다), 무엇보다 **같은 통로에
+     *    서로 다른 자격 검사 두 벌**이 생긴다. 갈래는 몸통의 `action` 한 칸이 가른다.
+     */
     for (const method of ["export async function GET", "export async function PUT", "export async function PATCH", "export async function DELETE"]) {
       assert.ok(!route.includes(method), `다른 메서드가 생겼다: ${method}`);
     }

@@ -1,5 +1,5 @@
 import "server-only";
-import { and, desc, eq, gt, isNotNull, isNull, lte, or } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNotNull, isNull, lte, or } from "drizzle-orm";
 import { db } from "@/db/client";
 import { approvalDelegations } from "@/db/schema/approval-delegations";
 // 🔴 **둘째 고지**다(2026-11-16, 설계 B-12). 승인함에서 맡긴 위임을 포털이 써 주는 표이고,
@@ -11,6 +11,9 @@ import { users, type Role } from "@/db/schema/users";
 import { actingApproverSubs, delegateSubsFor, isActiveDelegation, type ActingApproverSubs } from "./delegation";
 import { mayManageOthersDelegations } from "./delegation-authority";
 import { seoulDateText, seoulEndDateText } from "./delegation-input";
+// 🔵 **몸통 모양과 상한**은 순수 모듈이 쥔다(2026-11-17, 조각 9a). 이 파일은 `server-only` 을
+//    물고 있어 시험이 못 불러오는데, 저쪽은 안 물어서 그대로 돌려 볼 수 있다.
+import { DELEGATION_AUDIT_LIMIT, type DelegationAuditRow } from "./portal-delegation-list";
 import {
   canRevokeDelegation,
   delegationState,
@@ -579,4 +582,59 @@ export async function listAllDelegations(actorRole: Role, now: Date = new Date()
       finishedLimit: FINISHED_DELEGATION_LIMIT,
     },
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* 🔴 포털의 어긋남 점검이 읽는다 — **거르개가 없는** 자리 (조각 9a)      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 「이 집이 지금 가진 승인함 위임 전부」. 🔴 **`where` 가 한 줄도 없는 것이 이 조회의 전부다.**
+ * 살아 있는 것·끝난 것·**거둔 것**을 다 준다 — 포털과 맞대어 볼 때 「포털은 거뒀는데 집에서는
+ * 살아 있는」 줄이 가장 위험한 어긋남인데(설계 B-13), 거른 목록으로는 그 줄이 **양쪽에서
+ * 똑같이 안 보인다.**
+ * 🔴 그래서 **위의 화면용 조회 넷 가운데 어느 것도 빌려 쓸 수 없다** — 둘은 사람으로 좁히고,
+ *    `listAllDelegations` 는 아예 **제 표**(`approval_delegations`)를 읽는다.
+ *
+ * 🔴 **사람 칸을 안 고른다.** 고른 뒤에 안 싣는 것이 아니라 아예 안 읽는다 — 몸통을 짓는
+ * 자리(`./portal-delegation-list.ts` 의 `buildDelegationListReply`)와 **두 겹**으로 막아 둔
+ * 것은, 한 겹만 있으면 다음 사람이 「조회는 다 읽어 두고 고를 때 가리자」로 쉽게 무너뜨리기
+ * 때문이다. 🔵 이 집은 `auth_sub` 가 곧 포털 번호라 이름을 붙이기가 가장 쉬워서 더 그렇다.
+ *
+ * 🔴 **차례를 못 박는다**(번호 오름차순). 상한에 걸려 잘릴 때 **어느 줄이 잘리는가**가 호출마다
+ * 달라지면, 점검이 돌 때마다 다른 줄을 「집에 없다」로 읽는다.
+ *
+ * 🔴 **상한보다 한 줄 더 읽는다**(`limit + 1`). 그 한 줄이 「넘쳤다」를 가리는 유일한 길이고,
+ * 딱 상한만큼 읽으면 **정확히 상한만큼 있는 날**과 **넘친 날**이 같은 답이 된다. 세어서
+ * 잘라내는 것은 몸통을 짓는 쪽이다 — 🔴 **그러니 이 함수가 돌려주는 줄 수를 그대로 내보내면
+ * 안 된다.** 🔵 바로 위 `listAllDelegations` 가 화면 목록에 쓰는 셈법과 같다.
+ *
+ * 🔵 **질의를 만들기만 하는 함수를 따로 둔 까닭.** 이 파일은 `server-only` 를 물고 있어 시험이
+ * 불러올 수 없고, 이 집에는 구워진 SQL 을 보는 방식도 없다(`.toSQL()` 을 쓰는 자리가 저장소에
+ * 하나도 없다 — 2026-11-17 실측). 그래서 울타리는 **소스 글자**로 친다
+ * (`tests/portal-delegation-list.test.ts`) — 함수를 작게 떼어 두면 그 시험이 **이 본문만**
+ * 잘라서 「거르개가 끼었나」를 볼 수 있다.
+ */
+export function delegationsForAuditQuery(limit: number = DELEGATION_AUDIT_LIMIT) {
+  return db()
+    .select({
+      id: portalApprovalDelegations.id,
+      startsAt: portalApprovalDelegations.startsAt,
+      endsAt: portalApprovalDelegations.endsAt,
+      revokedAt: portalApprovalDelegations.revokedAt,
+    })
+    .from(portalApprovalDelegations)
+    .orderBy(asc(portalApprovalDelegations.id))
+    .limit(limit + 1);
+}
+
+/**
+ * 🔴 **읽기 갈래의 입구.** 부르는 곳은 `app/api/integration/delegations/route.ts` 하나다.
+ *
+ * 🔴 **던지는 것을 삼키지 않는다** — 못 읽은 것을 빈 목록으로 답하면 점검이 그것을 「이 집에
+ * 위임이 하나도 없다」로 읽고, **DB 가 앓는 날 모든 위임이 어긋난 것으로 보고된다.** 통로가
+ * 「지금은 안 된다」로 답한다(그쪽 머리말).
+ */
+export async function loadDelegationsForAudit(limit: number = DELEGATION_AUDIT_LIMIT): Promise<DelegationAuditRow[]> {
+  return delegationsForAuditQuery(limit);
 }
