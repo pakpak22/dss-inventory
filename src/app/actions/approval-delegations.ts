@@ -75,8 +75,17 @@ export async function createDelegationAction(_prev: DelegationActionState, formD
        * 🔴 누른 사람은 **세션**이다. 폼에는 번호 칸이 없다.
        * 🔴 **역할도 세션의 것**이다 — 「남의 것까지 되는가」를 가르는 값이라, 폼에서 읽은 값을
        *    여기 실으면 울타리가 통째로 없어진다.
+       * 🔴 **그 역할이 위임에서 왔는지도 함께 넘긴다**(2026-11-17). 임시 관리자는 **남의**
+       *    결재권을 못 맡긴다 — 그 길이 열려 있으면 제 임기를 스스로 늘릴 수 있기 때문이고,
+       *    판정은 `mayCreateOthersDelegation` 이 한다. 🔵 본인 결재권은 그대로 맡긴다.
        */
-      { id: session.user.id, name: session.user.name, sub: session.user.authSub, role: session.user.role },
+      {
+        id: session.user.id,
+        name: session.user.name,
+        sub: session.user.authSub,
+        role: session.user.role,
+        delegatedAdmin: session.delegatedAdmin,
+      },
     );
   } catch (e) {
     console.error("[delegation] 위임 만들기 실패:", e instanceof Error ? e.message : e);
@@ -114,6 +123,12 @@ export async function revokeDelegationAction(_prev: DelegationActionState, formD
       name: session.user.name,
       sub: session.user.authSub,
       role: session.user.role,
+      /**
+       * 🔵 **거두는 쪽은 이 값을 보지 않는다** — 일부러다(까닭은 `revokeApprovalDelegation`
+       *    머리말: 거두기는 임시 관리자의 임기를 늘릴 수 없고, 막으면 급할 때 거둘 손이
+       *    없어진다). 그래도 세션에서 꺼내 그대로 넘겨 두 액션의 모양을 같게 둔다.
+       */
+      delegatedAdmin: session.delegatedAdmin,
     });
   } catch (e) {
     console.error("[delegation] 위임 되돌리기 실패:", e instanceof Error ? e.message : e);

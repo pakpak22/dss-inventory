@@ -6,7 +6,11 @@ import { auditLogs } from "@/db/schema/audit-logs";
 import type { Role } from "@/db/schema/users";
 import { auditValues } from "@/lib/audit";
 import { fetchAsUserDirectory } from "./as-users";
-import { mayManageOthersDelegations } from "./delegation-authority";
+import {
+  OTHERS_DELEGATION_DELEGATED_ADMIN_MESSAGE,
+  mayCreateOthersDelegation,
+  mayManageOthersDelegations,
+} from "./delegation-authority";
 import {
   resolveDelegateFromDirectory,
   resolveDelegatorFromDirectory,
@@ -31,6 +35,16 @@ import {
  * 🔴 **넓히기만 했다.** 지금까지 자기 결재권을 맡길 수 있던 사람은 역할과 무관하게 그대로
  * 맡길 수 있다 — 결재자는 역할과 무관하게 누구나 될 수 있어서(보기 권한자가 결재선에 든
  * 경우가 실제로 있다), 그 길이 막히면 이 기능이 풀려던 문제가 그대로 돌아온다.
+ *
+ * 🔴 **2026-11-17 에 그 한 줄이 두 줄이 됐다**(역할 위임 — 설계 B-10). 「남의 것이면 `ADMIN`」
+ * 에 **「다만 위임으로 받은 `ADMIN` 은 빼고」**가 붙었고, 그것은 **맡기는 쪽에만** 붙었다:
+ *
+ *   🔴 **맡기기** — 본인 것이면 누구나, 남의 것이면 `ADMIN`, **임시 `ADMIN` 은 제외**.
+ *   🔴 **되돌리기** — 본인 것이면 누구나, 남의 것이면 `ADMIN`(**2026-10-26 그대로**).
+ *
+ * 🔵 두 줄이 갈린 까닭은 저마다 그 함수 머리말에 있다 — 한쪽만 보고 「짝이 안 맞는다」며 맞추지
+ *    마라. 맡기기는 임기를 **늘리는** 길이고 거두기는 **줄이는** 길이라, 같은 자를 대면 둘 중
+ *    하나는 반드시 틀린다.
  *
  * 🔴 **서버 액션은 지금도 `requireSession` 이다** — `requireRole` 로 바꾸지 마라. 역할로 문을
  * 막으면 보기 권한자가 **자기 위임조차** 못 만든다. 울타리는 문이 아니라 여기, 그리고 역할
@@ -77,7 +91,24 @@ import {
  * 🔴 **역할도 함께 받는다**(2026-10-26). 「남의 것까지 되는가」를 가르는 값이고, 세션에서 온
  * 값이어야 한다 — 화면이 보낸 값을 여기 실으면 울타리가 통째로 없어진다.
  */
-export type DelegationActor = { id: string; name: string; sub: string; role: Role };
+export type DelegationActor = {
+  id: string;
+  name: string;
+  sub: string;
+  role: Role;
+  /**
+   * 🔴 **그 역할이 결재권 위임에서 온 것인가**(2026-11-17, 세션의 `delegatedAdmin`). 위 `role`
+   * 이 `ADMIN` 이어도 이 값이 참이면 **남의 결재권을 맡기지 못한다** — 까닭은
+   * `./delegation-authority.ts` 의 `mayCreateOthersDelegation`.
+   *
+   * 🔴 **물음표를 붙이지 마라.** 빠뜨린 자리에서만 울타리가 조용히 풀리고, 그 자리에는 아무
+   * 표시도 안 남는다. 지금은 넘기는 자리가 서버 액션 둘뿐이라 `tsc` 가 전부 잡아 준다.
+   * 🔵 **거두는 쪽은 이 값을 보지 않는다** — 일부러다(까닭은 `revokeApprovalDelegation` 머리말).
+   *    그래도 같은 타입으로 받는 까닭은, 두 액션이 세션에서 꺼내는 모양을 갈라 두면 나중에
+   *    「거두기 쪽만 안 넘기는」 버릇이 생기고 그때 만들기 쪽도 함께 흐려지기 때문이다.
+   */
+  delegatedAdmin: boolean;
+};
 
 export type CreateDelegationResult =
   | {
@@ -105,6 +136,12 @@ export type CreateDelegationResult =
         | "SELF_DELEGATION"
         /** 🔴 「누구의 결재권인가」 쪽에서만 나온다 — 명부에 없는 결재권자, 그리고 자격 없음. */
         | "UNKNOWN_DELEGATOR"
+        /**
+         * 🔴 자격 없음. **까닭이 둘**이고 문구로 갈린다(2026-11-17): 관리자가 아예 아니거나
+         * (`DELEGATE_FOR_OTHERS_FORBIDDEN_MESSAGE`), **위임으로 받은 임시 관리자**이거나
+         * (`OTHERS_DELEGATION_DELEGATED_ADMIN_MESSAGE`). 🔵 코드를 가르지 않은 까닭: 지금
+         * 부르는 쪽(서버 액션)은 문구만 그대로 보여 주고, 둘을 달리 다루는 자리가 없다.
+         */
         | "FORBIDDEN";
       message: string;
     };
@@ -139,6 +176,27 @@ export async function createApprovalDelegation(input: unknown, actor: Delegation
    */
   const delegator = resolveDelegatorFromDirectory(directory, validated.delegatorUserId, actor, mayManageOthersDelegations(actor.role));
   if (!delegator.ok) return { ok: false, code: delegator.code, message: delegator.message };
+
+  /**
+   * 3-2. 🔴 **임시 관리자는 여기까지다** (2026-11-17, 사용자 결정). 위 3번이 「남의 것이면
+   *      `ADMIN`」을 봤는데, 2026-11-17 부터 그 `ADMIN` 이 **위임에서 온 것일 수 있다**
+   *      (설계 B-10). 그 자격으로 남의 결재권까지 맡길 수 있으면 「아무 진짜 `ADMIN` → 나」
+   *      위임을 길게 새로 만들어 **제 임기를 스스로 늘린다** — 까닭 전부는
+   *      `./delegation-authority.ts` 의 `mayCreateOthersDelegation` 머리말에.
+   *
+   * 🔴 **본인 것이면 지나간다.** `isSelf` 를 먼저 보는 차례가 울타리의 절반이다 — 뒤집으면
+   *    임시 관리자가 **제 결재권조차** 못 맡긴다(열어 두기로 한 길이다). 🔵 관리자가 고르개에서
+   *    **자기 이름을 골라도** 그 줄은 본인 위임이다(3번이 포털 번호로 갈라 준다).
+   * 🔴 **3번에 끼워 넣지 않고 밖에 둔 까닭**: 저쪽에 넘기면 돌아오는 문구가
+   *    「남의 결재권은 관리자만」이 되는데, 머리말에 「관리자 · ADMIN」이 떠 있는 사람에게 그
+   *    말은 **거짓말**이다. 막힌 까닭을 읽을 수 있어야 하므로 문구를 갈라 둔다.
+   * 🔵 **화면은 그대로 고르개를 그린다**(`./delegation-screen-data.ts` 의 `canDelegateForOthers`).
+   *    B-11 과 같은 판단이다 — 고르개를 숨기면 **왜 안 되는지 읽을 자리가 사라지고**, 화면이
+   *    감추는 것은 어차피 울타리가 아니다(이 함수는 화면을 거치지 않고도 불린다).
+   */
+  if (!delegator.delegator.isSelf && !mayCreateOthersDelegation(actor.role, actor.delegatedAdmin)) {
+    return { ok: false, code: "FORBIDDEN", message: OTHERS_DELEGATION_DELEGATED_ADMIN_MESSAGE };
+  }
 
   /**
    * 4. 대신할 사람. 🔴 「자기 자신에게 맡기는 줄」 판정의 기준이 **결재권자**다 — 누르는
@@ -239,6 +297,20 @@ export type RevokeDelegationResult = { ok: true; onBehalf: boolean } | { ok: fal
  * 🔴 **대리인은 제가 맡은 위임을 거둘 수 없다**(넓힌 뒤에도 그대로다 — 관리자인 대리인은 제
  * 역할로 거두는 것이지 「맡았기 때문」이 아니다). 맡은 사람이 스스로 자격을 버리는 길을 두면
  * 맡긴 사람이 모르는 사이에 그 차례가 다시 선다.
+ *
+ * ── 🔴 **임시 관리자도 그대로 거둔다** (2026-11-17, 재고 끝의 판단) ───────
+ * 같은 날 **맡기는 쪽**에는 임시 관리자 울타리를 세웠다(위 `createApprovalDelegation` 3-2번).
+ * 🔴 **여기는 세우지 않았다.** 막아야 할 것이 「제 임기를 스스로 늘리는 길」인데, 거두기는
+ * `revoked_at` 을 **찍기만** 하는 일이라 **어떤 위임도 새로 만들지도, 늘리지도 못한다** — 이
+ * 함수로 임시 관리자가 할 수 있는 최대는 **자기 자격을 스스로 끊는 것**이다(제가 받은 줄을
+ * 거둘 수도 있다). 늘리는 방향이 아예 없다.
+ * 🔴 반대로 막으면 **잃는 것이 분명하다**: 임시 관리자는 자리를 비운 관리자를 대신하라고 세운
+ * 사람인데, 그 기간에 잘못 선 위임 한 줄을 발견해도 **거둘 손이 없어진다.** 좁히는 쪽을 막아
+ * 둔 채 넓히는 쪽만 열려 있는 상태가 되는 셈이라, 급할수록 더 열린 시스템이 된다.
+ * 🔵 거둔 줄에는 **누가 거뒀는지**가 칸(`revoked_by_sub`·`revoked_by_name`)과 감사 기록에 함께
+ *    남고, 잘못 거뒀으면 맡기는 쪽이 다시 세울 수 있다(지우지 않는다 — 머리말).
+ * 🔴 그래서 이 함수는 `actor.delegatedAdmin` 을 **일부러 안 본다.** 「빠뜨렸나」로 읽고 끼워
+ *    넣지 마라 — 끼우는 순간 위 세 줄이 통째로 뒤집힌다.
  */
 export async function revokeApprovalDelegation(
   delegationId: string,

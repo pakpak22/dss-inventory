@@ -25,7 +25,18 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   return (
     <div className="flex min-h-full flex-col">
       <AppHeader
-        user={{ name: session.user.name, role: session.user.role }}
+        user={{
+          name: session.user.name,
+          role: session.user.role,
+          /*
+            🔴 **머리말 배지에 「임시」를 더하는 값**이다 (2026-11-17). 여기서 막는 것은 아무것도
+               없다 — 임시 관리자에게 닫히는 문은 서버가 거절하고(결재선 설정 · 남의 결재권
+               맡기기), 이 값은 **사람이 제 상태를 알게** 하려고 내려간다.
+            🔵 바로 위 `role` 과 **짝으로** 내려간다. 역할은 위임으로 올라간 값일 수 있어서, 둘
+               중 하나만 내려보내면 배지가 「관리자」라고만 하거나 「임시」라고만 하게 된다.
+          */
+          delegatedAdmin: session.delegatedAdmin,
+        }}
         portalUrl={`${env.ssoIssuer}/apps`}
         services={session.services}
         currentServiceId={env.ssoClientId}

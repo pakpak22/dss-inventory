@@ -63,7 +63,15 @@ import { HeaderMenuDismiss } from "@/components/HeaderMenuDismiss";
  *    **클래스만 보고 「쓸데없어 보인다」며 지우지 마라.**
  */
 export interface AppHeaderProps {
-  user: { name: string; role: Role };
+  /**
+   * 🔴 `delegatedAdmin` 은 **배지에 「임시」를 더할지**를 가른다 (2026-11-17, 설계 B-10 뒷마무리).
+   * 「권한이 있나」가 아니다 — 막는 일은 서버가 하고(`mayChangeApprovalRoute` ·
+   * `mayCreateOthersDelegation`), 여기서는 **사람이 제 상태를 알게** 하는 것뿐이다.
+   * 🔴 세 칸을 **한 덩어리로** 받는 까닭: 이름·역할·임시 여부를 그리는 조각이 하나뿐인데
+   * (`UserIdentity`) 그 조각을 쓰는 자리가 둘이라, 칸이 갈리면 **폰과 컴퓨터가 서로 다른 배지를
+   * 그린다**(`ScreenLinks` 를 두 벌로 베끼지 않는 것과 같은 까닭).
+   */
+  user: { name: string; role: Role; delegatedAdmin: boolean };
   portalUrl: string;
   services: DssService[];
   currentServiceId: string;
@@ -185,8 +193,35 @@ function ScreenLinks({
   );
 }
 
-/** 이름 + 역할 배지. 넓은 화면의 오른쪽 끝과 ☰ 패널이 같은 조각을 쓴다(두 곳이 갈리지 않게). */
-function UserIdentity({ user }: { user: { name: string; role: Role } }) {
+/**
+ * 이름 + 역할 배지. 넓은 화면의 오른쪽 끝과 ☰ 패널이 같은 조각을 쓴다(두 곳이 갈리지 않게).
+ *
+ * ── 🔴 「임시」 (2026-11-17, 쓰는 분 결정) ───────────────────────────────
+ * 결재권 위임이 역할까지 넘기면서(설계 B-10) **위임 기간 동안만 `ADMIN` 인 사람**이 생겼다.
+ * 그 전까지 이 배지는 `session.user.role` 만 그려서 그 사람에게 **그냥 「관리자 · ADMIN」**으로
+ * 보였다 — 임시라는 표시도, 언제까지인지도 없었다. 🔴 그러면 ① 기간이 끝나는 날 **관리자
+ * 기능이 통째로 사라지는데 까닭을 알 자리가 없고**, ② 「결재선 설정만 거절당하는」 B-11 이
+ * 고장으로 읽힌다(그 거절 문구도 「위임으로 받은 자격」이라고 말하는데, 화면 어디에도 그
+ * 사실이 안 적혀 있었다).
+ *
+ * 🔴 **진짜 `ADMIN` 에게는 한 글자도 안 바뀐다.** `delegatedAdmin` 은 진짜 관리자에게 언제나
+ *    거짓이라(`@/lib/approval/delegated-role` 의 `decideDelegatedRole`) 아래 칸이 아예 안 그려진다.
+ *
+ * ── 🔴 **기간은 안 싣는다. 가는 길만 알려 준다** ─────────────────────────
+ * 「언제까지인가」를 여기 그리려면 **위임 줄의 `ends_at` 까지** 세션에 실어야 하는데, 지금
+ * 세션이 들고 다니는 것은 참/거짓 한 칸뿐이다. 그 값을 더하려면 둘 중 하나다:
+ *  · 결재 길목이 쓰는 조회(`actingApproverSubsFor`)의 **모양을 바꾼다** — 🔴 그쪽은 결재 판정이
+ *    매달린 자리라 이 표시 하나 때문에 건드릴 곳이 아니다.
+ *  · **질의를 하나 더 돌린다** — 머리말은 **모든 화면에 딸려 오므로** 임시 관리자의 모든 화면이
+ *    그만큼 느려진다(「승인 요청건」에 배지를 안 다는 것과 같은 까닭, 아래 `ScreenLinks` 주석).
+ * 🔵 이 조각이 풀려는 것은 「사람이 **제 상태를 안다**」 하나이고, 그것은 **「임시」 두 글자로
+ *    이미 선다.** 기간은 이미 **설정 › 결재권 위임**의 「내가 대신하고 있는 것」에 줄마다
+ *    적혀 있으므로, 여기서는 **그 자리로 보내기만** 한다(아래 링크·`title`).
+ *
+ * 🔵 색은 머리말의 다른 「눈여겨볼 것」(「대기 N」 배지 · ☰ 의 점)과 같은 호박색이다 — 역할
+ *    배지의 회색과 갈라 두어야 **한 덩어리로 읽히지 않는다.**
+ */
+function UserIdentity({ user }: { user: { name: string; role: Role; delegatedAdmin: boolean } }) {
   return (
     <span className="text-sm whitespace-nowrap text-zinc-700">
       <span className="font-medium text-zinc-900">{user.name}</span>
@@ -196,6 +231,19 @@ function UserIdentity({ user }: { user: { name: string; role: Role } }) {
       >
         {ROLE_LABEL[user.role]} · {user.role}
       </span>
+      {/* 🔴 **링크다.** 이 배지가 말해 주지 않는 것(언제까지인가)을 볼 자리가 한 번 눌러서 닿는
+          거리에 있어야 한다 — 「임시」만 적어 두고 길을 안 알려 주면 사람은 설정 탭 일곱 개를
+          뒤진다. 🔵 ☰ 서랍 안에서 눌러도 맞게 돈다: 서랍은 `a, button` 을 누르면 저절로
+          접힌다(HeaderMenuDismiss). */}
+      {user.delegatedAdmin ? (
+        <Link
+          href="/settings/delegations"
+          className="ml-1 inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium whitespace-nowrap text-amber-900 hover:bg-amber-200"
+          title="결재권 위임으로 받은 임시 관리자입니다. 언제까지인지는 설정 › 결재권 위임의 「내가 대신하고 있는 것」에 있습니다."
+        >
+          임시
+        </Link>
+      ) : null}
     </span>
   );
 }
