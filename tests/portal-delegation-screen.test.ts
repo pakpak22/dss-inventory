@@ -82,8 +82,13 @@ function slice(source: string, fromText: string, toText: string, what: string): 
 
 /** 승인함 줄 한 줄을 그리는 부품의 본문. */
 const PORTAL_ROW = slice(SECTION, "function PortalDelegationRow(", "export function DelegationSection(", "승인함 줄 부품");
-/** 「내가 맡긴 것」(제 표) 묶음의 본문 — 되돌리기 단추가 사는 자리. */
-const MADE_GROUP = slice(SECTION, "{made.length === 0 ? (", "{acting.length === 0 ? (", "제 표 「내가 맡긴 것」 묶음");
+/**
+ * 「내가 맡긴 것」(제 표) 묶음의 본문 — 되돌리기 단추가 사는 자리.
+ *
+ * 🔵 **자르는 글자가 2026-11-17 에 바뀌었다**(`made` → `made.live`). 그날 네 묶음이 「끝난 위임」
+ *    접기를 갖게 되면서 목록이 **살아 있는 줄과 끝난 줄 둘**로 갈렸다 — 재는 것은 그대로다.
+ */
+const MADE_GROUP = slice(SECTION, "{made.live.length === 0 ? (", "{acting.live.length === 0 ? (", "제 표 「내가 맡긴 것」 묶음");
 /** 승인함 묶음의 JSX. */
 const PORTAL_GROUP = slice(SECTION, "{PORTAL_DELEGATION_HEADING}", "{all && (", "승인함 묶음");
 /**

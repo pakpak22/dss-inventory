@@ -11,7 +11,13 @@ import {
   listPortalDelegationsIMade,
 } from "./delegation-queries";
 import { seoulDateText } from "./delegation-input";
-import { approvalsDelegationHref, type AllDelegationsView, type DelegationRowView, type PortalDelegationsView } from "./delegation-screen";
+import {
+  approvalsDelegationHref,
+  type AllDelegationsView,
+  type DelegationFoldView,
+  type DelegationRowView,
+  type PortalDelegationsView,
+} from "./delegation-screen";
 import { toAsUserChoiceDirectory, type AsUserChoiceDirectory } from "./directory";
 
 /**
@@ -42,10 +48,17 @@ import { toAsUserChoiceDirectory, type AsUserChoiceDirectory } from "./directory
 export type DelegationScreenData = {
   /** 고를 사람. 🔴 포털 번호가 빠진 모양이다. 못 받아 왔으면 그 사실까지 들어 있다. */
   directory: AsUserChoiceDirectory;
-  /** 내가 맡긴 것 — 끝난 것·되돌린 것까지 전부(상태로 갈려 보인다). */
-  made: DelegationRowView[];
-  /** 내가 지금 대신하고 있는 것 — 읽기 전용. */
-  acting: DelegationRowView[];
+  /**
+   * 내가 맡긴 것 — 끝난 것·되돌린 것까지 전부. 🔵 **2026-11-17 부터 한 목록이 아니라 둘**이다:
+   * 살아 있는 줄은 펴 두고 끝난 줄은 접는다(`DelegationFoldView`). 보여 주는 줄은 그대로이고
+   * **자리만** 갈렸다.
+   */
+  made: DelegationFoldView<DelegationRowView>;
+  /**
+   * 내가 대신하고 있는 것 — 읽기 전용. 🔴 **2026-11-17 에 끝난 줄이 처음으로 내려온다.** 그전에는
+   * 조회가 살아 있는 줄만 읽어서 기간이 지나면 그 줄을 **다시 볼 길이 아예 없었다**(조회 쪽 머리말).
+   */
+  acting: DelegationFoldView<DelegationRowView>;
   /**
    * 🔴 **모두의 줄. `null` 이면 그 묶음이 화면에 아예 없다** — 감추는 것이 아니라 없는 것이다.
    *
@@ -75,7 +88,7 @@ export type DelegationScreenData = {
    * 그 전에는 `portalActing: { count }` 한 칸이었고, 화면은 그마저 안 그리고 있었다(그릴 조각이
    * 아직 안 왔다고 적혀 있었다). 🔴 **수를 두 곳에서 세지 않으려고 세던 함수를 걷어냈다** —
    * 줄을 그리면서 수까지 따로 세면 「N건이라는데 줄은 그보다 적은」 화면이 되고, 그때 오류는
-   * 한 번도 안 난다. 수는 **그린 줄을 센다**(`acting.length`).
+   * 한 번도 안 난다. 수는 **그린 줄을 센다**(`acting.live.length` · 접힌 쪽은 `acting.finished.length`).
    *
    * ── 🔵 이름은 **여기서 붙는다**(옛 주석의 「수뿐이고 이름이 없다」는 끝났다) ──
    * 표에 이름 칸이 없는 것은 그대로이지만(세 시스템 공통 모양), 이 집은 `users.auth_sub` 가 곧

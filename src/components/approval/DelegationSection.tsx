@@ -4,11 +4,13 @@ import { useActionState, useState, type ReactNode } from "react";
 import { createDelegationAction, revokeDelegationAction, type DelegationActionState } from "@/app/actions/approval-delegations";
 import {
   delegationCreatorLabel,
+  delegationFinishedToggleLabel,
   delegationFinishedTruncatedNotice,
   delegationStateBadge,
   formatDelegationPeriod,
   portalDelegationCounterpartLabel,
   DELEGATION_DIRECTORY_UNREACHABLE_SUFFIX,
+  DELEGATION_FINISHED_ELSEWHERE_PORTAL,
   DELEGATION_NOTHING_ACTING,
   DELEGATION_NOTHING_FINISHED_ALL,
   DELEGATION_NOTHING_I_MADE,
@@ -21,6 +23,7 @@ import {
   PORTAL_DELEGATION_REVOKE_HINT,
   type AllDelegationRowView,
   type AllDelegationsView,
+  type DelegationFoldView,
   type DelegationNotice,
   type DelegationRowView,
   type PortalDelegationRowView,
@@ -50,6 +53,17 @@ import { asUserChoiceLabel, AS_DIRECTORY_MESSAGES, type AsUserChoiceDirectory } 
  *  (라) **통합 승인함에서 맡긴 것**(2026-11-17) — 🔴 **읽기만.** 아래 그 묶음 머리말.
  *  (마) **모두의 결재권 위임**(2026-10-26, 관리 권한이 있을 때만) — 🔴 **「모두」는 이 집 표
  *       (`approval_delegations`) 안에서의 모두**다. (라)의 줄은 여기 없다(그 묶음의 설명문).
+ *
+ * ── 🔴 2026-11-17: **끝난 위임을 접었다** ──────────────────────────────
+ * 쓰는 분의 말: 「‘내가 대신하고 있는 것’에 이미 만료된 위임건들이 쌓인다. 만료되면 거기서
+ * 없어져도 될 것 같다.」 **지우지 않고 접었다** — 지난 위임은 「그때 왜 저 사람이 눌렀나」의
+ * 근거라 사라지면 안 된다(표 쪽 머리말).
+ * 🔴 **이 집은 거꾸로였다.** 「내가 대신하고 있는 것」 두 묶음(다·라)은 애초에 **살아 있는 줄만**
+ *    읽어서, 만료되면 그 줄을 **다시 볼 길이 아예 없었다.** (마)는 관리자만 보는 데다 제 표만
+ *    읽는다. 그래서 이 집에서 접기는 **감추는 일이 아니라 보이게 하는 일**이다.
+ * 🔴 **네 묶음이 각자 접힌다**(나·다·라의 둘). 한 칸으로 합치면 한 묶음을 펴려고 누른 사람에게
+ *    네 묶음의 끝난 줄이 한꺼번에 펴진다(`FinishedFold` 머리말).
+ * 🔵 (마)는 2026-10-26 부터 제 접기를 갖고 있었고 **그대로 두었다** — 글자를 정하는 함수만 함께 쓴다.
  *
  * ── 🔴 2026-11-17: 고지가 둘인데 **한쪽만 그리고 있었다**(설계 D-2) ─────
  * 승인함에서 맡긴 위임은 포털이 이 집 표(`portal_approval_delegations`)에 **써 주고** 결재
@@ -193,6 +207,63 @@ function PortalDelegationRow({ row, lead }: { row: PortalDelegationRowView; lead
   );
 }
 
+/**
+ * 끝난 위임을 접어 두는 상자 — 🔴 **네 묶음이 이 부품 하나를 쓴다**(2026-11-17).
+ *
+ * ── 🔴 왜 묶음마다 따로 접히나 ─────────────────────────────────────────
+ * 펼침 상태를 **한 칸으로 합치면** 「내가 맡긴 것」의 끝난 줄을 보려고 누른 사람에게 다른
+ * 묶음의 끝난 줄까지 한꺼번에 펴진다. 한 화면에 네 묶음이 세로로 서 있어서, 그렇게 되면
+ * 화면이 갑자기 몇 배로 길어지고 보려던 줄이 어디 있는지 되레 안 보인다. 그래서 부르는 쪽이
+ * **제 칸을 하나씩** 들고 넘긴다.
+ *
+ * ── 🔵 0건이면 **이 상자가 통째로 없다** ───────────────────────────────
+ * 눌러 봐야 「없습니다」만 나오는 단추는 할 일을 지어낸다. 🔴 **「살아 있는 줄이 0건」과는 다르다**
+ * — 그쪽은 묶음을 감추지 않고 말로 적는다(「맡겨 둔 결재권이 없습니다」). 끝난 줄이 0건인 것은
+ * 사람에게 알려 줄 일이 아니라 **아직 아무것도 안 쌓인 것**이다.
+ *
+ * 🔴 **잘렸으면 반드시 말해 준다.** 안 하면 「이게 전부」로 읽히고, 없는 줄을 찾는 사람은 더 볼
+ * 곳이 있다는 것조차 모른다. 🔵 갈 곳은 묶음마다 다르다 — 이 집 줄은 변경 이력, 승인함에서 온
+ * 줄은 승인함이다(`where`).
+ */
+function FinishedFold({
+  fold,
+  open,
+  onToggle,
+  where,
+  children,
+}: {
+  /** 🔵 줄의 생김새는 묻지 않는다 — 세는 것과 「잘렸나」만 본다. */
+  fold: DelegationFoldView<unknown>;
+  open: boolean;
+  onToggle: () => void;
+  /** 더 앞의 기록이 남아 있는 곳. 🔵 안 넘기면 이 집 변경 이력이다(순수 모듈의 기본값). */
+  where?: string;
+  children: ReactNode;
+}) {
+  if (fold.finished.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-2">
+      <div>
+        <button type="button" className={BTN} onClick={onToggle} aria-expanded={open}>
+          {/* 🔴 글자는 순수 함수가 정한다 — 다섯 자리가 같은 말을 해야 한다(`delegationFinishedToggleLabel`). */}
+          {delegationFinishedToggleLabel(open, fold.finished.length, fold.finishedTruncated)}
+        </button>
+      </div>
+      {open && (
+        <div className="flex flex-col gap-2">
+          {fold.finishedTruncated ? (
+            <p className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800">
+              {delegationFinishedTruncatedNotice(fold.finishedLimit, where)}
+            </p>
+          ) : null}
+          {/* 🔵 접힌 안의 줄은 **펴 둔 쪽과 똑같이** 그린다 — 부르는 쪽이 같은 부품을 넘긴다. */}
+          <ul className="flex flex-col gap-2">{children}</ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function DelegationSection({
   directory,
   made,
@@ -206,8 +277,18 @@ export function DelegationSection({
 }: {
   /** 🔴 포털 번호가 빠진 명부. 못 받아 왔을 수 있고, 그것은 「한 명도 없다」와 다른 말이다. */
   directory: AsUserChoiceDirectory;
-  made: DelegationRowView[];
-  acting: DelegationRowView[];
+  /**
+   * 🔵 **2026-11-17 에 한 목록이 둘로 갈렸다** — 살아 있는 줄(`live`)은 펴 두고 끝난 줄
+   * (`finished`)은 접는다. 쓰는 분의 말로 「만료되면 거기서 없어져도 될 것 같다」였고, 지우는
+   * 대신 접었다(근거가 사라지면 안 된다 — 순수 모듈의 `DelegationFoldView` 머리말).
+   */
+  made: DelegationFoldView<DelegationRowView>;
+  /**
+   * 🔴 **이 묶음의 끝난 줄은 2026-11-17 에 처음 생겼다.** 그전에는 조회가 살아 있는 줄만 읽어서
+   * 기간이 지나면 그 줄을 **다시 볼 길이 아예 없었다** — 이 집에서 접기는 감추는 일이 아니라
+   * 보이게 하는 일이다.
+   */
+  acting: DelegationFoldView<DelegationRowView>;
   /**
    * 🔴 **통합 승인함에서 맡긴 줄**(2026-11-17, 설계 D-2). 🔴 **`null` 이 아니다** — 0건이어도
    * 묶음을 그린다. 「승인함에서 맡긴 것 0건」이 보여야 **전파가 안 닿았다**는 것을 알 수 있고,
@@ -243,8 +324,17 @@ export function DelegationSection({
   /**
    * 🔵 **끝난 줄은 접어 둔다** — 쌓이기만 하고(줄을 지우는 길이 없다) 할 수 있는 일도 없다.
    *    조회가 상한까지 걸어 두므로 펼쳐도 끝없이 길어지지 않는다.
+   *
+   * 🔴 **묶음마다 제 칸을 하나씩 쓴다**(2026-11-17). 한 칸으로 합치면 한 묶음을 펴려고 누른
+   *    사람에게 네 묶음의 끝난 줄이 **한꺼번에** 펴진다(`FinishedFold` 머리말).
+   * 🔵 아래 `showFinished` 는 맨 끝 「모두의 결재권 위임」 묶음 것이다 — 이름이 그 묶음 하나뿐이던
+   *    때의 것이라 그대로 두었고, 새로 생긴 넷은 어느 묶음인지를 이름에 적었다.
    */
   const [showFinished, setShowFinished] = useState(false);
+  const [showMadeFinished, setShowMadeFinished] = useState(false);
+  const [showActingFinished, setShowActingFinished] = useState(false);
+  const [showPortalMadeFinished, setShowPortalMadeFinished] = useState(false);
+  const [showPortalActingFinished, setShowPortalActingFinished] = useState(false);
 
   const busy = creating || revoking;
   const candidates = directory.status === "ok" ? directory.users : [];
@@ -352,16 +442,17 @@ export function DelegationSection({
         </form>
       )}
 
-      {/* (나) 내가 맡긴 것 — 🔴 지난 줄을 감추지 않는다. 「분명 맡겼는데 흔적이 없다」가 되지 않게. */}
+      {/* (나) 내가 맡긴 것 — 🔴 지난 줄을 감추지 않는다. 「분명 맡겼는데 흔적이 없다」가 되지 않게.
+          🔵 다만 **접어 둔다**(2026-11-17) — 끝난 줄이 쌓이면 되돌릴 수 있는 줄이 그 아래로 밀린다. */}
       <div className="flex flex-col gap-2">
         <h3 className="text-xs font-medium text-zinc-700">
-          내가 맡긴 것 <span className="tabular text-zinc-500">{made.length}건</span>
+          내가 맡긴 것 <span className="tabular text-zinc-500">{made.live.length}건</span>
         </h3>
-        {made.length === 0 ? (
+        {made.live.length === 0 ? (
           <p className={EMPTY_BOX}>{DELEGATION_NOTHING_I_MADE}</p>
         ) : (
           <ul className="flex flex-col gap-2">
-            {made.map((row) => (
+            {made.live.map((row) => (
               <DelegationRow
                 key={row.id}
                 row={row}
@@ -381,15 +472,22 @@ export function DelegationSection({
             ))}
           </ul>
         )}
+        <FinishedFold fold={made} open={showMadeFinished} onToggle={() => setShowMadeFinished((v) => !v)}>
+          {made.finished.map((row) => (
+            /* 🔵 **접힌 안의 줄도 똑같이 그린다** — 같은 부품이다. 단추만 없는데, 끝난 줄은 서버도
+               `canRevoke` 를 거짓으로 보낸다(눌러도 거절당하는 단추를 그리지 않는다). */
+            <DelegationRow key={row.id} row={row} lead="에게 맡김" action={null} />
+          ))}
+        </FinishedFold>
         {revokeState.error ? <p className="text-xs text-red-600">{revokeState.error}</p> : null}
       </div>
 
       {/* (다) 내가 대신하고 있는 것 — 읽기 전용. 🔴 남의 건이 내 목록에 뜬 까닭이 적히는 유일한 자리다. */}
       <div className="flex flex-col gap-2">
         <h3 className="text-xs font-medium text-zinc-700">
-          내가 대신하고 있는 것 <span className="tabular text-zinc-500">{acting.length}건</span>
+          내가 대신하고 있는 것 <span className="tabular text-zinc-500">{acting.live.length}건</span>
         </h3>
-        {acting.length === 0 ? (
+        {acting.live.length === 0 ? (
           <p className={EMPTY_BOX}>{DELEGATION_NOTHING_ACTING}</p>
         ) : (
           <>
@@ -397,7 +495,7 @@ export function DelegationSection({
               아래 분들의 결재 차례가 <b>내가 결재할 건</b>에 함께 보입니다. 그 건의 결재선에는 원래 그분 이름이 적혀 있습니다.
             </p>
             <ul className="flex flex-col gap-2">
-              {acting.map((row) => (
+              {acting.live.map((row) => (
                 /* 🔵 **대리인은 제가 맡은 위임을 거둘 수 없다** — 여기서는 단추를 내밀지 않는다.
                    맡은 사람이 스스로 자격을 버리면 맡긴 사람이 모르는 사이에 그 차례가 다시 선다.
                    🔵 관리자라면 아래 (마) 「모두의 결재권 위임」에서 거둔다 — 그것은 **제 역할로**
@@ -407,6 +505,17 @@ export function DelegationSection({
             </ul>
           </>
         )}
+        {/* 🔴 **이 접기가 이 조각의 핵심이다.** 끝난 위임을 여기 말고 볼 자리가 한 군데도 없었다 —
+            위 목록은 살아 있는 줄만 읽고, 「모두의」는 관리자만 보는 데다 승인함 줄은 거기 없다. */}
+        <FinishedFold fold={acting} open={showActingFinished} onToggle={() => setShowActingFinished((v) => !v)}>
+          {acting.finished.map((row) => (
+            /* 🔴 꼬리말에 **「대신하는 중」을 그대로 쓰지 않는다** — 끝났거나 되돌린 줄이다. 시제를
+               붙인 말(「대신했음」)도 안 쓴다: 시작도 하기 전에 되돌린 줄은 한 번도 안 누른 줄이라
+               그 말이 거짓이 된다. 🔵 상태와 기간은 배지와 날짜가 말한다(A/S 의 같은 목록도 동사를
+               안 붙이고 두 이름과 상태만 적는다). */
+            <DelegationRow key={row.id} row={row} lead="의 결재권" action={null} />
+          ))}
+        </FinishedFold>
       </div>
 
       {/* (라) 통합 승인함에서 맡긴 것 — 🔴 **읽기만.** 거두는 곳은 승인함뿐이다(머리말). */}
@@ -425,30 +534,52 @@ export function DelegationSection({
         </p>
 
         <h4 className="text-[11px] font-medium text-zinc-600">
-          내가 맡긴 것 <span className="tabular text-zinc-500">{portal.made.length}건</span>
+          내가 맡긴 것 <span className="tabular text-zinc-500">{portal.made.live.length}건</span>
         </h4>
-        {portal.made.length === 0 ? (
+        {portal.made.live.length === 0 ? (
           <p className={EMPTY_BOX}>{PORTAL_DELEGATION_NOTHING_MADE}</p>
         ) : (
           <ul className="flex flex-col gap-2">
-            {portal.made.map((row) => (
+            {portal.made.live.map((row) => (
               <PortalDelegationRow key={row.id} row={row} lead="에게 맡김" />
             ))}
           </ul>
         )}
+        {/* 🔴 갈 곳이 **이 집 변경 이력이 아니다** — 승인함이 써 준 사본이라 여기 이력에는 한 줄도 없다. */}
+        <FinishedFold
+          fold={portal.made}
+          open={showPortalMadeFinished}
+          onToggle={() => setShowPortalMadeFinished((v) => !v)}
+          where={DELEGATION_FINISHED_ELSEWHERE_PORTAL}
+        >
+          {portal.made.finished.map((row) => (
+            <PortalDelegationRow key={row.id} row={row} lead="에게 맡김" />
+          ))}
+        </FinishedFold>
 
         <h4 className="text-[11px] font-medium text-zinc-600">
-          내가 대신하고 있는 것 <span className="tabular text-zinc-500">{portal.acting.length}건</span>
+          내가 대신하고 있는 것 <span className="tabular text-zinc-500">{portal.acting.live.length}건</span>
         </h4>
-        {portal.acting.length === 0 ? (
+        {portal.acting.live.length === 0 ? (
           <p className={EMPTY_BOX}>{PORTAL_DELEGATION_NOTHING_ACTING}</p>
         ) : (
           <ul className="flex flex-col gap-2">
-            {portal.acting.map((row) => (
+            {portal.acting.live.map((row) => (
               <PortalDelegationRow key={row.id} row={row} lead="의 결재권을 대신하는 중" />
             ))}
           </ul>
         )}
+        <FinishedFold
+          fold={portal.acting}
+          open={showPortalActingFinished}
+          onToggle={() => setShowPortalActingFinished((v) => !v)}
+          where={DELEGATION_FINISHED_ELSEWHERE_PORTAL}
+        >
+          {portal.acting.finished.map((row) => (
+            /* 🔵 꼬리말에 동사를 안 붙이는 까닭은 제 표 쪽과 같다(그 자리 주석). */
+            <PortalDelegationRow key={row.id} row={row} lead="의 결재권" />
+          ))}
+        </FinishedFold>
       </div>
 
       {/* (마) 모두의 결재권 위임 — 🔴 자료가 없으면 이 묶음은 **없다**(머리말). */}
@@ -496,8 +627,12 @@ export function DelegationSection({
           )}
 
           <div>
+            {/* 🔵 **글자만 순수 함수로 옮겨 적었다**(2026-11-17) — 2026-10-26 부터 여기 손으로
+                적혀 있던 그 글자 그대로다. 위 네 묶음이 같은 접기를 갖게 되면서, 한 화면의 다섯
+                단추가 서로 다른 말을 하지 않도록 자를 하나로 모았다. 🔴 이 묶음의 **동작은 그대로**다:
+                0건이어도 단추를 그리고(아래 「없습니다」가 뜬다), 그 판단은 위 넷과 다르다. */}
             <button type="button" className={BTN} onClick={() => setShowFinished((v) => !v)} aria-expanded={showFinished}>
-              {showFinished ? "끝난 위임 접기" : `끝난 위임 보기 (${all.finished.length}건${all.finishedTruncated ? "+" : ""})`}
+              {delegationFinishedToggleLabel(showFinished, all.finished.length, all.finishedTruncated)}
             </button>
           </div>
 

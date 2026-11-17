@@ -373,14 +373,32 @@ describe("⑤ 🔴 위임 설정 화면이 **승인함 줄을 함께 읽는다**
 
     // 🔴 「지금 대신하고 있나」는 결재 판정이 쓰는 그 함수로 거른다 — SQL 에 손으로 적으면
     //    반열린 구간 규칙이 한 벌 더 생긴다.
+    //
+    // 🔵 **2026-11-17 에 재는 글자를 다시 적었다 — 약하게 만든 것이 아니다.** 그날 이 조회가
+    //    「끝난 위임」 접기까지 돌려주게 되면서 돌아가는 줄이 **한 목록이 아니라 둘**이 됐고,
+    //    옛 단언이 잡고 있던 한 줄짜리 `return` 문이 통째로 사라졌다. 🔴 지켜야 할 것은 그
+    //    문장이 아니라 **펴 두는 쪽을 그 순수 함수가 거른다**는 것이라, 그 자리를 다시 짚는다.
+    //    🔴 **접히는 쪽에 그 거르개가 걸리면 안 된다**는 것도 함께 잰다 — 걸리면 끝난 줄이
+    //    전부 빠져 접기 안이 언제나 비고, 이 조각이 고치려던 일이 조용히 안 된 채로 통과한다.
+    const 대신 = (() => {
+      const at = queries.indexOf("export async function listPortalDelegationsIActFor(");
+      assert.notEqual(at, -1, "대신하는 줄 조회가 사라졌다 — 이 시험이 아무것도 안 재고 있다");
+      const rest = queries.slice(at + 10);
+      const end = rest.indexOf("\nexport ");
+      return end === -1 ? rest : rest.slice(0, end);
+    })();
     assert.ok(
-      queries.includes("return rows.filter((row) => isActiveDelegation(row, now)).map((row) => toPortalRowView(row, now));"),
+      대신.includes("liveRows.filter((row) => isActiveDelegation(row, now))"),
       "대신하고 있는 줄을 순수 함수로 안 거른다 — 아직 시작도 안 한 위임이 「지금 대신하는 중」으로 보인다",
     );
+    assert.equal(대신.split("isActiveDelegation(").length - 1, 1, "거르개가 접히는 쪽에도 걸렸다 — 끝난 줄이 접기 안에서도 사라진다");
+    // 🔴 끝난 줄을 **읽어 오기는 한다**(2026-11-17 에 생긴 일). 이 조건이 빠지면 접기가 영원히 빈다.
+    assert.ok(대신.includes("isNotNull(portalApprovalDelegations.revokedAt)"), "거둔 줄을 아예 안 읽는다 — 접기 안에서도 볼 수 없다");
+    assert.ok(대신.includes("lte(portalApprovalDelegations.endsAt, now)"), "기간이 끝난 줄을 아예 안 읽는다 — 접기 안에서도 볼 수 없다");
   });
 
   it("🔴 **세는 자리가 하나다** — 걷어낸 수 세는 함수가 되살아나지 않았다", () => {
-    // 🔵 수는 그린 줄을 센다(`portal.acting.length`). 따로 세면 언젠가 갈린다.
+    // 🔵 수는 그린 줄을 센다(`portal.acting.live.length`). 따로 세면 언젠가 갈린다.
     assert.ok(!queries.includes("countPortalDelegationsIActFor"), "수를 따로 세는 함수가 돌아왔다 — 줄 수와 갈린다");
     assert.ok(!screen.includes("countPortalDelegationsIActFor"), "화면이 수를 또 센다");
     assert.ok(!queries.includes("count()"), "SQL 집계로 센다 — 끝난 줄·안 시작한 줄까지 세게 된다");

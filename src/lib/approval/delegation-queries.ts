@@ -20,8 +20,14 @@ import { DELEGATION_AUDIT_LIMIT, type DelegationAuditRow } from "./portal-delega
 import {
   canRevokeDelegation,
   delegationState,
+  // 🔵 **접는 셈은 순수 모듈이 쥔다**(2026-11-17) — 이 파일은 `server-only` 을 물고 있어 시험이
+  //    불러올 수 없다. 저쪽에 두어야 「넘쳤다고 말하는가」를 돌려 볼 수 있다.
+  foldDelegationList,
   type AllDelegationRowView,
   type AllDelegationsView,
+  // 🔵 **접기를 가진 묶음이 받는 모양**(2026-11-17). 화면 쪽 순수 모듈이 쥔다 — 저쪽은
+  //    `server-only` 을 안 물어서 시험이 그대로 불러 볼 수 있다.
+  type DelegationFoldView,
   type DelegationRowView,
   type PortalDelegationRowView,
 } from "./delegation-screen";
@@ -270,12 +276,29 @@ export async function activeDelegateSubsFor(delegatorSub: string, now: Date = ne
 /* ------------------------------------------------------------------ */
 
 /**
- * 「내가 맡긴 것」 한 번에 읽을 줄 수의 상한.
+ * 🔴 **끝난 줄을 몇 개까지 가져올까.** 화면의 다섯 묶음이 **이 하나를 함께 쓴다**(네 사람 묶음 +
+ * 「모두의 결재권 위임」).
  *
- * 🔴 **이 표는 지워지지 않는다**(되돌리기도 깃발이다 — 표 쪽 머리말). 해가 지나면 끝난 줄이
- * 쌓이고, 상한이 없으면 화면이 수백 줄을 그린다. 🔵 사람이 보는 것은 사실상 맨 위 몇 줄이다.
+ * ── 🔴 2026-11-17: 상한의 **뜻이 바뀌었다** ────────────────────────────
+ * 그전에는 `DELEGATION_LIST_LIMIT` 이 **목록 전체**에 걸려 있었다. 「내가 맡긴 것」은 살아 있는
+ * 줄과 끝난 줄이 한 목록에 섞여 있었고, 51번째 줄부터는 **말없이 잘렸다** — 끝난 줄이 쌓여
+ * 상한을 채우면 **되돌려야 할 줄이 화면에서 사라지는** 모양이었다. 이제 상한은 **접히는 쪽에만**
+ * 걸고, 펴 두는 쪽(살아 있는 줄)에는 걸지 않는다. 끝난 줄이 쌓여도 살아 있는 줄을 밀어내지
+ * 못하고, 접힌 쪽이 잘리면 화면이 그 사실을 말해 준다.
+ *
+ * 🔵 50 에 깊은 뜻은 없다 — 「한 화면에서 훑을 수 있는 양」이다. 더 뒤까지 찾아야 하면 이 집 줄은
+ * 변경 이력이, 승인함에서 온 줄은 승인함이 영구 기록이다.
+ * 🔴 **묶음마다 다른 수를 쓰지 않는다.** 한 화면에 나란히 선 묶음들이 저마다 다른 N 으로
+ * 「최근 N건」이라고 말하면 사람은 그것을 결함으로 읽는다(A/S 의 같은 자리 주석).
  */
-const DELEGATION_LIST_LIMIT = 50;
+const FINISHED_DELEGATION_LIMIT = 50;
+
+/**
+ * 🔵 **접는 셈은 여기 없다** — 순수 모듈의 `foldDelegationList` 가 쥔다. 이 파일은 `server-only`
+ *    을 물고 있어 시험이 불러올 수 없고, 이 집에는 DB 시험도 없다. 셈을 여기 두면 「넘쳤다고
+ *    말하는가」를 **아무도 돌려 보지 못한 채** 운영으로 나간다. 아래 넷은 **읽어 와서 넘기기만**
+ *    한다 — 상한도 함께 넘긴다.
+ */
 
 /**
  * 표 한 줄에서 화면 줄로. 🔴 **번호 두 칸(`…_sub`)이 여기서 끝난다** — 화면이 받는 모양에는
@@ -326,80 +349,124 @@ function toRowView(
 }
 
 /**
- * **내가 맡긴 것** — 되돌린 줄과 끝난 줄까지 **전부** 보여 준다.
+ * **내가 맡긴 것** — 되돌린 줄과 끝난 줄까지 **전부** 보여 준다. 🔵 2026-11-17 부터 한 목록이
+ * 아니라 **둘**이다: 살아 있는 줄은 펴 두고, 끝난 줄은 접힌 쪽으로 보낸다.
  *
  * 🔴 지난 줄을 감추지 않는 까닭: 위임은 「이 기간에 그 건을 누가 대신 눌렀나」를 나중에 설명하기
  * 위한 기록이다(표 쪽 머리말). 살아 있는 것만 보이면 「분명 맡겼는데 흔적이 없다」가 된다.
  *
+ * ── 🔴 2026-11-17: **조용히 자르던 것**을 멈췄다 ────────────────────────
+ * 그전에는 한 질의가 섞인 목록을 50줄까지 읽고 **아무 말 없이** 잘랐다. 끝난 줄이 쌓여 상한을
+ * 채우면 **되돌려야 할 살아 있는 줄이 화면에서 사라지는데**, 오류는 한 줄도 안 난다. 이제 상한은
+ * 접히는 쪽에만 걸리고, 잘렸으면 화면이 그 사실을 말해 준다(`finishedTruncated`).
+ *
+ * 🔴 **두 질의의 조건은 서로 정확한 여집합**이고 🔴 **「지금」을 한 번 만들어 둘 다에 같은 값**으로
+ * 넘긴다 — 각자 `now()` 를 쓰면 두 질의 사이에 끝난 줄이 양쪽에서 빠지거나 양쪽에 들어간다
+ * (`listAllDelegations` 와 같은 모양·같은 까닭).
+ *
  * 🔴 **이 조회에는 색인이 없다.** 표의 색인은 받는 쪽(`delegate_sub`)으로 깔려 있다(그쪽이 모든
  * 화면에 딸려 오는 알림 종의 길이라서다). 이 조회는 `/settings/delegations` 를 열 때 한 번뿐이고 한 사람이
  * 맡기는 줄이 몇 줄이라 지금은 그대로 둔다 — 늘어나면 `(delegator_sub, starts_at)` 색인을 더해야
- * 하고, 그것은 스키마 변경이라 이 조각의 일이 아니다.
+ * 하고, 그것은 스키마 변경이라 이 조각의 일이 아니다. 🔵 질의가 둘이 돼도 같은 판단이다.
  */
-export async function listDelegationsIMade(delegatorSub: string, now: Date = new Date()): Promise<DelegationRowView[]> {
-  const rows = await db()
-    .select({
-      id: approvalDelegations.id,
-      delegatorSub: approvalDelegations.delegatorSub,
-      delegateSub: approvalDelegations.delegateSub,
-      counterpartName: approvalDelegations.delegateName,
-      startsAt: approvalDelegations.startsAt,
-      endsAt: approvalDelegations.endsAt,
-      revokedAt: approvalDelegations.revokedAt,
-      revokedByName: approvalDelegations.revokedByName,
-      reason: approvalDelegations.reason,
-    })
-    .from(approvalDelegations)
-    .where(eq(approvalDelegations.delegatorSub, delegatorSub))
-    // 최근에 시작하는 것이 위로. 🔵 차례에 뜻을 더 붙이지 않는다 — 상태는 배지가 말한다.
-    .orderBy(desc(approvalDelegations.startsAt))
-    .limit(DELEGATION_LIST_LIMIT);
+export async function listDelegationsIMade(delegatorSub: string, now: Date = new Date()): Promise<DelegationFoldView<DelegationRowView>> {
+  /**
+   * 🔵 **칸 묶음을 모듈 꼭대기로 빼지 않았다**(2026-11-17 실측). 이 파일의 함수 사이에 둔 `const`
+   *    는 **바로 위 함수의 본문으로 읽힌다** — 시험이 소스를 「다음 `export` 까지」로 잘라 보기
+   *    때문이고(이 집에는 구워진 SQL 을 보는 길이 없다), 알림 쪽 시험은 그 안에서 `startsAt` 이
+   *    **몇 번 나오나**로 「SQL 에서도 거르는가」를 잰다. 빼 두면 그 셈이 2가 되어 멀쩡한 조회가
+   *    빨개진다. 🔴 두 목록의 칸은 **「상대방」 한 칸만 다르다** — 한쪽에 칸을 더하면 여기도 함께.
+   */
+  const columns = {
+    id: approvalDelegations.id,
+    /** 🔵 판정 함수(`delegationState` → `isActiveDelegation`)가 **위임 한 줄 전체**를 받는다(위 `toRowView` 주석). */
+    delegatorSub: approvalDelegations.delegatorSub,
+    delegateSub: approvalDelegations.delegateSub,
+    // 맡긴 목록에서 보이는 상대방은 **대신할 사람**이다.
+    counterpartName: approvalDelegations.delegateName,
+    startsAt: approvalDelegations.startsAt,
+    endsAt: approvalDelegations.endsAt,
+    revokedAt: approvalDelegations.revokedAt,
+    revokedByName: approvalDelegations.revokedByName,
+    reason: approvalDelegations.reason,
+  };
+  const mine = eq(approvalDelegations.delegatorSub, delegatorSub);
+  const isLive = and(isNull(approvalDelegations.revokedAt), gt(approvalDelegations.endsAt, now));
+  // 위의 **정확한 여집합**: 되돌렸거나(기간과 무관하다) 기간이 끝났거나.
+  const isFinished = or(isNotNull(approvalDelegations.revokedAt), lte(approvalDelegations.endsAt, now));
 
-  return rows.map((row) => toRowView(row, now, true));
+  const [live, finishedPage] = await Promise.all([
+    // 최근에 시작하는 것이 위로. 🔵 차례에 뜻을 더 붙이지 않는다 — 상태는 배지가 말한다.
+    db().select(columns).from(approvalDelegations).where(and(mine, isLive)).orderBy(desc(approvalDelegations.startsAt)),
+    db()
+      .select(columns)
+      .from(approvalDelegations)
+      .where(and(mine, isFinished))
+      .orderBy(desc(approvalDelegations.startsAt))
+      // 🔵 한 줄 더 받아 「더 있다」를 센다(`foldDelegationList` 머리말).
+      .limit(FINISHED_DELEGATION_LIMIT + 1),
+  ]);
+
+  return foldDelegationList(live, finishedPage, FINISHED_DELEGATION_LIMIT, (row) => toRowView(row, now, true));
 }
 
 /**
- * **내가 지금 대신하고 있는 것**(읽기 전용).
+ * **내가 대신하고 있는 것**(읽기 전용).
  *
  * 🔴 **이것이 없으면 대리인은 「왜 이 건이 내 결재 목록에 떴는지」를 알 수 없다.** 결재건 카드에는
  * 결재선의 **원래 사람** 이름이 적혀 있어, 자기 이름이 없는 건이 자기 목록에 뜬다 — 까닭이 적힌
  * 곳이 이 묶음뿐이다.
  *
- * 🔵 조건절은 위 `actingApproverSubsFor` 와 **같은 모양**이다(색인 차례도 같다). 그쪽은 번호만,
- *    이쪽은 사람이 읽을 이름과 기간까지 읽는다 — 결재 판정에 이름을 끌어들이지 않으려고 나눠 둔다.
+ * ── 🔴 2026-11-17: **끝난 줄을 처음으로 가져온다** ──────────────────────
+ * 그전에는 질의가 살아 있는 줄만 읽어서, 기간이 지나면 그 줄을 **다시 볼 길이 아예 없었다** —
+ * 「모두의 결재권 위임」은 제 표만 읽고(승인함 줄은 거기 없다), 변경 이력은 맡긴 사람 쪽 이야기다.
+ * 대리인에게는 「내가 그때 누른 까닭」을 보여 줄 자리가 한 군데도 없었다.
+ *
+ * 🔵 **펴 두는 쪽의 뜻은 안 바뀌었다** — 여전히 「지금 대신하는 중」뿐이다(아래 순수 함수 거르기).
+ * 🔵 살아 있는 쪽 조건절은 위 `actingApproverSubsFor` 와 **같은 모양**이다(색인 차례도 같다).
+ *    그쪽은 번호만, 이쪽은 사람이 읽을 이름과 기간까지 읽는다 — 결재 판정에 이름을 끌어들이지
+ *    않으려고 나눠 둔다.
  */
-export async function listDelegationsIActFor(delegateSub: string, now: Date = new Date()): Promise<DelegationRowView[]> {
-  const rows = await db()
-    .select({
-      id: approvalDelegations.id,
-      delegatorSub: approvalDelegations.delegatorSub,
-      delegateSub: approvalDelegations.delegateSub,
-      counterpartName: approvalDelegations.delegatorName,
-      startsAt: approvalDelegations.startsAt,
-      endsAt: approvalDelegations.endsAt,
-      revokedAt: approvalDelegations.revokedAt,
-      revokedByName: approvalDelegations.revokedByName,
-      reason: approvalDelegations.reason,
-    })
-    .from(approvalDelegations)
-    .where(
-      and(
-        eq(approvalDelegations.delegateSub, delegateSub),
-        isNull(approvalDelegations.revokedAt),
-        gt(approvalDelegations.endsAt, now),
-      ),
-    )
-    .orderBy(desc(approvalDelegations.startsAt))
-    .limit(DELEGATION_LIST_LIMIT);
+export async function listDelegationsIActFor(delegateSub: string, now: Date = new Date()): Promise<DelegationFoldView<DelegationRowView>> {
+  /** 🔵 위 `listDelegationsIMade` 와 **「상대방」 한 칸만 다르다**(그 자리에 왜 공용 상수가 아닌지 적어 두었다). */
+  const columns = {
+    id: approvalDelegations.id,
+    delegatorSub: approvalDelegations.delegatorSub,
+    delegateSub: approvalDelegations.delegateSub,
+    // 대신하는 목록에서 보이는 상대방은 **결재권자**다.
+    counterpartName: approvalDelegations.delegatorName,
+    startsAt: approvalDelegations.startsAt,
+    endsAt: approvalDelegations.endsAt,
+    revokedAt: approvalDelegations.revokedAt,
+    revokedByName: approvalDelegations.revokedByName,
+    reason: approvalDelegations.reason,
+  };
+  const mine = eq(approvalDelegations.delegateSub, delegateSub);
+  const isLive = and(isNull(approvalDelegations.revokedAt), gt(approvalDelegations.endsAt, now));
+  // 위의 **정확한 여집합**: 되돌렸거나 기간이 끝났거나. 🔴 접히는 쪽이 받는 것이 바로 이 줄들이다.
+  const isFinished = or(isNotNull(approvalDelegations.revokedAt), lte(approvalDelegations.endsAt, now));
+
+  const [liveRows, finishedPage] = await Promise.all([
+    db().select(columns).from(approvalDelegations).where(and(mine, isLive)).orderBy(desc(approvalDelegations.startsAt)),
+    db()
+      .select(columns)
+      .from(approvalDelegations)
+      .where(and(mine, isFinished))
+      .orderBy(desc(approvalDelegations.startsAt))
+      .limit(FINISHED_DELEGATION_LIMIT + 1),
+  ]);
 
   /**
    * 🔴 **아직 시작하지 않은 줄은 여기서 뺀다.** 위 WHERE 는 색인에 맞춰 `starts_at` 을 보지
    *    않으므로(그쪽 주석), 미리 적어 둔 위임이 섞여 들어온다. 「지금 대신하고 있는 것」이라고
    *    적어 놓고 아직 시작도 안 한 줄을 보이면, 대리인은 **지금 누를 수 있다고 믿는다.**
    * 🔵 거르는 자는 결재 판정이 쓰는 그 함수다 — 여기 조건을 손으로 적으면 반열린 구간이 두 벌이 된다.
+   * 🔴 **접히는 쪽에는 이 거르개를 걸지 않는다.** 저쪽은 이미 「끝났거나 되돌렸다」로 좁혀 둔
+   *    여집합이라, 여기서 또 거르면 **접기 안이 언제나 비어** 이 조각이 고치려던 일이 안 된다.
    */
   // 🔵 맡긴 사람이 아니므로 `canRevoke` 는 거짓이다 — 되돌리기는 맡긴 사람만 할 수 있다(toRowView 주석).
-  return rows.filter((row) => isActiveDelegation(row, now)).map((row) => toRowView(row, now, false));
+  const live = liveRows.filter((row) => isActiveDelegation(row, now));
+  return foldDelegationList(live, finishedPage, FINISHED_DELEGATION_LIMIT, (row) => toRowView(row, now, false));
 }
 
 /* ------------------------------------------------------------------ */
@@ -486,17 +553,33 @@ function toPortalRowView(
  * 🔵 제 표 쪽 `listDelegationsIMade` 와 **같은 규칙·같은 차례**다(지난 줄을 감추지 않는 까닭도
  *    그쪽 머리말 그대로다: 「분명 맡겼는데 흔적이 없다」가 되지 않게).
  */
-export async function listPortalDelegationsIMade(delegatorSub: string, now: Date = new Date()): Promise<PortalDelegationRowView[]> {
-  const rows = await db()
-    .select({ ...PORTAL_ROW_COLUMNS, counterpartName: users.name })
-    .from(portalApprovalDelegations)
-    // 맡긴 목록에서 보이는 상대방은 **대신할 사람**이다.
-    .leftJoin(users, eq(users.authSub, portalApprovalDelegations.delegateSub))
-    .where(eq(portalApprovalDelegations.delegatorSub, delegatorSub))
-    .orderBy(desc(portalApprovalDelegations.startsAt))
-    .limit(DELEGATION_LIST_LIMIT);
+export async function listPortalDelegationsIMade(
+  delegatorSub: string,
+  now: Date = new Date(),
+): Promise<DelegationFoldView<PortalDelegationRowView>> {
+  const mine = eq(portalApprovalDelegations.delegatorSub, delegatorSub);
+  const isLive = and(isNull(portalApprovalDelegations.revokedAt), gt(portalApprovalDelegations.endsAt, now));
+  // 위의 **정확한 여집합**: 거뒀거나(기간과 무관하다) 기간이 끝났거나.
+  const isFinished = or(isNotNull(portalApprovalDelegations.revokedAt), lte(portalApprovalDelegations.endsAt, now));
 
-  return rows.map((row) => toPortalRowView(row, now));
+  const [live, finishedPage] = await Promise.all([
+    db()
+      .select({ ...PORTAL_ROW_COLUMNS, counterpartName: users.name })
+      .from(portalApprovalDelegations)
+      // 맡긴 목록에서 보이는 상대방은 **대신할 사람**이다.
+      .leftJoin(users, eq(users.authSub, portalApprovalDelegations.delegateSub))
+      .where(and(mine, isLive))
+      .orderBy(desc(portalApprovalDelegations.startsAt)),
+    db()
+      .select({ ...PORTAL_ROW_COLUMNS, counterpartName: users.name })
+      .from(portalApprovalDelegations)
+      .leftJoin(users, eq(users.authSub, portalApprovalDelegations.delegateSub))
+      .where(and(mine, isFinished))
+      .orderBy(desc(portalApprovalDelegations.startsAt))
+      .limit(FINISHED_DELEGATION_LIMIT + 1),
+  ]);
+
+  return foldDelegationList(live, finishedPage, FINISHED_DELEGATION_LIMIT, (row) => toPortalRowView(row, now));
 }
 
 /**
@@ -508,23 +591,36 @@ export async function listPortalDelegationsIMade(delegatorSub: string, now: Date
  *    `starts_at` 을 안 보므로 미리 적어 둔 위임이 섞여 들어오고, 「지금 대신하고 있는 것」이라
  *    적어 놓고 그 줄을 보이면 대리인은 **지금 누를 수 있다고 믿는다.**
  */
-export async function listPortalDelegationsIActFor(delegateSub: string, now: Date = new Date()): Promise<PortalDelegationRowView[]> {
-  const rows = await db()
-    .select({ ...PORTAL_ROW_COLUMNS, counterpartName: users.name })
-    .from(portalApprovalDelegations)
-    // 대신하는 목록에서 보이는 상대방은 **결재권자**다.
-    .leftJoin(users, eq(users.authSub, portalApprovalDelegations.delegatorSub))
-    .where(
-      and(
-        eq(portalApprovalDelegations.delegateSub, delegateSub),
-        isNull(portalApprovalDelegations.revokedAt),
-        gt(portalApprovalDelegations.endsAt, now),
-      ),
-    )
-    .orderBy(desc(portalApprovalDelegations.startsAt))
-    .limit(DELEGATION_LIST_LIMIT);
+export async function listPortalDelegationsIActFor(
+  delegateSub: string,
+  now: Date = new Date(),
+): Promise<DelegationFoldView<PortalDelegationRowView>> {
+  const mine = eq(portalApprovalDelegations.delegateSub, delegateSub);
+  const isLive = and(isNull(portalApprovalDelegations.revokedAt), gt(portalApprovalDelegations.endsAt, now));
+  // 위의 **정확한 여집합**: 거뒀거나 기간이 끝났거나. 🔴 접히는 쪽이 받는 것이 바로 이 줄들이다.
+  const isFinished = or(isNotNull(portalApprovalDelegations.revokedAt), lte(portalApprovalDelegations.endsAt, now));
 
-  return rows.filter((row) => isActiveDelegation(row, now)).map((row) => toPortalRowView(row, now));
+  const [liveRows, finishedPage] = await Promise.all([
+    db()
+      .select({ ...PORTAL_ROW_COLUMNS, counterpartName: users.name })
+      .from(portalApprovalDelegations)
+      // 대신하는 목록에서 보이는 상대방은 **결재권자**다.
+      .leftJoin(users, eq(users.authSub, portalApprovalDelegations.delegatorSub))
+      .where(and(mine, isLive))
+      .orderBy(desc(portalApprovalDelegations.startsAt)),
+    db()
+      .select({ ...PORTAL_ROW_COLUMNS, counterpartName: users.name })
+      .from(portalApprovalDelegations)
+      .leftJoin(users, eq(users.authSub, portalApprovalDelegations.delegatorSub))
+      .where(and(mine, isFinished))
+      .orderBy(desc(portalApprovalDelegations.startsAt))
+      .limit(FINISHED_DELEGATION_LIMIT + 1),
+  ]);
+
+  // 🔴 **접히는 쪽에는 이 거르개를 걸지 않는다** — 저쪽은 이미 「끝났거나 거뒀다」로 좁혀 둔
+  //    여집합이라, 여기서 또 거르면 접기 안이 언제나 빈다(제 표 쪽과 같은 자리).
+  const live = liveRows.filter((row) => isActiveDelegation(row, now));
+  return foldDelegationList(live, finishedPage, FINISHED_DELEGATION_LIMIT, (row) => toPortalRowView(row, now));
 }
 
 /* ------------------------------------------------------------------ */
@@ -532,17 +628,15 @@ export async function listPortalDelegationsIActFor(delegateSub: string, now: Dat
 /* ------------------------------------------------------------------ */
 
 /**
- * 🔴 **끝난 줄을 몇 개까지 가져올까.** 살아 있는 줄에는 상한을 두지 않는다 — 그 집합은 「지금
- * 자리를 비운 사람 수」라 본질적으로 작고, 🔴 **상한에 밀려 되돌려야 할 줄이 안 보이는 것이 이
- * 묶음에서 가장 나쁜 일**이다(이 묶음을 더한 까닭 자체가 「관리자가 방금 세운 줄을 찾아 거둘
- * 길이 없다」였다). 상한이 필요한 쪽은 끝난 줄뿐이다 — 이 표는 줄을 지우지 않아(표 쪽 머리말)
- * 해가 갈수록 쌓이기만 한다.
+ * 🔴 **끝난 줄의 상한은 위에 있다**(`FINISHED_DELEGATION_LIMIT`). 2026-10-26 에는 이 묶음만
+ * 쓰던 값이라 여기 있었는데, 2026-11-17 에 사람 묶음 넷이 같은 접기를 갖게 되면서 **한 자리로
+ * 모았다** — 한 화면에 나란히 선 묶음들이 저마다 다른 N 으로 「최근 N건」이라고 말하면 안 된다.
  *
- * 🔵 50 에 깊은 뜻은 없다. 「한 화면에서 훑을 수 있는 양」이고(위 `DELEGATION_LIST_LIMIT` 과 같은
- * 자), 더 뒤까지 찾아야 하면 변경 이력이 영구 기록이다 — 맡길 때도 거둘 때도 한 줄씩 남는다.
- * 잘렸다는 사실은 화면이 말해 준다.
+ * 🔴 **살아 있는 줄에는 상한을 두지 않는다**(아래 질의에 `.limit(` 이 없는 까닭). 그 집합은
+ * 「지금 자리를 비운 사람 수」라 본질적으로 작고, **상한에 밀려 되돌려야 할 줄이 안 보이는 것이
+ * 이 묶음에서 가장 나쁜 일**이다 — 이 묶음을 더한 까닭 자체가 「관리자가 방금 세운 줄을 찾아
+ * 거둘 길이 없다」였다. 상한이 필요한 쪽은 끝난 줄뿐이다(표가 줄을 지우지 않아 쌓이기만 한다).
  */
-const FINISHED_DELEGATION_LIMIT = 50;
 
 /**
  * 🔴 **거절은 빈 목록이 아니라 `ok: false`** 다(아래 함수 머리말). 🔵 `view` 의 모양은 화면 쪽

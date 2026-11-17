@@ -120,6 +120,87 @@ export function formatDelegationPeriod(startDate: string, endDate: string): stri
 }
 
 /* ------------------------------------------------------------------ */
+/* 끝난 위임은 접어 둔다 — 네 묶음이 **같은 모양** (2026-11-17)           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 한 묶음이 받는 모양 — **펴 둘 줄**과 **접어 둘 줄**, 그리고 접힌 쪽이 잘렸는지.
+ *
+ * ── 🔴 왜 묶음마다 둘로 나눠 받나 ──────────────────────────────────────
+ * 쓰는 분이 「‘내가 대신하고 있는 것’에 이미 만료된 위임이 쌓인다. 만료되면 거기서 없어져도
+ * 될 것 같다」고 했다(2026-11-17). 지우는 쪽으로 가면 「그때 왜 저 사람이 눌렀나」의 근거가
+ * 화면에서 사라지므로(표 쪽 머리말) **접는 쪽**으로 갔다.
+ *
+ * ── 🔴 이 집에는 **거꾸로 된 구멍**이 있었다 ───────────────────────────
+ * 「내가 대신하고 있는 것」 두 묶음은 애초에 **살아 있는 줄만** 읽었다. 그래서 기간이 지나면
+ * 그 줄을 **다시 볼 길이 아예 없었고**, 「모두의 결재권 위임」조차 제 표만 읽어서 승인함 쪽
+ * 끝난 줄은 관리자도 못 봤다. 이 집에서 접기는 **감추는 일이 아니라 보이게 하는 일**이다.
+ *
+ * 🔵 칸 이름은 먼저 선 「모두의 결재권 위임」(`AllDelegationsView`)에서 그대로 땄다 — 화면이
+ *    묶음마다 다른 말을 배우지 않게.
+ */
+export type DelegationFoldView<Row> = {
+  /**
+   * 펴 둔 채로 보여 줄 줄 — 🔴 **상한이 없다.** 이 집합은 「지금 자리를 비운(또는 비울) 위임」
+   * 이라 본질적으로 작고, 상한에 밀려 **되돌려야 할 줄**이 안 보이는 것이 가장 나쁘다
+   * (「모두의」 쪽 상수 주석과 같은 판단).
+   */
+  live: Row[];
+  /** 끝났거나 되돌린 줄 — 최근 것부터 `finishedLimit` 건까지. 🔵 0건이면 화면이 접기를 **안 그린다**. */
+  finished: Row[];
+  /** 끝난 줄이 상한보다 많았다. 🔴 화면이 「최근 N건만」을 말해 줘야 한다. */
+  finishedTruncated: boolean;
+  /** 🔵 화면이 N 을 글자로 박지 않게 함께 내려온다. */
+  finishedLimit: number;
+};
+
+/**
+ * 「살아 있는 줄 / 끝난 줄」 두 묶음을 화면이 받는 모양으로. 🔴 **네 목록이 이 자리 하나를
+ * 거친다** — 「상한보다 한 줄 더 읽어 넘침을 가리고, 그 한 줄은 버린다」를 목록마다 적으면
+ * 한쪽에서 `slice` 를 빠뜨리는 날 **51번째 줄이 조용히 화면에 뜬다**(오류는 안 난다).
+ *
+ * 🔴 **순수 함수라 시험이 그대로 돌려 본다.** 조회 쪽(`./delegation-queries.ts`)은 `server-only`
+ * 를 물고 있어 시험이 불러올 수 없고, 이 집에는 DB 시험도 구워진 SQL 을 보는 길도 없다. 셈을
+ * 저쪽에 두면 「넘쳤다고 말하는가」를 아무도 돌려 보지 못한 채 운영으로 나간다.
+ *
+ * @param finishedPage 🔴 **상한보다 한 줄 더 읽어 온 것**이어야 한다. 딱 상한만큼 읽으면
+ *   「정확히 상한만큼 있는 날」과 「넘친 날」이 **같은 답**이 된다.
+ * @param limit 🔵 조회가 정해 넘긴다 — 글자로 박으면 상한을 고친 날 둘이 갈린다.
+ *
+ * 🔵 「모두의 결재권 위임」은 2026-10-26 부터 **같은 셈을 제 손으로** 한다. 이번 조각이 그 묶음을
+ *    건드리지 않기로 해서 그대로 두었다 — 🔴 상한의 뜻을 고치는 날에는 **두 자리**를 함께 봐야
+ *    한다(`listAllDelegations`).
+ */
+export function foldDelegationList<DbRow, Row>(
+  live: readonly DbRow[],
+  finishedPage: readonly DbRow[],
+  limit: number,
+  toView: (row: DbRow) => Row,
+): DelegationFoldView<Row> {
+  const finishedTruncated = finishedPage.length > limit;
+  return {
+    live: live.map(toView),
+    finished: (finishedTruncated ? finishedPage.slice(0, limit) : finishedPage).map(toView),
+    finishedTruncated,
+    finishedLimit: limit,
+  };
+}
+
+/**
+ * 접기 단추의 글자.
+ *
+ * 🔴 **다섯 자리가 같은 말을 해야 한다**(네 묶음 + 「모두의」). 손으로 베껴 적으면 한쪽만
+ * 고치는 날 **같은 화면에서 두 가지 말**이 보이고, 사람은 그것을 결함으로 읽는다.
+ *
+ * 🔵 `+` 는 「더 있다」다 — 상한에 걸려 잘렸을 때만 붙는다. 정확한 수를 적지 않는 까닭은
+ *    애초에 세지 않기 때문이고(한 줄 더 읽어 넘침만 가린다), 세어 본 적 없는 수를 적는 것보다
+ *    낫다.
+ */
+export function delegationFinishedToggleLabel(open: boolean, count: number, truncated: boolean): string {
+  return open ? "끝난 위임 접기" : `끝난 위임 보기 (${count}건${truncated ? "+" : ""})`;
+}
+
+/* ------------------------------------------------------------------ */
 /* 모두의 결재권 위임 — 관리 권한이 있는 사람만 (2026-10-26)              */
 /* ------------------------------------------------------------------ */
 
@@ -182,6 +263,11 @@ export type AllDelegationsView = {
  * 🔵 「관리자 지정」이라고 적는 근거: 본인이 아닌 사람이 이 줄을 만들 수 있는 길은 역할 사다리
  * 하나뿐이다(`mayManageOthersDelegations`). 🔴 그 인가 규칙을 고치는 날에는 이 글자도 함께
  * 봐야 한다 — 안 그러면 화면이 사실이 아닌 말을 하게 된다.
+ *
+ * 🔵 **2026-11-17 에 그 규칙이 한 겹 좁아졌는데 이 글자는 그대로 둔다**(다시 재 본 결과다 —
+ *    빠뜨린 것이 아니다). 그날부터 **위임으로 받은 임시 `ADMIN` 은 남의 결재권을 못 맡긴다**
+ *    (`./delegation-authority.ts` 의 `mayCreateOthersDelegation`). 좁아졌을 뿐 **길은 여전히
+ *    역할 사다리 하나**라, 「관리자 지정」은 전보다 더 정확한 말이 됐다.
  */
 export function delegationCreatorLabel(row: { createdByName: string; createdBySelf: boolean }): string {
   return row.createdBySelf ? `${row.createdByName} (본인)` : `${row.createdByName} (관리자 지정)`;
@@ -194,12 +280,24 @@ export const DELEGATION_NOTHING_LIVE_ALL = "지금 살아 있는 결재권 위�
 export const DELEGATION_NOTHING_FINISHED_ALL = "끝나거나 되돌린 결재권 위임이 없습니다.";
 
 /**
- * 🔴 **잘렸다는 것을 반드시 말해 준다.** 말하지 않으면 「이게 전부」로 읽히고, 없는 줄을 찾는
- * 사람이 변경 이력까지 가야 한다는 것도 모른다. 🔵 건수는 조회가 정해 함께 내려보낸다 —
- * 화면에 숫자를 박으면 상한을 고친 날 글자만 옛말이 된다.
+ * 🔴 **더 앞의 기록이 어디 있는지는 묶음마다 다르다.** 이 집 표의 줄은 맡길 때도 거둘 때도
+ * 변경 이력에 한 줄씩 남지만, 승인함에서 온 줄은 **이 집 변경 이력에 아예 없다**(포털이 써 준
+ * 사본이다 — `portal_approval_delegations` 표 머리말). 한 글자로 두면 둘 중 한쪽은 **없는
+ * 곳으로 사람을 보낸다.**
  */
-export function delegationFinishedTruncatedNotice(limit: number): string {
-  return `끝난 위임은 최근 ${limit}건만 보여 줍니다. 그보다 앞의 기록은 변경 이력에 남아 있습니다.`;
+export const DELEGATION_FINISHED_ELSEWHERE_LOCAL = "변경 이력";
+export const DELEGATION_FINISHED_ELSEWHERE_PORTAL = "통합 승인함";
+
+/**
+ * 🔴 **잘렸다는 것을 반드시 말해 준다.** 말하지 않으면 「이게 전부」로 읽히고, 없는 줄을 찾는
+ * 사람이 어디까지 가야 하는지도 모른다. 🔵 건수는 조회가 정해 함께 내려보낸다 — 화면에 숫자를
+ * 박으면 상한을 고친 날 글자만 옛말이 된다.
+ *
+ * 🔵 **갈 곳에 기본값을 둔 까닭**: 이 글자를 처음 쓴 자리가 「모두의 결재권 위임」(이 집 표)
+ *    이고, 그 묶음은 2026-11-17 에 손대지 않았다. 기본값이 없으면 그 자리까지 고쳐야 한다.
+ */
+export function delegationFinishedTruncatedNotice(limit: number, where: string = DELEGATION_FINISHED_ELSEWHERE_LOCAL): string {
+  return `끝난 위임은 최근 ${limit}건만 보여 줍니다. 그보다 앞의 기록은 ${where}에 남아 있습니다.`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -242,10 +340,18 @@ export type PortalDelegationRowView = {
 
 /** 화면이 한 번에 받는 승인함 쪽 한 벌. 🔴 두 묶음과 **갈 곳**이 함께 온다. */
 export type PortalDelegationsView = {
-  /** 내가 맡긴 것 — 끝난 것·거둔 것까지 **전부**(제 표 쪽 「내가 맡긴 것」과 같은 규칙). */
-  made: PortalDelegationRowView[];
-  /** 내가 지금 대신하고 있는 것 — 살아 있는 줄만(제 표 쪽 「대신하고 있는 것」과 같은 규칙). */
-  acting: PortalDelegationRowView[];
+  /**
+   * 내가 맡긴 것 — 🔵 **2026-11-17 에 한 목록에서 둘로 갈렸다**(`DelegationFoldView`). 보여 주는
+   * 줄은 그대로 전부이고, **끝난 것·거둔 것이 접힌 쪽으로** 옮겨 갔다(제 표 쪽과 같은 규칙).
+   */
+  made: DelegationFoldView<PortalDelegationRowView>;
+  /**
+   * 내가 대신하고 있는 것 — 🔴 **2026-11-17 에 끝난 줄이 처음으로 보이게 됐다.** 그전에는 조회가
+   * 살아 있는 줄만 읽어서, 기간이 지나면 그 줄을 다시 볼 길이 아예 없었다(위 `DelegationFoldView`
+   * 머리말). 🔵 **펴 둔 쪽은 그대로 「지금 대신하는 중」뿐이다** — 아직 시작 안 한 줄을 거기 보이면
+   * 대리인은 지금 누를 수 있다고 믿는다(조회 쪽 주석).
+   */
+  acting: DelegationFoldView<PortalDelegationRowView>;
   /**
    * 통합 승인함의 위임 화면 주소. 🔴 **`null` 이면 링크 없이 글자만 그린다** — 주소를 아직
    * 안 넣은 곳에서도 화면은 멀쩡해야 한다(`approvalsDelegationHref`).
