@@ -144,10 +144,72 @@ const CARD_FULL_LINE: ReadonlySet<SortKey> = new Set<SortKey>(["note"]);
 
 const INPUT =
   "rounded-md border border-zinc-200 bg-white px-2 py-1 text-sm text-zinc-900";
-const BTN =
-  "rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-100 disabled:opacity-50";
-const BTN_PRIMARY =
-  "rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50";
+/*
+ * 단추의 **생김새**와 **크기**를 갈라 둔다 (2026-11-18).
+ * 까닭: 목록 맨 위 줄의 단추 넷만 폰에서 한 치수 작아야 하는데, `BTN` 자체를 줄이면 같은 상수를
+ * 쓰는 **정렬 방향 단추**와 아래쪽 **[이전]·[다음] 쪽 단추**까지 함께 작아진다. 색과 테두리는
+ * 한 자리에 남기고 크기만 두 벌로 둔다 — 나중에 색을 바꿀 때 고칠 곳이 그대로 한 곳이다.
+ */
+const BTN_LOOK =
+  "rounded-md border border-zinc-300 text-zinc-700 hover:bg-zinc-100 disabled:opacity-50";
+const BTN_PRIMARY_LOOK =
+  "rounded-md bg-zinc-900 font-medium text-white hover:bg-zinc-800 disabled:opacity-50";
+const BTN_SIZE = "px-3 py-1.5 text-sm";
+const BTN = `${BTN_LOOK} ${BTN_SIZE}`;
+/*
+ * 🔵 `BTN_SIZE` 짜리 **색이 다른 단추는 이 화면에 없다** — 색이 다른 단추는 [부품 등록] 하나뿐이고
+ *    그것이 아래 맨 위 줄로 갔다. 그래서 짝이 되는 상수를 안 둔다(안 쓰는 상수는 lint 가 잡는다).
+ *    다시 생기면 `BTN` 과 같은 꼴로 `BTN_PRIMARY_LOOK` + `BTN_SIZE` 를 이어 쓰면 된다.
+ */
+/*
+ * 목록 맨 위 줄(인쇄 · 엑셀 내려받기 · 수량 변경 기록 · 부품 등록) **전용 크기**
+ * (2026-11-18, 쓰는 분 요청: 「넷이 한 줄이 되도록 사이즈 조절」. 그 전에는 폰에서 [부품 등록]만
+ * 둘째 줄로 떨어졌다).
+ *
+ * 🔴 **재 보고 고른 값이다.** 폰 360px 에서 본문이 쓸 수 있는 폭은 328px 이다(레이아웃 좌우 16px).
+ *    네 단추의 글자는 한글 18자 + 공백 4개 = 약 19em 이라 글자만으로 14px 이면 266px, 12px 이면
+ *    229px 을 먹는다. 여기에 좌우 안쪽 여백 여덟 몫 · 테두리 셋 · 사이 틈 셋이 더 붙는다:
+ *      전) 14px + px-3   + gap-2   → 266 + 96 + 6 + 24 = 392px  (328 을 넘어 두 줄로 접혔다)
+ *      후) 12px + px-1.5 + gap-1.5 → 229 + 48 + 6 + 18 = 301px  (27px 가 남는다)
+ *    딱 맞게 잡지 않은 까닭: 폰 글꼴 크기를 키워 쓰는 분이 있어, 여유가 없으면 그 폰에서 다시 접힌다.
+ *
+ * 🔵 세로는 **안 줄인다** — 글자 높이가 줄어든 만큼 `py-2` 로 메워 단추 높이가 전과 같은 34px 이다
+ *    (손가락에 잡히는 크기가 그대로다). 세로 여백은 한 줄에 드는지와 아무 상관이 없다.
+ *
+ * 🔴 640px 이상은 `sm:` 으로 **전부 되돌린다** — 신고된 것은 폰이고, 넓은 화면 모양은 안 건드린다.
+ * 🔴 `whitespace-nowrap`: 「수량 변경 기록」이 두 줄로 접히면 그 단추만 키가 커져 줄이 통째로 틀어진다.
+ */
+const TOOLBAR_SIZE =
+  "px-1.5 py-2 text-xs whitespace-nowrap sm:px-3 sm:py-1.5 sm:text-sm";
+/*
+ * **폰에서만** 남는 자리를 넷이 나눠 갖는다 (2026-11-18, 쓰는 분이 고른 그림: 넷이 가로폭을 꽉 채움).
+ *
+ * 🔴 **이것만으로는 아무 일도 안 일어난다.** 나눠 가질 「남는 자리」는 이 단추들을 담은 묶음이
+ *    줄 전체를 써야 생긴다 — 묶음 쪽의 `max-sm:w-full`(아래 `<div>` 주석)과 **둘이 한 쌍**이다.
+ *    한쪽만 있으면 단추는 그냥 제 글자 폭으로 서고, 오른쪽이 빈 채로 끝난다.
+ *
+ * 🔴 PC 에는 **아무것도 안 적힌다.** `max-sm:` 은 640px 미만에서만 도는 규칙이라, 넓은 화면에는
+ *    flex 값도 글자 맞춤도 **선언 자체가 생기지 않는다** — 그래서 PC 가 한 픽셀도 안 바뀐다.
+ *    (`flex-1 sm:flex-initial` 처럼 적으면 PC 에도 선언이 생긴다. 값이 기본값과 같더라도 굳이
+ *    적을 까닭이 없다.)
+ *
+ * 🔴 `min-w-0` 을 **더하지 마라.** flex 칸의 기본 최소 폭은 「글자 폭」이다. 그 덕에
+ *    ① 글자가 잘리지 않고 ② 자리가 모자라면 `flex-wrap` 이 전과 같이 줄을 바꾼다
+ *    (줄을 바꿀지는 **줄어들기 전 폭**으로 정하는데, 그 폭이 바로 이 「글자 폭」이다).
+ *    `min-w-0` 을 더하면 둘 다 사라진다 — 최소 폭이 0 이 되어 영영 안 접히고, 대신 좁은 폰에서
+ *    글자가 칸 밖으로 비어져 나온다.
+ *
+ * 🔵 그래서 폭은 **똑같아지지 않는다** — 글자가 긴 단추가 그만큼 넓다. 360px 실측으로
+ *    인쇄 64 · 엑셀 내려받기 89 · 수량 변경 기록 92 · 부품 등록 64px 이고, 합이 딱 한 줄을 채운다.
+ *    칸을 **정말로 똑같이** 나누려면(`min-w-0`) 한 칸이 77px 이라 「수량 변경 기록」이 들어가려면
+ *    글자가 9.7px 이어야 한다 — 읽을 수 없는 크기라 그 길로 가지 않았다.
+ *
+ * 🔵 `text-center`: 늘어난 자리가 **글자 양옆으로 갈라져야** 한다. 없으면 글자가 왼쪽에 붙고
+ *    오른쪽만 휑하게 빈다(짧은 [인쇄]에서 특히 눈에 띈다).
+ */
+const TOOLBAR_FILL = "max-sm:flex-1 max-sm:text-center";
+const TOOLBAR_BTN = `${BTN_LOOK} ${TOOLBAR_SIZE} ${TOOLBAR_FILL}`;
+const TOOLBAR_BTN_PRIMARY = `${BTN_PRIMARY_LOOK} ${TOOLBAR_SIZE} ${TOOLBAR_FILL}`;
 const BADGE =
   "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap";
 
@@ -514,21 +576,33 @@ export function PartsList({
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-semibold text-zinc-900">재고 현황</h1>
-        <div className="flex flex-wrap gap-2 no-print">
+        {/* 🔴 **`max-sm:w-full` 이 없으면 안쪽 `TOOLBAR_FILL` 이 아무 일도 안 한다** (2026-11-18 실측).
+            이 묶음은 **바깥 줄의 flex 칸**이고, flex 칸의 기본 폭은 「제 내용 폭」이다. 폰에서
+            `flex-wrap` 덕에 제목 아래로 **내려가기는 하지만**, 내려간 뒤에도 폭은 단추 넷을 합친
+            만큼이라 오른쪽이 150px 남짓 빈 채로 끝난다 — **내려가는 것과 줄을 다 쓰는 것은 다른
+            일이다.** 그 상태에서는 안쪽 단추에 준 `flex-1` 이 나눠 가질 자리가 0 이라 각자 제 글자
+            폭으로 선다(한 번 그렇게 내보냈다. 시험 스물한 개가 전부 초록인데 화면만 안 됐다).
+            🔴 `max-sm:` 으로만 적는다 — PC 는 지금처럼 제목과 한 줄에 서서 오른쪽에 붙어야 한다.
+            🔵 `flex-wrap` 은 **그대로 둔다**: 넷을 한 줄에 넣는 일은 `TOOLBAR_SIZE` 가 크기로 하고,
+            이것은 그래도 모자랄 때(글꼴을 더 키운 폰 · 320px 짜리 옛 폰)의 비상구다 — 접히는 쪽이
+            글자가 비어져 나오는 쪽보다 낫다. `TOOLBAR_FILL` 과 **같이 두어도 다투지 않는다**:
+            줄을 바꿀지는 늘어나기 전 폭(= 글자 폭)으로 정하고, 늘리는 일은 줄이 정해진 뒤에 한다.
+            틈도 폰에서만 좁힌다(640px 이상은 예전 그대로). */}
+        <div className="flex flex-wrap gap-1.5 no-print max-sm:w-full sm:gap-2">
           {/* 조각 6: 지금 조건에 맞는 부품 **전체**(쪽·상세 창 무시). 주소 조건을 그대로 넘기면 서버가 같은 순수 함수로 같은 차례를 만든다. */}
-          <a href={`/print/parts${exportQuery}`} target="_blank" rel="noopener" className={BTN} title="지금 조건에 맞는 부품 전체를 A4 가로로. 손으로 적는 「확인」 칸이 있습니다.">
+          <a href={`/print/parts${exportQuery}`} target="_blank" rel="noopener" className={TOOLBAR_BTN} title="지금 조건에 맞는 부품 전체를 A4 가로로. 손으로 적는 「확인」 칸이 있습니다.">
             인쇄
           </a>
-          <a href={`/api/export/parts${exportQuery}`} className={BTN} title="지금 조건에 맞는 부품 전체를 현황판과 같은 서식의 엑셀로.">
+          <a href={`/api/export/parts${exportQuery}`} className={TOOLBAR_BTN} title="지금 조건에 맞는 부품 전체를 현황판과 같은 서식의 엑셀로.">
             엑셀 내려받기
           </a>
           {canRecord && (
-            <Link href="/entries/new" className={BTN}>
+            <Link href="/entries/new" className={TOOLBAR_BTN}>
               수량 변경 기록
             </Link>
           )}
           {canRegister && (
-            <Link href="/parts/new" className={BTN_PRIMARY}>
+            <Link href="/parts/new" className={TOOLBAR_BTN_PRIMARY}>
               부품 등록
             </Link>
           )}
