@@ -21,6 +21,13 @@ import Link from "next/link";
  */
 export const SETTINGS_TABS = [
   { key: "items", href: "/settings/items", label: "항목 관리", everyone: false },
+  /**
+   * 도번 표시 — 신청 줄에 서는 도번의 크기·색 (2026-11-20 쓰는 분 요청).
+   * 🔵 **항목 관리 바로 뒤**에 둔 까닭: 둘 다 「화면에 무엇이 어떻게 보이나」를 고치는 탭이다.
+   * 🔴 **첫 탭 자리를 빼앗지 않는다** — 머리말 [설정] 이 관리자를 보내는 곳이 첫 탭이고
+   *    (`AppHeader`), 그 자리는 항목 관리로 정해져 있다(`tests/settings-access.test.ts` ⑥).
+   */
+  { key: "drawingNo", href: "/settings/drawing-no", label: "도번 표시", everyone: false },
   { key: "transition", href: "/settings/transition", label: "전환일", everyone: false },
   { key: "workbook", href: "/settings/workbook", label: "엑셀 상태", everyone: false },
   { key: "approval", href: "/settings/approval-routes", label: "승인 절차", everyone: false },

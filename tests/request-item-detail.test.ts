@@ -12,6 +12,7 @@ import {
   requestItemDetails,
   requestItemOwnerTag,
   REQUEST_ITEM_DETAIL_FIELDS,
+  REQUEST_ITEM_DRAWING_FIELD,
   REQUEST_ITEM_LEAD_FIELD,
   REQUEST_ITEM_OWNER_TAG_LABEL,
   type RequestItemLine,
@@ -105,23 +106,30 @@ describe("앞세우는 칸 — 고객사 품명 (2026-10-21)", () => {
     );
   });
 
-  it("고객사 품명이 `lead`, 나머지 셋이 `rest` — 차례는 표 그대로", () => {
-    const { lead, rest } = requestItemDetailGroups(part());
+  /**
+   * 🔴 **2026-11-20 에 묶음이 셋이 됐다** — 도번도 제 줄로 빠졌다(아래 전용 묶음). 그래서 `rest` 에서
+   *    도번이 빠진다. 🔵 **단언이 약해진 것이 아니다**: 빠진 값은 아래 `drawing` 으로 옮겨 가 그대로
+   *    재고, 「값을 잃지도 겹치지도 않는다」는 전수 시험이 셋을 합쳐 본다.
+   */
+  it("고객사 품명이 `lead`, 도번이 `drawing`, 나머지 둘이 `rest` — 차례는 표 그대로", () => {
+    const { lead, drawing, rest } = requestItemDetailGroups(part());
     assert.deepEqual(lead, { key: "customerName", label: "고객사 품명", value: "증폭기 조립품" });
+    assert.deepEqual(drawing, { key: "drawingNo", label: "도번", value: "WR10136AA148B" });
     assert.deepEqual(
       rest.map((d) => d.label),
-      ["품명2", "교산 품번", "도번"],
+      ["품명2", "교산 품번"],
     );
   });
 
   it("🔴 고객사 품명이 비면 `lead` 가 `null` — **빈 자리를 만들지 않는다**", () => {
-    const { lead, rest } = requestItemDetailGroups(part({ customerName: "" }));
+    const { lead, drawing, rest } = requestItemDetailGroups(part({ customerName: "" }));
     assert.equal(lead, null);
     // 🔵 나머지는 그대로 선다 — 앞 줄이 없다고 뒤가 함께 사라지면 볼 수 있던 값까지 잃는다.
     assert.deepEqual(
       rest.map((d) => d.label),
-      ["품명2", "교산 품번", "도번"],
+      ["품명2", "교산 품번"],
     );
+    assert.equal(drawing?.value, "WR10136AA148B", "앞 줄이 비었다고 도번까지 사라졌다");
   });
 
   it("공백만 있는 고객사 품명도 비어 있는 것으로 본다", () => {
@@ -129,14 +137,21 @@ describe("앞세우는 칸 — 고객사 품명 (2026-10-21)", () => {
   });
 
   it("🔴 비어도 **품명으로 대신 세우지 않는다** — 윗줄이 이미 품명이라 같은 글자가 두 번 나온다", () => {
-    const { lead, rest } = requestItemDetailGroups(part({ customerName: "", name2: "", kyosanPartNo: "", drawingNo: "" }));
+    const { lead, drawing, rest } = requestItemDetailGroups(part({ customerName: "", name2: "", kyosanPartNo: "", drawingNo: "" }));
     assert.equal(lead, null);
+    assert.equal(drawing, null);
     assert.deepEqual(rest, []);
     // 🔵 대신 세우려면 칸부터 늘려야 한다 — `RequestItemPart` 에 품명 칸이 아예 없다.
     assert.ok(!("name" in part()), "RequestItemPart 에 품명 칸이 생겼다 — 대신 세우는 길이 열렸으니 결정을 다시 보라");
   });
 
-  it("🔵 값을 잃지도 겹치지도 않는다 — `lead` + `rest` = 원래 목록 (전수)", () => {
+  /**
+   * 🔴 **2026-11-20 에 묶음이 둘에서 셋으로 늘면서 고쳐 적은 시험이다.** 원래 이 자리가 지키던 것은
+   *    「`lead` + `rest` = 원래 목록」이라는 **식**이 아니라 **「칸을 빼내면서 값을 잃거나 겹치지
+   *    않는다」**였다. 묶음이 늘었으니 합치는 쪽도 늘어야 그 뜻이 그대로 지켜진다 — 단언을 지우거나
+   *    느슨하게 한 것이 아니라, **빼낸 묶음이 하나 더 생겼다는 사실**을 식에 적은 것이다.
+   */
+  it("🔵 값을 잃지도 겹치지도 않는다 — `lead` + `drawing` + `rest` = 원래 목록 (전수)", () => {
     const yes = "값";
     for (let mask = 0; mask < 16; mask += 1) {
       const over = {
@@ -146,10 +161,76 @@ describe("앞세우는 칸 — 고객사 품명 (2026-10-21)", () => {
         drawingNo: mask & 8 ? yes : "",
       };
       const all = requestItemDetails(part(over));
-      const { lead, rest } = requestItemDetailGroups(part(over));
-      assert.deepEqual([...(lead === null ? [] : [lead]), ...rest].map((d) => d.key).sort(), all.map((d) => d.key).sort(), `mask ${mask}`);
+      const { lead, drawing, rest } = requestItemDetailGroups(part(over));
+      const joined = [...(lead === null ? [] : [lead]), ...(drawing === null ? [] : [drawing]), ...rest];
+      assert.deepEqual(joined.map((d) => d.key).sort(), all.map((d) => d.key).sort(), `mask ${mask}`);
+      // 🔴 **겹치지 않는다** — 키가 같은 것이 둘이면 위 `sort()` 비교는 통과하지만 화면에는 두 번 나온다.
+      assert.equal(new Set(joined.map((d) => d.key)).size, joined.length, `mask ${mask}: 같은 칸이 두 묶음에 들어 있다`);
       assert.ok(!rest.some((d) => d.key === REQUEST_ITEM_LEAD_FIELD), `mask ${mask}: 앞세운 칸이 뒤에도 남았다`);
+      assert.ok(!rest.some((d) => d.key === REQUEST_ITEM_DRAWING_FIELD), `mask ${mask}: 빼낸 도번이 뒤에도 남았다`);
     }
+  });
+});
+
+/**
+ * ============================================================================
+ * 🔴 **도번도 제 줄로 빠진다** (2026-11-20 쓰는 분 요청)
+ * ============================================================================
+ * 「재고 담당자가 **도번을 보면서 불출을 실행**한다. 지금은 품명2·교산 품번과 함께 맨 아랫줄에
+ *  작은 회색 글씨로 흘려 적혀 있어 **너무 작고 눈에 안 띈다.**」
+ *
+ * 🔵 **여기서 재는 것은 「무엇이 어느 묶음인가」뿐이다** — 크기·색은 설정에서 오고
+ *    (`tests/drawing-no-style.test.ts`), 「크게 보인다」는 이 저장소에서 잴 수 없다(렌더 시험 없음).
+ * 🔴 **가르는 자리가 순수 함수라는 것**이 이 묶음의 뜻이다. 화면이 제 안에서 `key` 를 보고 갈라
+ *    내면 아래 단언들을 아무도 돌려 보지 못한다.
+ * ============================================================================
+ */
+describe("빼내는 칸 — 도번 (2026-11-20)", () => {
+  it("🔴 빼내는 칸은 도번이다 — 그리고 보이는 넷 중 하나다", () => {
+    assert.equal(REQUEST_ITEM_DRAWING_FIELD, "drawingNo");
+    assert.ok(
+      REQUEST_ITEM_DETAIL_FIELDS.some((f) => f.key === REQUEST_ITEM_DRAWING_FIELD),
+      "빼내는 칸이 보이는 목록에 없다 — 그러면 영영 안 그려진다",
+    );
+  });
+
+  it("🔴 앞세우는 칸과 **다른 칸**이다 — 같으면 한 값이 두 줄에 선다", () => {
+    assert.notEqual(REQUEST_ITEM_DRAWING_FIELD as string, REQUEST_ITEM_LEAD_FIELD as string);
+  });
+
+  it("🔴 도번이 없으면 `drawing` 이 `null` — **빈 줄을 만들지 않는다**", () => {
+    const { drawing, rest } = requestItemDetailGroups(part({ drawingNo: "" }));
+    assert.equal(drawing, null);
+    // 🔵 나머지는 그대로 선다 — 도번이 없다고 뒤가 함께 사라지면 볼 수 있던 값까지 잃는다.
+    assert.deepEqual(
+      rest.map((d) => d.label),
+      ["품명2", "교산 품번"],
+    );
+  });
+
+  it("공백만 있는 도번도 없는 것으로 본다", () => {
+    assert.equal(requestItemDetailGroups(part({ drawingNo: "   " })).drawing, null);
+    assert.equal(requestItemDetailGroups(part({ drawingNo: "\t" })).drawing, null);
+  });
+
+  it("🔴 지워진 부품(네 칸이 빈 줄)에서는 세 묶음이 **모두** 비어 있다 — 그 줄은 통째로 안 선다", () => {
+    const g = requestItemDetailGroups({ partNo: null, owner: null, customerName: "", name2: "", kyosanPartNo: "", drawingNo: "" });
+    assert.equal(g.lead, null);
+    assert.equal(g.drawing, null);
+    assert.deepEqual(g.rest, []);
+  });
+
+  it("🔵 도번만 있는 부품도 그릴 것이 있다 — 그 한 줄만 선다", () => {
+    const g = requestItemDetailGroups(part({ customerName: "", name2: "", kyosanPartNo: "" }));
+    assert.equal(g.lead, null);
+    assert.deepEqual(g.rest, []);
+    assert.deepEqual(g.drawing, { key: "drawingNo", label: "도번", value: "WR10136AA148B" });
+  });
+
+  it("🔴 라벨은 칸 표에서 온다 — 조각이 「도번」을 손으로 적지 않는다", () => {
+    const fromTable = REQUEST_ITEM_DETAIL_FIELDS.find((f) => f.key === REQUEST_ITEM_DRAWING_FIELD);
+    assert.ok(fromTable !== undefined, "칸 표에서 도번이 사라졌다");
+    assert.equal(requestItemDetailGroups(part()).drawing?.label, fromTable?.label);
   });
 });
 
@@ -209,11 +290,20 @@ describe("🔴 세 화면이 같은 조각을 쓴다 (2026-10-21, 접수 5번)",
     assert.ok(!piece.includes('"customerName"'), "조각이 앞세울 칸을 제 안에 적었다 — 그 결정이 두 곳이 된다");
   });
 
+  /**
+   * 🔴 **2026-11-20 에 재는 것이 넷으로 늘었다** — 도번 줄이 생겼다. 빠뜨리면 「도번만 있고 나머지가
+   *    빈 줄」에서 윗부분이 통째로 비거나, 반대로 **도번이 없는 부품에 빈 줄이 하나 선다.**
+   */
   it("🔴 값이 하나도 없으면 **아무것도 안 그린다** — 빈 상자도 여백도 남기지 않는다", () => {
-    assert.match(piece, /if \(lead === null && tags\.length === 0 && rest\.length === 0\) return null;/, "셋 다 비었을 때 null 로 끝내는 줄이 사라졌다");
+    assert.match(
+      piece,
+      /if \(lead === null && tags\.length === 0 && rest\.length === 0 && drawing === null\) return null;/,
+      "넷 다 비었을 때 null 로 끝내는 줄이 사라졌다",
+    );
     assert.match(piece, /\{lead === null \? null : \(/, "고객사 품명이 비어도 그 줄을 그린다 — 빈 자리가 생긴다");
     assert.match(piece, /\{tags\.length === 0 \? null : \(/, "딱지가 하나도 없어도 그 줄을 그린다 — 빈 자리가 생긴다");
     assert.match(piece, /\{rest\.length === 0 \? null : \(/, "나머지가 비어도 그 줄을 그린다 — 빈 자리가 생긴다");
+    assert.match(piece, /\{drawing === null \? null : </, "도번이 비어도 그 줄을 그린다 — 크고 색이 든 빈 줄이 선다");
   });
 
   /**

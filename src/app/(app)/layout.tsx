@@ -8,6 +8,9 @@ import { requireSession } from "@/lib/auth/session";
 import { countPendingRequests } from "@/lib/stock/requests";
 import { WorkbookAlert } from "@/components/settings/WorkbookAlert";
 import { getWorkbookState } from "@/lib/excel/workbook-sync";
+import { DrawingNoStyleProvider } from "@/components/stock/DrawingNoStyleContext";
+import { DRAWING_NO_STYLE_DEFAULT } from "@/lib/stock/drawing-no-style";
+import { getDrawingNoStyle } from "@/lib/stock/drawing-no-style-queries";
 
 /**
  * 인증 구간 레이아웃. **세션 검증은 여기 한 곳** (CLAUDE.md 8-4절).
@@ -22,6 +25,16 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // 엑셀 한 벌이 멈춰 있으면(사람이 손댐·쓰기 실패) 관리자 화면 위쪽에 띠 (DESIGN 2-7절). 실패해도 화면은 떠야 하므로 null 로.
   const isAdmin = roleAtLeast(session.user.role, "ADMIN");
   const workbook = isAdmin ? await getWorkbookState().catch(() => null) : null;
+  /**
+   * 도번 줄의 크기·색 (2026-11-20, 설정 `/settings/drawing-no`).
+   *
+   * 🔴 **읽는 자리를 여기 하나로 둔다.** 그 줄을 그리는 조각(`RequestItemDetails`)을 쓰는 화면이
+   *    셋이고 저마다 여러 겹 안쪽에 있어서, 화면마다 읽어 프롭으로 내리면 **한 자리만 빠뜨려도
+   *    그 화면에서만 기본값으로 선다**(오류가 안 난다). 까닭은 `DrawingNoStyleContext.tsx` 머리말.
+   * 🔴 **실패해도 화면은 떠야 한다**(바로 위 둘과 같은 규칙). 꾸밈 설정 하나 때문에 모든 화면이
+   *    오류로 막히면 그것이 훨씬 큰 사고다 — 못 읽으면 기본값으로 그린다.
+   */
+  const drawingNoStyle = await getDrawingNoStyle().catch(() => DRAWING_NO_STYLE_DEFAULT);
   return (
     <div className="flex min-h-full flex-col">
       <AppHeader
@@ -72,7 +85,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         devRoleSwitch={env.devRoleOverride && session.actualRole === "ADMIN" ? <DevRoleSwitch effectiveRole={session.user.role} /> : null}
       />
       {workbook && workbook.status !== "OK" ? <WorkbookAlert status={workbook.status} parkedFile={workbook.parkedFile} errorCount={workbook.errorCount} /> : null}
-      <main className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-6">{children}</main>
+      <main className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-6">
+        <DrawingNoStyleProvider value={drawingNoStyle}>{children}</DrawingNoStyleProvider>
+      </main>
     </div>
   );
 }

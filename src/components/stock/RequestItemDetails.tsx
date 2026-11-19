@@ -1,4 +1,8 @@
+"use client";
+
 import { requestItemChargeTag, requestItemDetailGroups, requestItemOhTag, requestItemOwnerTag, type RequestItemTag, type RequestItemView } from "@/lib/stock/request-item-detail";
+import { DrawingNoLine } from "./DrawingNoLine";
+import { useDrawingNoStyle } from "./DrawingNoStyleContext";
 
 /**
  * 부품 한 줄 **아래**에 붙는 작은 글씨 — 고객사 품명 · 품명2 · 교산 품번 · 도번,
@@ -39,13 +43,29 @@ import { requestItemChargeTag, requestItemDetailGroups, requestItemOhTag, reques
  *    유상/무상은 **그 줄의 값**이다 — 그래서 아래도 **함수를 따로** 부른다. 까닭은
  *    `request-item-detail.ts` 머리말에 적혀 있다.
  *
+ * ── 🔴 **도번은 맨 아래, 제 줄에 크게** (2026-11-20 쓰는 분 요청) ──────────
+ * 「재고 담당자가 **도번을 보면서 불출을 실행**한다 — 지금은 너무 작고 눈에 안 띈다.」 그래서
+ * 도번만 나머지 글자 줄에서 **빼내** 따로 세운다. 🔴 빼내는 판단은 여기가 아니라
+ * `requestItemDetailGroups` 쪽이다(화면이 `key` 를 보고 가르면 아무도 돌려 보지 못한다 —
+ * 이 파일 머리말의 같은 까닭). 모양은 `DrawingNoLine` 하나이고, **크기와 색은 설정에서** 온다
+ * (`/settings/drawing-no`). 값이 세 화면에 내려오는 길은 `DrawingNoStyleContext.tsx` 머리말.
+ * 🔴 **맨 아래다 — 지금 서 있는 것들의 자리를 밀지 않는다.** 고객사 품명이 맨 위, 딱지가 그 아래라는
+ *    차례는 쓰는 분 요청으로 정해진 것이고 까닭이 바로 위에 적혀 있다. 새 줄이 그 사이로 끼어들면
+ *    **눈이 익은 자리가 통째로 밀린다**(O/H 딱지를 셋째에 세운 그 까닭).
+ * 🔵 **맨 아래라고 묻히지 않는다**: 이 줄만 크기·색·굵기가 다르고 제 줄을 통째로 쓴다.
+ *
  * 🔵 **머리줄은 부르는 쪽이 그린다**(`No. 165 …`). 화면마다 그 자리가 다르기 때문이다 — 부품 요청
  *    관리는 부품 상세로 가는 링크를 걸고, 불출 신청 팝업과 승인 요청건은 글자 그대로 둔다.
  * 🔵 `span`(display:block)인 까닭: 부르는 쪽 셋이 전부 **`span`·`td` 안**이라 `div` 를 넣으면
  *    글 흐름 안에 블록이 끼어든다.
  */
 export function RequestItemDetails({ item }: { item: RequestItemView }) {
-  const { lead, rest } = requestItemDetailGroups(item);
+  const { lead, drawing, rest } = requestItemDetailGroups(item);
+  /**
+   * 🔵 **저장된 모양**이다 — 설정 화면이 고르는 중인 값과는 다른 자리에서 온다(`DrawingNoLine` 머리말).
+   *    감싼 Provider 가 없으면 기본값이라, 이 한 줄 때문에 화면이 안 서는 일은 없다.
+   */
+  const drawingNoStyle = useDrawingNoStyle();
   /**
    * 🔴 **두 번 따로 묻는다.** 묻는 타입이 갈려 있어(부품 ↔ 줄) 이 두 줄이 곧 「성격이 다르다」는
    *    말이고, 한 함수로 합치면 그 가름이 사라진다(`request-item-detail.ts` 머리말).
@@ -64,7 +84,7 @@ export function RequestItemDetails({ item }: { item: RequestItemView }) {
    *    있다(`request-item-detail.ts` 머리말). 한 함수로 합치면 그 가름이 사라진다.
    */
   const tags: RequestItemTag[] = [requestItemOwnerTag(item), requestItemChargeTag(item), requestItemOhTag(item)].filter((t): t is RequestItemTag => t !== null);
-  if (lead === null && tags.length === 0 && rest.length === 0) return null;
+  if (lead === null && tags.length === 0 && rest.length === 0 && drawing === null) return null;
   return (
     <>
       {/* 🔴 앞세우는 줄 — 굵기·크기·자리로 가른다(색만으로 가르지 않는다, 위 머리말). */}
@@ -100,6 +120,9 @@ export function RequestItemDetails({ item }: { item: RequestItemView }) {
           ))}
         </span>
       )}
+      {/* 🔴 **도번 줄은 맨 아래에 따로 선다**(위 머리말). 값이 없으면 줄이 통째로 안 선다 —
+          크고 색이 든 줄이라 빈 자리가 남으면 오히려 더 눈에 띈다. */}
+      {drawing === null ? null : <DrawingNoLine label={drawing.label} value={drawing.value} style={drawingNoStyle} />}
     </>
   );
 }

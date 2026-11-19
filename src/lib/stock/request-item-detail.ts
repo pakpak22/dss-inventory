@@ -15,6 +15,7 @@
  *  4. 🔴 **넷 중 고객사 품명이 앞선다** — 아래 `requestItemDetailGroups`(2026-10-21 쓰는 분 요청).
  *  5. 🔵 **소유구분 딱지** — 아래 `requestItemOwnerTag`(2026-10-21 쓰는 분 요청).
  *  6. 🔵 **유상/무상 딱지** — 아래 `requestItemChargeTag`(같은 날, 같은 요청).
+ *  7. 🔴 **도번도 제 줄로 빠진다** — 아래 `REQUEST_ITEM_DRAWING_FIELD`(2026-11-20 쓰는 분 요청).
  *
  * ── 🔴 **5와 6은 성격이 다르다. 한 묶음으로 뭉뚱그리지 않는다** (2026-10-21) ──
  * **소유구분은 부품을 따라간다** — `parts.owner` 에 적힌 부품의 속성이라 **어느 신청에서 보든 같다.**
@@ -157,6 +158,22 @@ export function requestItemDetails(part: RequestItemPart): RequestItemDetail[] {
  */
 export const REQUEST_ITEM_LEAD_FIELD = "customerName" as const satisfies RequestItemDetail["key"];
 
+/**
+ * **제 줄로 빼내는 칸** — 도번 (2026-11-20 쓰는 분 요청).
+ *
+ * 🔵 **까닭은 쓰는 분의 말 그대로**다: 재고 담당자가 **도번을 보면서 불출을 실행한다.** 그런데
+ *    그 값이 품명2·교산 품번과 함께 맨 아랫줄에 작은 회색 글씨로 흘려 적혀 있어 매번 눈으로
+ *    뒤져야 했다. 그래서 **줄에서 빼내** 크게·색을 넣어 세운다(모양은 `DrawingNoLine.tsx`,
+ *    치수와 색은 설정 — `src/lib/stock/drawing-no-style.ts`).
+ * 🔴 **가르는 판단을 화면이 아니라 여기 둔다** — 이 파일 머리말과 같은 까닭이다. 화면이 제 안에서
+ *    `key` 를 보고 갈라 내면, 「도번이 없는 부품에서 그 줄이 통째로 안 서는가」를 **아무도 돌려
+ *    보지 못한 채** 운영으로 나간다.
+ * 🔵 앞세우는 칸(`REQUEST_ITEM_LEAD_FIELD`)과 **같은 수법으로 키에 못 박는다**: 차례는
+ *    `PART_FIELDS` 가 쥐고 언제든 바뀔 수 있는데, 「빼낸다」는 차례와 **다른 결정**이다.
+ *    지금 도번이 표의 맨 뒤라는 사실에 기대면 칸이 하나 더 붙는 날 엉뚱한 칸이 빠져나온다.
+ */
+export const REQUEST_ITEM_DRAWING_FIELD = "drawingNo" as const satisfies RequestItemDetail["key"];
+
 export interface RequestItemDetailGroups {
   /**
    * 앞세울 칸. 🔴 **값이 없으면 `null` 이고, 그때 화면은 그 줄을 아예 안 그린다** — 빈 자리도,
@@ -169,24 +186,40 @@ export interface RequestItemDetailGroups {
    *    칸이 아예 없는 것이 이 결정을 타입으로도 받쳐 준다 — 대신 세우려면 칸부터 늘려야 한다.
    */
   lead: RequestItemDetail | null;
-  /** 나머지 — 품명2 · 교산 품번 · 도번. 차례는 표 그대로이고, 값이 없는 칸은 여기서도 빠진다. */
+  /**
+   * 도번. 🔴 **값이 없으면 `null` 이고, 그때 화면은 그 줄을 아예 안 그린다** — 크고 색이 든 줄이라
+   * 빈 자리가 서면 더 눈에 띈다. 「없음」 같은 글자도 적지 않는다(`requestItemDetails` 와 같은 규칙).
+   *
+   * 🔵 **비어 있는 것이 드물지 않다**: 품명2·교산 품번·도번은 엑셀에서도 `-` 로 적혀 들어온 칸이다.
+   */
+  drawing: RequestItemDetail | null;
+  /**
+   * 나머지 — 품명2 · 교산 품번. 차례는 표 그대로이고, 값이 없는 칸은 여기서도 빠진다.
+   * 🔴 **빼낸 둘(고객사 품명 · 도번)은 여기 없다** — 있으면 같은 값이 한 줄에 두 번 나온다.
+   */
   rest: RequestItemDetail[];
 }
 
 /**
- * 자세한 내용을 **앞세울 하나**와 **나머지**로 가른다.
+ * 자세한 내용을 **앞세울 하나** · **도번** · **나머지** 셋으로 가른다.
  *
  * 🔴 **가르는 자리를 화면이 아니라 여기 둔다.** 이 저장소에는 화면 렌더 시험이 없어서, 화면이
- *    「첫째 칸을 굵게」 같은 조건을 제 안에 적으면 아무도 돌려 보지 못한 채 운영으로 나간다 —
- *    이 파일 머리말과 같은 까닭이고 같은 처방이다.
- * 🔵 **값을 잃지도 겹치지도 않는다**: `lead` 와 `rest` 를 합치면 `requestItemDetails` 그대로다.
- *    시험이 그것을 전수로 본다.
+ *    「첫째 칸을 굵게」 「도번만 빼서 크게」 같은 조건을 제 안에 적으면 아무도 돌려 보지 못한 채
+ *    운영으로 나간다 — 이 파일 머리말과 같은 까닭이고 같은 처방이다.
+ * 🔵 **값을 잃지도 겹치지도 않는다**: `lead` 와 `drawing` 과 `rest` 를 합치면 `requestItemDetails`
+ *    그대로다. 시험이 그것을 **전수로** 본다(칸 넷이 있고 없고 열여섯 가지).
+ * 🔵 **묶음이 둘에서 셋으로 늘어난 판**이다(2026-11-20). 빼내는 칸을 **목록으로** 적어 두는 까닭:
+ *    넷째가 생기는 날 `filter` 를 고쳐야 한다는 것이 한눈에 보이고, 빼낸 칸과 거르는 칸이
+ *    **같은 글자에서** 나와 한쪽만 고치는 사고가 안 난다.
  */
+const REQUEST_ITEM_PULLED_OUT_FIELDS: ReadonlyArray<RequestItemDetail["key"]> = [REQUEST_ITEM_LEAD_FIELD, REQUEST_ITEM_DRAWING_FIELD];
+
 export function requestItemDetailGroups(part: RequestItemPart): RequestItemDetailGroups {
   const details = requestItemDetails(part);
   return {
     lead: details.find((d) => d.key === REQUEST_ITEM_LEAD_FIELD) ?? null,
-    rest: details.filter((d) => d.key !== REQUEST_ITEM_LEAD_FIELD),
+    drawing: details.find((d) => d.key === REQUEST_ITEM_DRAWING_FIELD) ?? null,
+    rest: details.filter((d) => !REQUEST_ITEM_PULLED_OUT_FIELDS.includes(d.key)),
   };
 }
 

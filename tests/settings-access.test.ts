@@ -112,6 +112,9 @@ describe("② 🔴 설정의 **나머지** 탭은 여전히 관리자 전용이�
   /** 🔵 주소까지 함께 본다 — `requireRole` 만 보면 되돌아갈 자리를 엉뚱한 데로 적어도 통과한다. */
   const ADMIN_ONLY: [string, string][] = [
     ["src/app/(app)/settings/items/page.tsx", "/settings/items"],
+    // 🔵 2026-11-20 에 더해진 탭(도번 표시). 한 사람이 고른 모양이 **모두의 화면**에 서는 값이라
+    //    여는 쪽이 아니라 막는 쪽이다 — 연 것은 지금도 결재권 위임과 O/H 템플릿 **둘뿐**이다.
+    ["src/app/(app)/settings/drawing-no/page.tsx", "/settings/drawing-no"],
     ["src/app/(app)/settings/transition/page.tsx", "/settings/transition"],
     ["src/app/(app)/settings/workbook/page.tsx", "/settings/workbook"],
     ["src/app/(app)/settings/workbook/apply/page.tsx", "/settings/workbook/apply"],
@@ -190,13 +193,15 @@ describe("⑤ 탭 줄 — 일반 사용자에게 **둘**, 관리자에게 **전�
       SETTINGS_TABS.map((t) => t.key),
       "관리자 탭이 줄었다",
     );
-    assert.equal(SETTINGS_TABS.length, 7);
+    // 🔵 2026-11-20 에 여덟이 됐다(도번 표시). 숫자를 적어 두는 까닭은 **몰래 늘어나는 것**을
+    //    막으려는 것이다 — 탭이 하나 더 생기면 그것이 누구에게 보이는지 여기서 한 번은 생각하게 된다.
+    assert.equal(SETTINGS_TABS.length, 8);
   });
 
   it("🔴 **감추는 것은 울타리가 아니다** — 열린 둘 말고는 전부 관리자 화면이 따로 막는다", () => {
     // 이 줄은 ② 와 짝이다: 탭을 지워도 주소를 손으로 치면 들어가지고, 그때 막는 것은 그 화면이다.
     const adminTabs = SETTINGS_TABS.filter((t) => !t.everyone).map((t) => t.href);
-    assert.deepEqual(adminTabs, ["/settings/items", "/settings/transition", "/settings/workbook", "/settings/approval-routes", "/audit"]);
+    assert.deepEqual(adminTabs, ["/settings/items", "/settings/drawing-no", "/settings/transition", "/settings/workbook", "/settings/approval-routes", "/audit"]);
   });
 });
 
