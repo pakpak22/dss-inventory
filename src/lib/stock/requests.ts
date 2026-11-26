@@ -365,8 +365,12 @@ async function partViewsOf(partIds: readonly string[]): Promise<Map<string, Part
  *    반환이 한 건도 없는 날 이 조각이 질의를 **한 번도** 더하지 않아야 한다.
  * 🔵 **종류를 여기서 가리지 않는다** — 넘어온 번호만 읽는다. 가르는 자리는 부르는 쪽의
  *    `returnTransactionIdsOf` 하나다.
+ * 🔵 **부르는 쪽이 둘이다** (2026-11-26): 이 파일의 신청 목록과, **기록 내역(원장)의 건 머리글**을
+ *    빚는 `./queries.ts` 의 `returnIntakeNumbersFor`. 저쪽은 신청 payload 가 아니라 **이미 원장에
+ *    들어간 반환 줄**(`returns_transaction_id`)을 들고 오는데, 묻는 것이 「이 원장 줄은 어느 부품이고
+ *    어느 수리 건에서 나갔나」로 똑같아 질의를 한 벌로 둔다.
  */
-async function returnLineOriginsOf(transactionIds: readonly string[]): Promise<Map<string, ReturnLineOrigin>> {
+export async function returnLineOriginsOf(transactionIds: readonly string[]): Promise<Map<string, ReturnLineOrigin>> {
   const ids = [...new Set(transactionIds)];
   const out = new Map<string, ReturnLineOrigin>();
   if (ids.length === 0) return out;

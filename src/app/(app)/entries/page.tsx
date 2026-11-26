@@ -6,6 +6,12 @@ import { requireSession } from "@/lib/auth/session";
 import { OWNER_LABEL, formatQuantity } from "@/lib/parts/codes";
 import { PART_FIELDS, type PartFieldKey } from "@/lib/parts/field-order";
 import { CHARGE_LABEL, ENTRY_TYPES, ENTRY_TYPE_LABEL, PURPOSE_LABEL, formatDelta, sheetNoText, sheetOf, type Sheet } from "@/lib/stock/codes";
+/**
+ * 건 머리글(굵은 검은 글씨)의 **글자 규칙**. 🔴 화면 파일에 두지 않는 까닭은 그쪽 머리말에 있다 —
+ * 이 파일은 `await` 하는 서버 컴포넌트라 `npm test` 가 못 불러서, 머리글에 무엇이 뜨는지를 **값으로**
+ * 잰 시험이 한 줄도 없었다. 🔵 꼴(굵기·색)과 배치는 여기 그대로 있다.
+ */
+import { entryTitle } from "@/lib/stock/entry-title";
 import { ALL_PART_SEARCH_FIELDS, PART_SEARCH_FIELDS, parseEntryListFilter } from "@/lib/stock/form";
 import { requestSavedNotice, type RequestNotice } from "@/lib/stock/request-notice";
 import { listEntries, type EntryLineRow, type EntryRow } from "@/lib/stock/queries";
@@ -292,27 +298,6 @@ function typeBadge(type: EntryRow["type"]) {
   return <span className={`${BADGE} ${color}`}>{ENTRY_TYPE_LABEL[type]}</span>;
 }
 
-/**
- * 대제목 (2026-10-06 사용자 요청): 수리 건이면 **인수번호**, 수리 건이 없는 사용이면 「기타 사용」, 나머지는 종류와 상대·사유.
- * 아래 표는 엑셀 사용처 기입란·입고 기입란·수량 변경 기록의 칸을 그대로 보인다.
- */
-function entryTitle(e: EntryRow): string {
-  switch (e.type) {
-    case "USE":
-      return e.noRepairCase ? `기타 사용${e.reason ? ` — ${e.reason}` : ""}` : e.intakeNumber;
-    case "LOAN":
-      return `대여${e.counterparty ? ` — ${e.counterparty}` : ""}`;
-    case "DISPOSE":
-      return `폐기·불량${e.reason ? ` — ${e.reason}` : ""}`;
-    case "ADJUST":
-      return `조정${e.reason ? ` — ${e.reason}` : ""}`;
-    case "CORRECTION":
-      return `기록 취소${e.reason ? ` — ${e.reason}` : ""}`;
-    default:
-      return ENTRY_TYPE_LABEL[e.type];
-  }
-}
-
 export default async function EntriesPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const session = await requireSession("/entries");
   const canRecord = roleAtLeast(session.user.role, "STAFF");
@@ -470,11 +455,17 @@ export default async function EntriesPage({ searchParams }: { searchParams: Prom
             {rows.map((e) => {
               // 🔴 이 건에서 **그릴 칸과 그 이름표**. 표 머리글·표 본문·카드가 모두 이 하나를 돈다(`entryColumns` 머리말).
               const cols = entryColumns(sheetOf(e.type));
+              /**
+               * 굵은 검은 글씨 — 🔴 **빈 글자면 아예 안 그린다**(아래). 되짚을 인수번호가 없는 반환이
+               * 그런 경우인데(`entry-title.ts` 머리말), 빈 `<h3>` 를 세워 두면 **기록 번호와 종류 딱지
+               * 사이에 설명 없는 틈**이 생긴다 — 글자가 없으니 아무도 그 틈을 신고하지 않는다.
+               */
+              const title = entryTitle(e);
               return (
                 <li key={e.id} className="flex flex-col gap-2 p-4">
                   <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                     <span className="tabular rounded-md bg-zinc-900 px-2 py-0.5 text-sm font-semibold text-white">{sheetNoText(e.type, e.sheetYear, e.sheetNo)}</span>
-                    <h3 className="text-base font-semibold text-zinc-900">{entryTitle(e)}</h3>
+                    {title ? <h3 className="text-base font-semibold text-zinc-900">{title}</h3> : null}
                     {typeBadge(e.type)}
                     {e.intakeUnverified ? <span className={`${BADGE} bg-amber-100 text-amber-900`}>인수번호 확인 안 됨</span> : null}
                     <span className="tabular text-sm text-zinc-700">{e.occurredOn}</span>

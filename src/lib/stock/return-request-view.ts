@@ -115,19 +115,37 @@ export function returnRequestPartLines(input: EntryInput, origins: ReadonlyMap<s
 }
 
 /**
+ * 되짚은 인수번호 여럿에서 **말할 수 있는 하나**를 고른다 — 🔴 **갈래가 하나일 때만 말한다.**
+ *
+ * 🔴 수리 건이 섞여 있으면 **빈 글자**다. 하나를 골라 적으면 나머지 건이 없는 것처럼 보이고,
+ *    그것은 **거짓말이면서 조용하다** — 틀린 인수번호 옆에 오류 표시가 설 리 없다.
+ * 🔴 **빈 글자는 갈래로 세지 않는다.** 「수리 건 없음」으로 나간 줄을 되돌리면 되짚은 값이 빈
+ *    글자인데, 그것을 한 갈래로 세면 「D260701 과 (없음)이 섞였다」가 **갈래 둘**이 되어 멀쩡한
+ *    번호까지 지워진다.
+ *
+ * 🔵 **적는 자리를 하나로 묶은 것이다** (2026-11-26). 같은 규칙이 두 곳에서 필요했다:
+ *    부품 요청 관리의 「무엇에」 칸(아래 `returnRequestIntakeNumber`)과 **기록 내역(원장)의 건
+ *    머리글**(`./entry-title.ts`). 두 벌로 적으면 「섞였을 때 말을 아낀다」가 한쪽에서만 지켜지는
+ *    날이 오고, 그 어긋남은 **값이 틀린 쪽이 더 그럴듯해 보인다.**
+ */
+export function soleIntakeNumber(intakeNumbers: Iterable<string>): string {
+  const seen = new Set<string>();
+  for (const n of intakeNumbers) if (n !== "") seen.add(n);
+  return seen.size === 1 ? [...seen][0] : "";
+}
+
+/**
  * 그 신청 **전체**의 인수번호 — 목록의 「무엇에」 칸에 적는다.
  *
- * 🔴 **갈래가 하나일 때만 말한다.** 줄마다 다른 수리 건이 섞여 있으면 빈 글자를 돌려주고, 그때
- *    「어느 건에서 나온 것인가」는 **줄마다** 보인다(아래 `returnSourceText`). 하나를 골라
- *    적으면 나머지 건이 없는 것처럼 보이고, 그것은 **거짓말이면서 조용하다.**
+ * 🔴 **갈래가 하나일 때만 말한다**(위 `soleIntakeNumber`). 줄마다 다른 수리 건이 섞여 있으면 빈
+ *    글자를 돌려주고, 그때 「어느 건에서 나온 것인가」는 **줄마다** 보인다(아래 `returnSourceText`).
  * 🔵 A/S 가 올리는 반환은 수리 건 하나로 세우므로(`lib/api/stock-requests.ts` 의
- *    `ApiReturnRequestInput`) 실제로는 언제나 하나다. 섞이는 길은 지금 없지만 그 전제를 코드에
- *    박지 않는다.
+ *    `ApiReturnRequestInput`) 실제로는 언제나 하나다. 섞이는 길은 **신청에는** 지금 없지만 그 전제를
+ *    코드에 박지 않는다 — 🔴 담당자가 화면에서 직접 적는 반환(`/entries/new?type=RETURN`)은 한 부품의
+ *    여러 불출 줄을 한 번에 고르므로 **거기서는 실제로 섞인다**(그쪽 머리글은 `./entry-title.ts`).
  */
 export function returnRequestIntakeNumber(lines: readonly ReturnRequestPartLine[]): string {
-  const seen = new Set<string>();
-  for (const line of lines) for (const n of line.intakeNumbers) seen.add(n);
-  return seen.size === 1 ? [...seen][0] : "";
+  return soleIntakeNumber(lines.flatMap((l) => l.intakeNumbers));
 }
 
 /**

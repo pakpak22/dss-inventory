@@ -9,7 +9,10 @@ import { stockEntries, stockTransactions, type ChargeType, type EntryType, type 
 import { pendingByTransaction, remainingOf } from "@/lib/api/return-candidates";
 import { sheetNoText } from "./codes";
 import type { EntryListFilter } from "./form";
-import { listPendingReturnPayloads } from "./requests";
+// 🔴 **되짚는 질의는 저장소에 한 벌이다** (2026-11-26) — 부품 요청 관리(신청 payload 의 줄)와 기록
+//    내역(원장에 들어간 반환 줄)이 **같은 함수**를 쓴다. 묻는 것이 「이 원장 줄은 어느 부품이고 어느
+//    수리 건에서 나갔나」로 똑같아서, 두 벌로 적으면 한쪽만 조건이 늘어도 두 화면이 다른 말을 한다.
+import { listPendingReturnPayloads, returnLineOriginsOf } from "./requests";
 
 /** 기록 내역·상세 창에 내려보내는 줄. 직렬화 가능한 값만. */
 export interface EntryLineRow {
@@ -56,6 +59,18 @@ export interface EntryRow {
   confirmedByName: string | null;
   createdAt: string;
   lines: EntryLineRow[];
+  /**
+   * **반환 건이 되돌린 원장 줄들의 인수번호** — 건 머리글에 설 값 (2026-11-26).
+   *
+   * 🔴 **반환에서만 찬다.** 다른 종류는 **빈 배열**이다 — 「못 찾은 것」이 아니라 「없는 것」이고,
+   *    그래서 머리글 규칙(`./entry-title.ts`)이 반환 갈래에서만 이 값을 본다.
+   * 🔴 **반환 건의 `intakeNumber` 칸은 언제나 빈 글자다** — 원장의 반환 갈래가 그 칸을 안 쓴다
+   *    (`./ledger.ts` 의 `case "RETURN"`, 2026-11-26 개발 DB 실측으로도 확인). 그러니 이 값을
+   *    안 채우면 머리글에 적을 것이 아무것도 없다.
+   * 🔵 중복 없이 **되돌린 차례**로 담고, 빈 글자(「수리 건 없음」으로 나간 줄)는 담지 않는다 —
+   *    `./return-request-view.ts` 의 `returnRequestPartLines` 가 신청 쪽에서 하는 것과 같은 결이다.
+   */
+  returnIntakeNumbers: string[];
 }
 
 const PAGE_SIZE = 30;
@@ -97,7 +112,40 @@ async function linesFor(entryIds: string[]): Promise<Map<string, EntryLineRow[]>
   return out;
 }
 
-function toEntryRow(e: typeof stockEntries.$inferSelect, lines: EntryLineRow[]): EntryRow {
+/**
+ * 반환 건이 **되돌린 원장 줄을 되짚어** 인수번호를 건다 (2026-11-26) — 건 머리글에 설 값.
+ *
+ * 🔴 **다시 묻지 않는다** — 되돌린 줄의 번호는 이미 읽어 둔 줄(`EntryLineRow.returnsTransactionId`)에
+ *    있다. 여기서 더 묻는 것은 **그 줄이 달린 불출 건의 인수번호** 하나뿐이다.
+ * 🔴 **반환 건이 한 건도 없으면 질의를 보내지 않는다.** 기록 내역의 거의 전부가 사용·입고라,
+ *    반환이 없는 쪽에서는 이 조각이 질의를 **한 번도** 더하지 않아야 한다
+ *    (`./requests.ts` 의 `returnLineOriginsOf` 가 같은 꼴을 갖고 있다).
+ * 🔵 **종류를 되짚은 결과로 가리지 않는다** — `type === "RETURN"` 인 건의 줄만 모은다. 기록 취소
+ *    (`reversesTransactionId`)는 되돌리는 줄이지만 **반환이 아니다**: 그쪽 머리글은 사유를 적는다.
+ */
+async function returnIntakeNumbersFor(heads: readonly (typeof stockEntries.$inferSelect)[], lines: ReadonlyMap<string, EntryLineRow[]>): Promise<Map<string, string[]>> {
+  const sourceIdsByEntry = new Map<string, string[]>();
+  for (const h of heads) {
+    if (h.type !== "RETURN") continue;
+    const ids = (lines.get(h.id) ?? []).map((l) => l.returnsTransactionId).filter((id): id is string => id !== null);
+    if (ids.length > 0) sourceIdsByEntry.set(h.id, ids);
+  }
+  const out = new Map<string, string[]>();
+  if (sourceIdsByEntry.size === 0) return out;
+  const origins = await returnLineOriginsOf([...sourceIdsByEntry.values()].flat());
+  for (const [entryId, ids] of sourceIdsByEntry) {
+    const numbers: string[] = [];
+    for (const id of ids) {
+      const intake = origins.get(id)?.intakeNumber ?? "";
+      // 🔵 빈 인수번호는 담지 않는다 — 「수리 건 없음」·대여를 되돌린 줄이고, 담으면 갈래를 하나 더 세게 된다.
+      if (intake !== "" && !numbers.includes(intake)) numbers.push(intake);
+    }
+    out.set(entryId, numbers);
+  }
+  return out;
+}
+
+function toEntryRow(e: typeof stockEntries.$inferSelect, lines: EntryLineRow[], returnIntakeNumbers: string[]): EntryRow {
   return {
     id: e.id,
     type: e.type,
@@ -119,6 +167,7 @@ function toEntryRow(e: typeof stockEntries.$inferSelect, lines: EntryLineRow[]):
     confirmedByName: e.confirmedByName,
     createdAt: e.createdAt.toISOString(),
     lines,
+    returnIntakeNumbers,
   };
 }
 
@@ -175,7 +224,9 @@ export async function listEntries(f: EntryListFilter): Promise<{ rows: EntryRow[
     .limit(PAGE_SIZE)
     .offset((f.page - 1) * PAGE_SIZE);
   const lines = await linesFor(heads.map((h) => h.id));
-  return { rows: heads.map((h) => toEntryRow(h, lines.get(h.id) ?? [])), total, pageSize: PAGE_SIZE };
+  // 🔴 반환 건이 이 쪽에 한 건도 없으면 질의가 안 는다(위 `returnIntakeNumbersFor`).
+  const returnIntakes = await returnIntakeNumbersFor(heads, lines);
+  return { rows: heads.map((h) => toEntryRow(h, lines.get(h.id) ?? [], returnIntakes.get(h.id) ?? [])), total, pageSize: PAGE_SIZE };
 }
 
 /** 부품 하나의 수량 이력 (상세 창 「이 프로그램에 쌓인 기록」). 최신이 위. */
