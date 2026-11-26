@@ -1,10 +1,10 @@
 import "server-only";
-import { and, count, desc, eq, gte, inArray, min, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, min, or, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { auditLogs } from "@/db/schema/audit-logs";
 import { parts } from "@/db/schema/parts";
 import { stockBalances } from "@/db/schema/stock-balances";
-import { stockTransactions } from "@/db/schema/stock";
+import { stockEntries, stockTransactions } from "@/db/schema/stock";
 import { stockIssueApprovals, stockIssueApprovalSteps } from "@/db/schema/stock-issue-approvals";
 import { stockRequestIssues, stockRequests, type RequestSource, type RequestStatus, type RequestWorkflowKind } from "@/db/schema/stock-requests";
 import { auditValues } from "@/lib/audit";
@@ -29,6 +29,7 @@ import { lookupIntake } from "./intake-lookup";
 import { buildIssueInput, type IssueQuantity } from "./issue";
 import { LedgerAbort, ledgerErrorMessage, recordEntryIn, type Actor, type EntryAuthor, type RecordResult } from "./ledger";
 import { EMPTY_REPAIR_CASE, repairCaseFromLookup, repairCaseLookupNumber, type RepairCaseSnapshot } from "./repair-case";
+import { returnRequestIntakeNumber, returnRequestPartLines, returnedQuantityOf, type ReturnLineOrigin } from "./return-request-view";
 
 /**
  * 반출 확인 대기 (2026-10-06 사용자 결정). 신청 → 담당자 확인 → 원장.
@@ -134,6 +135,20 @@ export interface RequestLineView {
    *    A/S 가 **제 수리 건 상세에서 올린 뒤에도** 같은 딱지를 봐야 하기 때문이다.
    */
   fromOhTemplate: boolean;
+  /**
+   * 그 부품이 **어느 수리 건에서 나간 것을 돌려주는가** (2026-11-26, 반환 신청).
+   *
+   * 🔴 **반환에서만 찬다.** 사용·대여·폐기 신청에는 처음부터 없는 값이라 **빈 배열**이고, 그때 화면은
+   *    아무것도 안 그린다 — 「없는 것」이지 「못 찾은 것」이 아니다(`chargeType` 의 `null` 과 같은 결).
+   * 🔴 **부품 표에서 오지 않는다** — 반환 줄은 부품이 아니라 **원장 줄**을 가리키고(`./form.ts` 의
+   *    `ReturnLine`), 그 줄이 달린 불출 건의 인수번호가 이 값이다. 되짚는 질의는 아래
+   *    `returnLineOriginsOf` 하나이고, 묶는 규칙은 `./return-request-view.ts` 다.
+   * 🔵 거의 언제나 한 개다(A/S 는 수리 건 하나로 반환 신청을 세운다). 쪼개진 원장 줄이 여럿이어도
+   *    같은 건이면 한 개로 합쳐진다.
+   * 🔵 **바깥 통로로는 나가지 않는다** — `toApiRequestStatus` 가 칸을 하나씩 손으로 옮겨 적으므로
+   *    (`lib/api/stock-request-status.ts`) 여기 칸이 늘어도 A/S 가 받는 모양은 그대로다.
+   */
+  returnIntakeNumbers: string[];
 }
 
 export interface PendingRequestRow {
@@ -216,17 +231,47 @@ type LinesLike = { type: EntryType; lines: Array<{ partId: string; quantity: num
  *    따로 두지 않는다**: 화면이 하는 일이 「딱지를 그리나 마나」 하나뿐이라 가를 까닭이 없다
  *    (유상/무상이 `null` 을 들고 다니는 것과 **일부러 다르다** — 저쪽은 돈이 걸린 값이다).
  */
-function linesOf(input: EntryInput): Array<{ partId: string; quantity: number; chargeType: ChargeType | null; fromOhTemplate: boolean }> {
-  if (input.type === "RETURN") return [];
-  if (input.type === "ADJUST") return [{ partId: input.partId, quantity: input.actualQuantity, chargeType: null, fromOhTemplate: false }];
-  if (input.type === "TRANSFER") return [{ partId: input.fromPartId, quantity: input.quantity, chargeType: null, fromOhTemplate: false }];
-  if (input.type === "USE") return input.lines.map((l) => ({ partId: l.partId, quantity: l.quantity, chargeType: isChargeType(l.chargeType) ? l.chargeType : null, fromOhTemplate: l.fromOhTemplate === true }));
-  return (input as LinesLike).lines.map((l) => ({ partId: l.partId, quantity: l.quantity, chargeType: null, fromOhTemplate: false }));
+type RequestLine = { partId: string; quantity: number; chargeType: ChargeType | null; fromOhTemplate: boolean; returnIntakeNumbers: string[] };
+
+/**
+ * 🔴 **되짚을 재료가 없는 자리**가 쓰는 빈 묶음 (2026-11-26).
+ *
+ * `linesOf` 의 둘째 인자는 **선택이 아니다** — 기본값을 두면 부르는 자리가 늘 때 아무 말 없이
+ * 「반환은 빈 줄」로 굳고, 그 빠짐은 **오류가 아니라 화면에서 줄이 안 보이는 것**이라 아무도
+ * 신고하지 않는다(이 저장소가 `ConfirmPath`·`RequestFilterRow` 에서 쓰는 그 수법). 그래서
+ * **원장을 읽지 않는 자리는 이 상수를 적어서** 「재료가 없음을 알고 지나간다」고 말한다.
+ */
+const NO_RETURN_ORIGINS: ReadonlyMap<string, ReturnLineOrigin> = new Map();
+
+function linesOf(input: EntryInput, origins: ReadonlyMap<string, ReturnLineOrigin>): RequestLine[] {
+  /**
+   * 🔴 **반환은 되짚어야 줄이 선다** (2026-11-26). payload 의 줄은 부품이 아니라 **원장 줄**을
+   *    가리키므로(`./form.ts` 의 `ReturnLine`), 원장을 읽어 온 `origins` 가 있어야 「어느 부품의
+   *    몇 개인지」가 나온다. 🔵 재료가 없으면(`NO_RETURN_ORIGINS`) 지금까지처럼 **빈 배열**이라,
+   *    원장을 읽지 않는 자리의 동작은 한 글자도 바뀌지 않았다.
+   * 🔵 합치는 규칙(같은 부품은 한 줄로 · 인수번호는 중복 없이)은 순수 함수 한 곳이다
+   *    (`./return-request-view.ts`) — DB 없이 시험이 덮는 자리다.
+   */
+  if (input.type === "RETURN") return returnRequestPartLines(input, origins).map((l) => ({ partId: l.partId, quantity: l.quantity, chargeType: null, fromOhTemplate: false, returnIntakeNumbers: l.intakeNumbers }));
+  if (input.type === "ADJUST") return [{ partId: input.partId, quantity: input.actualQuantity, chargeType: null, fromOhTemplate: false, returnIntakeNumbers: [] }];
+  if (input.type === "TRANSFER") return [{ partId: input.fromPartId, quantity: input.quantity, chargeType: null, fromOhTemplate: false, returnIntakeNumbers: [] }];
+  if (input.type === "USE")
+    return input.lines.map((l) => ({ partId: l.partId, quantity: l.quantity, chargeType: isChargeType(l.chargeType) ? l.chargeType : null, fromOhTemplate: l.fromOhTemplate === true, returnIntakeNumbers: [] }));
+  return (input as LinesLike).lines.map((l) => ({ partId: l.partId, quantity: l.quantity, chargeType: null, fromOhTemplate: false, returnIntakeNumbers: [] }));
 }
 
-/** 목록에 보일 한 줄 요약. 부품 이름은 신청 때 붙여 둔다(나중에 부품이 바뀌어도 신청 글자는 그대로). */
-export function buildRequestSummary(input: EntryInput, names: ReadonlyMap<string, { no: number; name: string }>): string {
-  const lines = linesOf(input);
+/**
+ * 목록에 보일 한 줄 요약. 부품 이름은 신청 때 붙여 둔다(나중에 부품이 바뀌어도 신청 글자는 그대로).
+ *
+ * 🔴 **반환도 부품과 인수번호를 적는다** (2026-11-26). 그 전에는 반환 요약이 「반환 · 2026-11-26」
+ *    뿐이었다 — 줄을 펴지 못해 부품이 비었고(`linesOf`), 머리말을 짓는 갈래에 반환이 없었다.
+ *    이 글자는 **감사 로그와 알림 종이 그대로 쓰는 값**이라(그 두 곳에는 신청 화면이 없다) 비어
+ *    있으면 「무슨 신청이 반려됐는지」를 아무 데서도 못 본다.
+ * 🔵 반환의 머리말은 **되짚은 원장 줄에서** 온다 — 반환 payload 에는 인수번호 칸이 아예 없다
+ *    (`lib/api/stock-requests.ts` 의 `buildApiReturnRequest`).
+ */
+export function buildRequestSummary(input: EntryInput, names: ReadonlyMap<string, { no: number; name: string }>, origins: ReadonlyMap<string, ReturnLineOrigin>): string {
+  const lines = linesOf(input, origins);
   const partsText = lines
     .slice(0, 3)
     .map((l) => {
@@ -236,7 +281,18 @@ export function buildRequestSummary(input: EntryInput, names: ReadonlyMap<string
     .join(", ");
   const more = lines.length > 3 ? ` 외 ${lines.length - 3}줄` : "";
   const head =
-    input.type === "USE" ? (input.noRepairCase ? `수리 건 없음(${input.reason})` : input.intakeNumber) : input.type === "LOAN" ? input.counterparty : input.type === "DISPOSE" ? input.reason : "";
+    input.type === "USE"
+      ? input.noRepairCase
+        ? `수리 건 없음(${input.reason})`
+        : input.intakeNumber
+      : input.type === "LOAN"
+        ? input.counterparty
+        : input.type === "DISPOSE"
+          ? input.reason
+          : // 🔵 수리 건이 섞여 있거나 못 되짚었으면 빈 글자다 — 하나를 골라 적지 않는다(그 함수의 주석).
+            input.type === "RETURN"
+            ? returnRequestIntakeNumber(returnRequestPartLines(input, origins))
+            : "";
   return [ENTRY_TYPE_LABEL[input.type], input.occurredOn, head, partsText + more].filter(Boolean).join(" · ");
 }
 
@@ -290,6 +346,52 @@ async function partViewsOf(partIds: readonly string[]): Promise<Map<string, Part
       { no: r.no, name: r.name, owner: r.owner, available: r.available ?? 0, customerName: r.customerName, name2: r.name2, kyosanPartNo: r.kyosanPartNo, drawingNo: r.drawingNo },
     ]),
   );
+}
+
+/**
+ * 반환 신청의 줄이 가리키는 **원장 줄을 되짚는다** (2026-11-26) — 「그 줄은 어느 부품이고, 어느
+ * 수리 건에서 나갔나」.
+ *
+ * 🔴 **이 질의가 없으면 반환 신청은 화면에서 「반환 · 날짜」 한 줄이다.** 반환 payload 는 부품이
+ *    아니라 원장 줄 번호를 들고 있어서(`./form.ts` 의 `ReturnLine`) payload 만으로는 아무것도 못
+ *    푼다. 담당자가 무엇을 돌려받는지 못 보면 「한 번 더 내용을 확인하고」가 성립하지 않는다
+ *    (2026-11-26 쓰는 분 지시).
+ * 🔵 **인수번호는 그 줄이 달린 불출 건에 있다** — 그래서 원장 건(`stock_entries`)까지 잇는다.
+ *    「수리 건 없음」으로 나간 줄이면 빈 글자이고, 그때 화면은 그 자리를 안 그린다.
+ * 🔴 **신청 묶음으로 한 번에 읽는다**(위 `partViewsOf`·`issuedQuantitiesOf` 와 같은 까닭) —
+ *    신청마다 물으면 목록 한 번에 질의가 신청 수만큼 는다.
+ * 🔴 **반환 줄이 하나도 없으면 질의를 보내지 않는다.** 목록의 거의 전부가 사용 신청이라,
+ *    반환이 한 건도 없는 날 이 조각이 질의를 **한 번도** 더하지 않아야 한다.
+ * 🔵 **종류를 여기서 가리지 않는다** — 넘어온 번호만 읽는다. 가르는 자리는 부르는 쪽의
+ *    `returnTransactionIdsOf` 하나다.
+ */
+async function returnLineOriginsOf(transactionIds: readonly string[]): Promise<Map<string, ReturnLineOrigin>> {
+  const ids = [...new Set(transactionIds)];
+  const out = new Map<string, ReturnLineOrigin>();
+  if (ids.length === 0) return out;
+  const rows = await db()
+    // 🔴 `select()` 전체 조회가 아니라 **쓸 칸만** 적는다 — 원장 표에 칸이 늘어도 화면으로 새어 나가지 않는다.
+    .select({ id: stockTransactions.id, partId: stockTransactions.partId, intakeNumber: stockEntries.intakeNumber })
+    .from(stockTransactions)
+    .innerJoin(stockEntries, eq(stockEntries.id, stockTransactions.entryId))
+    .where(inArray(stockTransactions.id, ids));
+  for (const r of rows) out.set(r.id, { partId: r.partId, intakeNumber: r.intakeNumber });
+  return out;
+}
+
+/**
+ * 되짚어야 할 **원장 줄 번호**를 신청 payload 에서 모은다 — 반환 신청만 본다.
+ *
+ * 🔵 모양을 믿지 않고 칸마다 확인한다: payload 는 DB 에 JSON 으로 누워 있다가 `as unknown as
+ *    EntryInput` 로 되살아난 값이다(이 파일의 `linesOf` 가 유상/무상에서 하는 것과 같은 판단).
+ */
+function returnTransactionIdsOf(inputs: readonly EntryInput[]): string[] {
+  const ids: string[] = [];
+  for (const input of inputs) {
+    if (input.type !== "RETURN" || !Array.isArray(input.lines)) continue;
+    for (const line of input.lines) if (typeof line?.transactionId === "string" && line.transactionId !== "") ids.push(line.transactionId);
+  }
+  return ids;
 }
 
 /**
@@ -411,8 +513,15 @@ export async function createRequest(input: EntryInput, actor: Requester, origin:
     // 🔵 종류는 여기서 쓰지 않는다 — 이 함수가 돌려주는 모양(`CreatedRequest`)은 그대로다.
     if (found) return { id: found.id, status: found.status, created: false };
   }
-  const names = await partNamesOf(linesOf(input).map((l) => l.partId));
-  const summary = buildRequestSummary(input, names);
+  /**
+   * 🔴 **반환이면 원장 줄을 먼저 되짚는다** (2026-11-26). 요약 글자에 「어느 부품 몇 개를 어느
+   *    수리 건에서」가 들어가려면 재료가 필요하고, 그 재료는 payload 에 없다(`linesOf` 의 주석).
+   * 🔵 **반환이 아니면 질의가 늘지 않는다** — 모을 번호가 없어 그 함수가 바로 빈 Map 을 돌려준다.
+   *    사용 신청이 올라오는 길은 한 글자도 바뀌지 않았다.
+   */
+  const origins = await returnLineOriginsOf(returnTransactionIdsOf([input]));
+  const names = await partNamesOf(linesOf(input, origins).map((l) => l.partId));
+  const summary = buildRequestSummary(input, names, origins);
   /**
    * 🔴 **여기가 「요청이 올라올 때 받아 저장」하는 그 자리다** (2026-10-22, 쓰는 분 결정) — 화면도,
    *    A/S 통로도 **이 함수 하나로** 신청을 만들므로 받아 오는 자리도 하나다(머리말 「신청이 생기는
@@ -640,7 +749,10 @@ export async function confirmRequest(id: string, admin: Actor, opts: ConfirmOpti
   //    집기로 이 요청을 혼자 들고 있으므로 이미 나간 수량을 트랜잭션 밖에서 읽어도 그 사이에 바뀌지 않는다.
   let plan;
   try {
-    const [issued, names] = await Promise.all([issuedQuantities(id), partNamesOf(linesOf(payload).map((l) => l.partId))]);
+    // 🔵 **되짚지 않는다**(`NO_RETURN_ORIGINS`): 이 이름들은 **오류 문구**에만 쓰이고, 반환은
+    //    쪼개 내주는 길이 없어 `buildIssueInput` 이 payload 를 통째로 넘긴다(그 함수의 주석).
+    //    여기서 원장을 한 번 더 읽어 봐야 쓸 자리가 없다.
+    const [issued, names] = await Promise.all([issuedQuantities(id), partNamesOf(linesOf(payload, NO_RETURN_ORIGINS).map((l) => l.partId))]);
     const want = opts.quantities ? new Map(opts.quantities.map((q) => [q.partId, q.quantity])) : null;
     const built = buildIssueInput(payload, want, issued, names);
     if (!built.ok) {
@@ -756,7 +868,10 @@ export async function closeRequest(id: string, note: string, admin: Actor): Prom
 
   // 이력에 숫자를 남긴다 — 「요청 8 중 5 나감, 3 남음을 마감」이 나중에 읽혀야 한다. 회차 줄은 마감으로 바뀌지 않으므로 지금 세도 같다.
   const issued = await issuedQuantities(id);
-  const lines = linesOf(row.payload as unknown as EntryInput);
+  // 🔵 **되짚지 않는다**(`NO_RETURN_ORIGINS`): 마감은 `PARTIAL` 만 받는데 반환은 한 번에 다
+  //    들어와 그 상태가 되지 않는다(`buildIssueInput` 의 반환 갈래 — `remaining` 이 언제나 0).
+  //    그러니 여기 오는 payload 에 반환은 없고, 원장을 한 번 더 읽을 까닭도 없다.
+  const lines = linesOf(row.payload as unknown as EntryInput, NO_RETURN_ORIGINS);
   const requested = lines.reduce((a, l) => a + l.quantity, 0);
   const out = lines.reduce((a, l) => a + Math.min(l.quantity, issued.get(l.partId) ?? 0), 0);
   await db().insert(auditLogs).values(
@@ -956,16 +1071,22 @@ export async function cancelExternalRequest(target: ExternalCancelTarget, reques
   return true;
 }
 
-function toRow(r: typeof stockRequests.$inferSelect, names: ReadonlyMap<string, PartLineView>, issued: ReadonlyMap<string, number>): PendingRequestRow {
+function toRow(r: typeof stockRequests.$inferSelect, names: ReadonlyMap<string, PartLineView>, issued: ReadonlyMap<string, number>, origins: ReadonlyMap<string, ReturnLineOrigin>): PendingRequestRow {
   const input = r.payload as unknown as EntryInput;
-  const lines = linesOf(input).map((l) => {
+  const lines = linesOf(input, origins).map((l) => {
     const p = names.get(l.partId);
     return {
       partId: l.partId,
       partNo: p?.no ?? null,
       partName: p?.name ?? "(지워진 부품)",
       quantity: l.quantity,
-      issued: issued.get(l.partId) ?? 0,
+      /**
+       * 🔴 **반환은 부호를 뒤집어 받는다** (2026-11-26). 회차 집계는 `sum(-delta)` 라 반환
+       *    (delta 가 양수)에서 **음수**가 온다 — 그대로 두면 화면에 「불출 −2 · 남음 4」가 선다.
+       *    세는 질의는 반출 쪽 것이라 손대지 않고, 뒤집는 일은 순수 함수 한 곳이 한다
+       *    (`./return-request-view.ts` 의 `returnedQuantityOf` — 거기 까닭이 길게 적혀 있다).
+       */
+      issued: input.type === "RETURN" ? returnedQuantityOf(issued.get(l.partId) ?? 0) : (issued.get(l.partId) ?? 0),
       // 🔴 부품을 못 찾으면 가용 0 · 소유 null 이다 — 지어내지 않는다(`RequestLineView` 의 두 주석).
       available: p?.available ?? 0,
       owner: p?.owner ?? null,
@@ -979,6 +1100,9 @@ function toRow(r: typeof stockRequests.$inferSelect, names: ReadonlyMap<string, 
       chargeType: l.chargeType,
       // 🔴 O/H 표시도 **신청 줄의 값**이다 — 부품을 못 찾아도 그대로 남는다(같은 까닭, `l` 을 본다).
       fromOhTemplate: l.fromOhTemplate,
+      // 🔴 **되짚은 원장 줄에서 온다** — 부품 표에도 신청 payload 에도 없는 값이다(그 칸의 주석).
+      //    반환이 아니면 언제나 빈 배열이고, 그때 화면은 그 자리를 아예 안 그린다.
+      returnIntakeNumbers: l.returnIntakeNumbers,
     };
   });
   return {
@@ -987,7 +1111,16 @@ function toRow(r: typeof stockRequests.$inferSelect, names: ReadonlyMap<string, 
     status: r.status,
     summary: r.summary,
     occurredOn: input.occurredOn,
-    intakeNumber: input.type === "USE" ? input.intakeNumber : "",
+    /**
+     * 🔴 **반환에도 찬다** (2026-11-26). 반환 payload 에는 인수번호 칸이 아예 없고
+     * (`lib/api/stock-requests.ts` 의 `buildApiReturnRequest`), 「어느 건에서 나간 것을 돌려주나」는
+     * **되돌리는 원장 줄이 들고 있다** — 그 줄을 되짚어(`returnLineOriginsOf`) 여기 적는다.
+     * 🔴 **줄마다 수리 건이 다르면 빈 글자다** — 하나를 골라 적으면 나머지 건이 없는 것처럼 보인다
+     *    (`returnRequestIntakeNumber` 의 주석). 그때 「어느 건인가」는 **줄마다** 보인다.
+     * 🔵 **A/S 도 이 값을 받는다**(`lib/api/stock-request-status.ts` 가 이 칸을 그대로 옮겨 적는다).
+     *    저쪽이 반환 신청을 세울 때 보낸 바로 그 번호라 새로 새어 나가는 값은 없다.
+     */
+    intakeNumber: input.type === "USE" ? input.intakeNumber : input.type === "RETURN" ? returnRequestIntakeNumber(returnRequestPartLines(input, origins)) : "",
     noRepairCase: input.type === "USE" ? input.noRepairCase : false,
     counterparty: input.type === "LOAN" ? input.counterparty : "",
     reason: "reason" in input ? input.reason : "",
@@ -1102,18 +1235,57 @@ function withRequesterSub(request: PendingRequestRow, subs: ReadonlyMap<string, 
  * 🔵 인수번호는 **payload 안**에 있다(칸이 따로 없다. `stock_requests` 스키마). 그래서 `payload->>'intakeNumber'`
  *    로 읽는다 — 🔴 **표를 고치지 않으려는 것**이고, 신청은 많아야 몇천 건이라 훑어도 된다. 느려지면 그때
  *    그 식에 색인을 두면 되고(표 모양은 그대로다), 그 전에 칸을 더해 같은 사실을 두 곳에 적지 않는다.
+ *
+ * ── 🔴 **반환 신청은 그 칸으로 안 걸린다 — 그래서 조건이 둘이다** (2026-11-26) ──
+ * 반환 payload 에는 `intakeNumber` 칸이 **아예 없다**(`lib/api/stock-requests.ts` 의
+ * `buildApiReturnRequest`: 「어느 건의 것인지는 되돌리는 원장 줄이 이미 들고 있다」). 그래서 위 조건
+ * 하나만으로는 **반환 신청이 한 줄도 안 걸린다** — 2026-11-26 실측: 같은 인수번호로 물었더니 17줄이
+ * 전부 `USE` 였고, 같은 건에 서 있던 반환 신청 2건은 응답에 없었다.
+ *
+ * 🔴 **그것이 조용한 결함이다.** A/S 의 [이 수리 건의 반출 신청] 목록이 이 통로로 걸리는데, 반환 줄이
+ *    빠져도 **오류가 하나도 안 난다** — 저쪽 화면은 그냥 「없다」고 말하고, 올린 사람은 제 요청이
+ *    사라진 줄 안다(거기서 [요청 취소]를 누를 길도 함께 사라진다).
+ * 🔴 **줄이 가리키는 원장 줄을 되짚어 건다.** 되짚는 자리가 둘이 되지만(`returnLineOriginsOf` 는
+ *    **읽어 와 보여 주려고**, 여기는 **걸러 내려고**) 한쪽은 질의의 WHERE 라 합칠 수가 없다.
+ * 🔵 **`::text` 로 견준다**(`::uuid` 캐스팅이 아니다): payload 는 JSON 이라 모양이 깨진 글자가 들어
+ *    있어도 질의 전체가 터지면 안 된다. 캐스팅하면 그 한 줄 때문에 **그 수리 건의 응답이 통째로 500** 이다.
+ * 🔵 `lines` 가 배열이 아닌 payload(조정·소유 옮김)가 섞여 있어도 안전하다 — `jsonb_array_elements` 에
+ *    넘기기 전에 `case` 로 빈 배열로 눕힌다. 🔴 `and` 로 막으면 안 된다: SQL 은 조건의 평가 차례를
+ *    약속하지 않아, 어느 날 계획이 바뀌면 그때 터진다.
  * 🔵 대문자로 받는다 — 저장된 값이 언제나 대문자다(올리는 통로와 화면 폼이 저장 전에 올린다). 다듬는 자리는
  *    부르는 쪽 순수 함수(`lib/api/stock-request-status.ts` 의 `parseStatusIntakes`) 하나다.
  * 🔵 차례를 여기서 정하지 않는다 — 돌려줄 차례는 순수 함수 한 곳에서 정한다(`buildIntakeStatusResponse`).
  *    그래야 시험이 DB 없이 그 규칙을 덮는다.
  */
+/**
+ * 「이 **반환** 신청이 그 인수번호의 것인가」 — 줄이 가리키는 **원장 줄**을 되짚어 건다 (2026-11-26).
+ *
+ * 🔴 위 머리말의 그 조건이다. 여기 떼어 두는 까닭은 질의 한 줄이 읽을 수 없게 길어지기 때문이고,
+ *    **이 식이 틀리면 A/S 의 [이 수리 건의 반출 신청] 목록에서 반환 줄이 조용히 사라진다.**
+ * 🔴 **종류를 함께 건다**(`type = 'RETURN'`). 안 걸면 사용 신청의 `lines[].partId` 를 원장 줄 번호로
+ *    맞춰 보게 되는데, 그것은 **영영 아무것도 못 맞추면서** 신청 수만큼 훑는 일이다.
+ */
+function returnRequestMatchesIntake(intakeNumbers: readonly string[]) {
+  const list = sql.join(
+    intakeNumbers.map((n) => sql`${n}`),
+    sql`, `,
+  );
+  return sql`(
+    ${stockRequests.type} = 'RETURN'
+    and exists (
+      select 1
+      from jsonb_array_elements(case when jsonb_typeof(${stockRequests.payload} -> 'lines') = 'array' then ${stockRequests.payload} -> 'lines' else '[]'::jsonb end) as return_line
+      join stock_transactions return_tx on return_tx.id::text = return_line ->> 'transactionId'
+      join stock_entries return_entry on return_entry.id = return_tx.entry_id
+      where return_entry.intake_number in (${list})
+    )
+  )`;
+}
+
 export async function listRequestsByIntakeNumbers(intakeNumbers: readonly string[]): Promise<Array<{ externalKey: string | null; request: ApiRequestRow }>> {
   const unique = [...new Set(intakeNumbers)];
   if (unique.length === 0) return [];
-  const rows = await db()
-    .select()
-    .from(stockRequests)
-    .where(inArray(sql`${stockRequests.payload}->>'intakeNumber'`, unique));
+  const rows = await db().select().from(stockRequests).where(or(inArray(sql`${stockRequests.payload}->>'intakeNumber'`, unique), returnRequestMatchesIntake(unique)));
   const keyById = new Map(rows.map((r) => [r.id, r.externalKey]));
   const views = await attachNames(rows);
   // 🔴 **열쇠로 물었을 때와 같은 줄 모양**이다 — 포털 번호도 여기서 똑같이 얹는다(한쪽만 실으면 A/S 화면이
@@ -1159,8 +1331,16 @@ export async function listPendingReturnPayloads(): Promise<unknown[]> {
  *    화면마다 따로 채우면 언젠가 한쪽에만 칸이 생겨 갈린다.
  */
 async function attachNames(rows: Array<typeof stockRequests.$inferSelect>): Promise<PendingRequestRow[]> {
-  const [names, issued] = await Promise.all([partViewsOf(rows.flatMap((r) => linesOf(r.payload as unknown as EntryInput).map((l) => l.partId))), issuedQuantitiesOf(rows.map((r) => r.id))]);
-  return rows.map((r) => toRow(r, names, issued.get(r.id) ?? new Map()));
+  const inputs = rows.map((r) => r.payload as unknown as EntryInput);
+  /**
+   * 🔴 **반환 줄을 먼저 되짚는다** (2026-11-26) — 부품 정보를 묻기 **전**이어야 한다. 반환 줄이
+   *    가리키는 것은 원장 줄이라, 되짚기 전에는 물을 부품 id 자체가 없다.
+   * 🔵 **반환이 한 건도 없으면 질의가 늘지 않는다**: 모을 번호가 없어 그 함수가 바로 빈 Map 을
+   *    돌려준다. 목록의 거의 전부가 사용 신청인 날 이 조각은 질의를 한 번도 더하지 않는다.
+   */
+  const origins = await returnLineOriginsOf(returnTransactionIdsOf(inputs));
+  const [names, issued] = await Promise.all([partViewsOf(inputs.flatMap((input) => linesOf(input, origins).map((l) => l.partId))), issuedQuantitiesOf(rows.map((r) => r.id))]);
+  return rows.map((r) => toRow(r, names, issued.get(r.id) ?? new Map(), origins));
 }
 
 /**

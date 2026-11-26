@@ -302,6 +302,8 @@ export interface ApiRequestStatus {
    * 🔵 열쇠로 물었을 때도 **같이 간다** — 돌려주는 모양을 둘로 가르지 않으려는 것이다(머리말).
    *    반출 신청은 인수번호가 필수라 A/S 에서 올라온 신청에는 언제나 들어 있다. 재고 관리 화면에서
    *    「수리 건 없음」으로 적은 신청은 빈 글자다.
+   * 🔵 **반환 신청에도 들어 있다** (2026-11-26) — payload 가 아니라 되돌리는 원장 줄에서 되짚어
+   *    온 값이고, A/S 가 그 신청을 세울 때 보낸 바로 그 번호다(아래 `RequestStatusSource` 의 같은 칸).
    */
   intakeNumber: string;
   /**
@@ -399,7 +401,16 @@ export interface RequestStatusSource {
   id: string;
   type: EntryType;
   status: RequestStatus;
-  /** 🔵 `PendingRequestRow` 가 이미 들고 있는 칸이다(USE 가 아니면 빈 글자). 위 `ApiRequestStatus.intakeNumber` */
+  /**
+   * 🔵 `PendingRequestRow` 가 이미 들고 있는 칸이다. 위 `ApiRequestStatus.intakeNumber`
+   *
+   * 🔴 **2026-11-26 부터 반환 신청에도 찬다 — 「USE 가 아니면 빈 글자」가 더 이상 참이 아니다.**
+   *    반환 payload 에는 인수번호 칸이 아예 없지만(`./stock-requests.ts` 의 `buildApiReturnRequest`),
+   *    「어느 건에서 나간 것을 돌려주나」는 되돌리는 **원장 줄**이 들고 있어서 재고 관리가 그것을
+   *    되짚어 채운다(`lib/stock/requests.ts` 의 `returnLineOriginsOf`).
+   *    🔵 **A/S 가 반환 신청을 세울 때 보낸 바로 그 번호**라 새로 새어 나가는 값은 없다.
+   * 🔵 그 밖의 종류(대여·폐기)와 「수리 건 없음」으로 적은 반출은 그대로 빈 글자다.
+   */
   intakeNumber: string;
   /**
    * 올린 사람의 **포털 번호**와 그때의 이름 (2026-10-16).

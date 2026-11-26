@@ -6,6 +6,7 @@ import { IssueApprovalTrail } from "./IssueApprovalTrail";
 import { RepairCaseInfo } from "./RepairCaseInfo";
 import { RequestActions, type RequestActionLine, type RequestActionStatus } from "./RequestActions";
 import { RequestItemDetails } from "./RequestItemDetails";
+import { ReturnSourceLine } from "./ReturnSourceLine";
 import type { RequestSource, RequestStatus } from "@/db/schema/stock-requests";
 import {
   PART_ISSUE_APPROVALS_LINK_LABEL,
@@ -37,6 +38,7 @@ import {
 import type { RepairCaseSnapshot } from "@/lib/stock/repair-case";
 import { partDetailHref } from "@/lib/stock/request-item-detail";
 import type { RequestNotice } from "@/lib/stock/request-notice";
+import { isReturnRequest, RETURN_CONFIRM_BUTTON_LABEL, RETURN_CONFIRM_SUBMIT_LABEL, RETURN_ITEMS_DONE_HEADER } from "@/lib/stock/return-request-view";
 
 /**
  * 부품 요청 관리 `/requests` (관리자는 처리까지, 신청자는 보기만 — 2026-10-15 사용자 결정)
@@ -227,7 +229,23 @@ function IssueLockNotice({ lock }: { lock: PartIssueLock }) {
  *    🔴 그래서 기록 내역은 **한 글자도 건드리지 않았다.**
  */
 function aboutOf(r: ManagerRequestRow): string {
-  return r.type === "USE" ? (r.noRepairCase ? `수리 건 없음 (${r.reason})` : r.intakeNumber) : r.type === "LOAN" ? `빌려준 곳 ${r.counterparty}` : r.type === "DISPOSE" ? `사유 ${r.reason}` : "";
+  /**
+   * 🔴 **반환도 인수번호를 적는다** (2026-11-26). 그 전에는 이 칸이 반환에서 빈 글자라 목록에
+   *    `-` 만 섰다 — 「무엇을 돌려받는 신청인가」를 가릴 값이 화면에 하나도 없었다.
+   * 🔵 값은 **되돌리는 원장 줄에서 되짚어 온 것**이고(서버의 `returnLineOriginsOf`), 줄마다 수리
+   *    건이 다르면 빈 글자다 — 그때는 줄마다 보인다(`ReturnSourceLine`). 하나를 골라 적지 않는다.
+   */
+  return r.type === "USE"
+    ? r.noRepairCase
+      ? `수리 건 없음 (${r.reason})`
+      : r.intakeNumber
+    : isReturnRequest(r.type)
+      ? r.intakeNumber
+      : r.type === "LOAN"
+        ? `빌려준 곳 ${r.counterparty}`
+        : r.type === "DISPOSE"
+          ? `사유 ${r.reason}`
+          : "";
 }
 
 /**
@@ -324,7 +342,17 @@ function DecisionNote({ request, decidedVia }: { request: ManagerRequestRow; dec
  *    상세 창)이고, 변경 이력·기록 내역이 쓰는 그 길이다. 🔴 **지워진 부품에는 링크를 걸지 않는다**
  *    (`partDetailHref` 가 `null`). 판정은 화면이 다시 적지 않는다.
  */
-function RequestItems({ lines }: { lines: readonly ManagerRequestLine[] }) {
+function RequestItems({ type, lines }: { type: EntryType; lines: readonly ManagerRequestLine[] }) {
+  /**
+   * 🔴 **반환은 두 칸이 거짓말이다** (2026-11-26) — 그래서 종류를 받는다.
+   *  ① 「불출」: 그 칸이 세는 것은 「이 신청으로 원장에 들어온 수량」이고, 반환에서는 부품이 **나간
+   *     것이 아니라 들어온 것**이다 → 글자를 바꾼다(`RETURN_ITEMS_DONE_HEADER`).
+   *  ② 🔴 **「가용」은 아예 뺀다.** 그 칸은 「지금 재고로 남은 수량을 다 내줄 수 있나」를 재고
+   *     **반환은 재고를 쓰지 않고 더한다.** 그대로 두면 **돌려받는 부품의 재고가 0 일 때**(가장
+   *     흔한 경우다) 빨간 「다 내줄 수 없습니다」가 켜진다 — 아무 문제도 없는 신청에 켜지는 경보다.
+   * 🔵 「요청」·「남음」은 반환에서도 그대로 참말이라 손대지 않는다.
+   */
+  const isReturn = isReturnRequest(type);
   return (
     <table className="w-full text-xs">
       <thead>
@@ -336,14 +364,16 @@ function RequestItems({ lines }: { lines: readonly ManagerRequestLine[] }) {
             요청
           </th>
           <th scope="col" className="w-10 pb-1 text-right font-normal">
-            불출
+            {isReturn ? RETURN_ITEMS_DONE_HEADER : "불출"}
           </th>
           <th scope="col" className="w-10 pb-1 text-right font-normal">
             남음
           </th>
-          <th scope="col" className="w-10 pb-1 text-right font-normal">
-            가용
-          </th>
+          {isReturn ? null : (
+            <th scope="col" className="w-10 pb-1 text-right font-normal">
+              가용
+            </th>
+          )}
         </tr>
       </thead>
       <tbody>
@@ -371,13 +401,19 @@ function RequestItems({ lines }: { lines: readonly ManagerRequestLine[] }) {
                        적고 있었는데, 그것이 **이 조각의 「값이 없으면 빈 자리를 만들지 않는다」와 어긋나
                        있었다.** 이제 세 화면이 같은 규칙을 쓴다 — 지워진 부품에는 소유 딱지가 안 선다. */}
                 <RequestItemDetails item={l} />
+                {/* 🔴 **반환 줄에만 선다** — 「어느 수리 건에서 나간 것을 돌려주나」. 값이 없으면
+                    조각이 저 안에서 `null` 을 돌려줘 줄 자체가 안 선다(그 조각의 머리말). */}
+                <ReturnSourceLine intakeNumbers={l.returnIntakeNumbers} />
               </td>
               <td className="tabular py-1 text-right text-zinc-700">{formatQuantity(l.quantity)}</td>
               <td className={`tabular py-1 text-right ${issued > 0 ? "text-zinc-700" : "text-zinc-300"}`}>{formatQuantity(issued)}</td>
               <td className={`tabular py-1 text-right ${remaining > 0 ? "font-medium text-amber-700" : "text-zinc-300"}`}>{formatQuantity(remaining)}</td>
-              <td className={`tabular py-1 text-right ${short ? "font-medium text-red-700" : "text-zinc-500"}`} title={short ? "지금 재고로는 남은 수량을 다 내줄 수 없습니다." : undefined}>
-                {formatQuantity(l.available)}
-              </td>
+              {/* 🔴 반환에는 이 칸이 없다(위 머리말 ②) — 빨간 경보가 늘 켜지는 자리라 글자만 바꿔서는 안 된다. */}
+              {isReturn ? null : (
+                <td className={`tabular py-1 text-right ${short ? "font-medium text-red-700" : "text-zinc-500"}`} title={short ? "지금 재고로는 남은 수량을 다 내줄 수 없습니다." : undefined}>
+                  {formatQuantity(l.available)}
+                </td>
+              )}
             </tr>
           );
         })}
@@ -546,6 +582,13 @@ export function RequestManagerScreen({
    *    화면에 없는 단추를 찾게 된다.
    */
   const someApprovalRequired = filtered.some((r) => approvalRequired[r.id] ?? false);
+  /**
+   * **지금 보이는 목록에 반환 신청이 섞여 있나** (2026-11-26). 🔵 바로 위 `someApprovalRequired` 와
+   * 같은 관례다 — 머리말은 「그런 신청이 섞여 있다」는 사실만 알리고, 단추 이름의 진실은 줄에 있다.
+   * 🔵 `requests` 가 아니라 `filtered` 로 재는 것도 같은 까닭이다: 거르개로 안 보이게 된 신청을
+   *    두고 설명하면 사람은 화면에 없는 단추를 찾게 된다.
+   */
+  const someReturn = filtered.some((r) => isReturnRequest(r.type));
 
   /**
    * 「이 줄이 왜 이 상태인가」를 말하는 상자들 — 결재선 그림 · 보류 사유 · 결정 사유.
@@ -595,6 +638,10 @@ export function RequestManagerScreen({
       <RequestActions
         requestId={r.id}
         status={actionStatus}
+        /* 🔴 **종류가 단추와 상자를 가른다** (2026-11-26) — 반환이면 [확인]이 아니라 [반환]이고,
+           상자에서 수량을 고칠 수 없으며 끝내는 단추가 [반환 완료]다. 판정은 `isReturnRequest`
+           한 곳이고 화면은 **종류를 넘기기만** 한다. */
+        type={r.type}
         lines={r.lines}
         /* 🔵 목록의 「무엇에」 칸이 그리는 것과 **같은 값**이다(위 `RequestNote`) — 상자를
            열었다고 다른 글이 보이면 안 된다. 뽑는 자리는 신청 줄 하나다. */
@@ -651,6 +698,17 @@ export function RequestManagerScreen({
               {" "}
               지금은 <b>수리 건 종류에 따라</b> 부품 불출 승인 절차가 걸립니다 — 절차가 있는 신청은 <b>[불출 신청]</b>이 결재를 올리고, 결재가 끝난 뒤 「승인 요청건」 화면에서 실행합니다. 절차가 없는
               신청은 지금까지처럼 <b>[확인]</b>으로 그 자리에서 내줍니다.
+            </>
+          ) : null}
+          {/* 🔴 **반환 신청이 섞여 있으면 그 자리의 단추가 다르다** (2026-11-26). 위 문단은 전부
+              「반출」을 두고 하는 말이라, A/S 에서 올라온 반환 줄을 본 담당자는 [확인]을 찾다가
+              [반환]을 고장으로 읽는다. 🔵 반환이 한 건도 안 보이면 이 줄 자체가 안 선다 —
+              지금까지와 한 글자도 다르지 않다. */}
+          {someReturn ? (
+            <>
+              {" "}
+              A/S 에서 올라온 <b>{ENTRY_TYPE_LABEL.RETURN}</b> 신청은 <b>[{RETURN_CONFIRM_BUTTON_LABEL}]</b>으로 내용을 한 번 더 확인하고 <b>[{RETURN_CONFIRM_SUBMIT_LABEL}]</b>를 누르면 그 자리에서
+              재고에 더해집니다 — 반환에는 승인 절차가 없고, 수량은 신청한 그대로 받습니다.
             </>
           ) : null}
         </p>
@@ -713,7 +771,7 @@ export function RequestManagerScreen({
                     </span>
                   </div>
                   {/* ④ 판단 근거 — 표와 **같은 조각**이 그린다(숫자는 `.tabular` 로 세로가 맞는다) */}
-                  <RequestItems lines={r.lines} />
+                  <RequestItems type={r.type} lines={r.lines} />
                   {/* ⑤ 왜 이 상태인가 — 🔵 그릴 상자가 하나도 없으면 이 묶음 자체가 안 보인다 */}
                   <div className="flex flex-col gap-1 empty:hidden">{statusNotes(r)}</div>
                   {/* 🔴 ⑥ 단추는 **맨 아래** — 엄지로 닿는 자리이고, 읽고 나서 누르는 차례다.
@@ -771,7 +829,7 @@ export function RequestManagerScreen({
                       <td className={`${TD} max-w-64 text-zinc-700`}>{aboutCell(r)}</td>
                       <td className={`${TD} whitespace-nowrap text-zinc-700`}>{requesterCell(r)}</td>
                       <td className={`${TD} w-[24rem]`}>
-                        <RequestItems lines={r.lines} />
+                        <RequestItems type={r.type} lines={r.lines} />
                       </td>
                       <td className={TD}>
                         <div className="flex flex-col gap-1">

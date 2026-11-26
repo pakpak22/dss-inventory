@@ -17,10 +17,19 @@ import {
   PART_ISSUE_REQUEST_SUBMIT_LABEL,
   type PartIssueLock,
 } from "@/lib/approval/part-issue-gate";
-import type { ClaimableRequestStatus } from "@/lib/stock/codes";
+import type { ClaimableRequestStatus, EntryType } from "@/lib/stock/codes";
 import type { RequestItemView } from "@/lib/stock/request-item-detail";
+import {
+  isReturnRequest,
+  RETURN_CONFIRM_BUSY_LABEL,
+  RETURN_CONFIRM_BUTTON_LABEL,
+  RETURN_CONFIRM_NOTICE,
+  RETURN_CONFIRM_SUBMIT_LABEL,
+  RETURN_CONFIRM_TITLE,
+} from "@/lib/stock/return-request-view";
 import { RETURN_TO_FIELD } from "@/lib/stock/return-to";
 import { RequestItemDetails } from "./RequestItemDetails";
+import { ReturnSourceLine } from "./ReturnSourceLine";
 
 const BTN = "rounded-md border border-zinc-300 px-2.5 py-1 text-xs text-zinc-700 hover:bg-zinc-100 disabled:opacity-50";
 const BTN_P = "rounded-md bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-zinc-800 disabled:opacity-50";
@@ -49,6 +58,16 @@ export interface RequestActionLine extends RequestItemView {
   quantity: number;
   /** 이미 나간 수량 */
   issued: number;
+  /**
+   * **어느 수리 건에서 나간 것을 돌려주나** — 반환 신청에만 찬다 (2026-11-26).
+   *
+   * 🔴 **반환 확인 상자가 꼭 보여야 하는 값 셋 중 하나다**(무엇을 · 몇 개 · 어느 수리 건에서).
+   *    값은 서버가 **되돌리는 원장 줄을 되짚어** 실어 보낸다(`lib/stock/requests.ts` 의
+   *    `returnLineOriginsOf`) — 신청 payload 에도 부품 표에도 없는 값이다.
+   * 🔵 반환이 아닌 신청에는 **빈 배열**이고, 그때 `ReturnSourceLine` 이 아무것도 안 그린다 —
+   *    「없는 것」이지 「못 찾은 것」이 아니다(이 묶음의 `chargeType` 이 `null` 인 것과 같은 결).
+   */
+  returnIntakeNumbers: string[];
 }
 
 /** 그 줄에 아직 안 나간 수량. 🔴 음수로 흐르지 않게 막는다(기록 취소 등으로 어긋나도 화면이 깨지지 않게). */
@@ -119,6 +138,7 @@ export type RequestActionStatus = ClaimableRequestStatus | "ON_HOLD";
 export function RequestActions({
   requestId,
   status,
+  type,
   lines,
   requestNote,
   canDecide,
@@ -129,6 +149,20 @@ export function RequestActions({
   requestId: string;
   /** 지금 상태 — 🔵 **셋 중 하나임이 타입으로 보증된다**(`isClaimableRequest` 가 좁혀 주고, 보류는 부르는 쪽이 따로 가린다). */
   status: RequestActionStatus;
+  /**
+   * 신청의 **종류** — 🔴 **반환이면 이 묶음이 통째로 다른 일을 한다** (2026-11-26 쓰는 분 지시).
+   *
+   *  · 단추 이름이 [확인]이 아니라 **[반환]**이다.
+   *  · 상자에 **수량 칸이 없다** — 신청한 그대로 받는다(쓰는 분이 나눠 받는다는 말을 한 적이 없다).
+   *  · 끝내는 단추가 **[반환 완료]**다.
+   *
+   * 🔴 **결재는 타지 않는다**(`lib/approval/route.ts` 의 `isApprovalExemptRequestType`) — 그래서
+   *    반환 줄의 `approvalRequired` 는 서버가 언제나 거짓으로 내려보내고 `issueLock` 은 `null` 이다.
+   *    여기서 그 둘을 다시 판정하지 않는다(화면은 서버가 준 값만 쓴다 — 이 묶음의 관례).
+   * 🔴 **기본값을 두지 않는다**: 두면 이 묶음을 쓰는 화면이 느는 날 아무 말 없이 「사용」으로 굳어
+   *    **반환에 [확인] 단추가 서고 수량 칸이 열린다.** 오류가 아니라 **빠짐**이라 아무도 신고하지 않는다.
+   */
+  type: EntryType;
   lines: readonly RequestActionLine[];
   /**
    * **요청 비고** — 신청한 사람이 올릴 때 적은 말 (2026-10-22, 쓰는 분 요청: 「불출 신청을 눌렀을 때
@@ -167,6 +201,11 @@ export function RequestActions({
   /** 보내기 전에 화면에서 거른 것(서버도 같은 것을 다시 본다 — `buildIssueInput`). */
   const [issueError, setIssueError] = useState<string | null>(null);
 
+  /**
+   * 🔴 **이 줄이 반환인가** — 판정은 순수 함수 한 곳이다(`isReturnRequest`). 여기서 `type === "RETURN"`
+   *    을 손으로 적지 않는 까닭은 그 함수의 머리말에 있다(같은 대접을 받을 종류가 늘어도 한 자리만 고친다).
+   */
+  const isReturn = isReturnRequest(type);
   const busy = confirming || rejecting || cancelling || closing || holding || releasing || requestingIssue;
   /** 상자를 띄운 채 보내는 중인가 — 절차가 있으면 결재를 올리는 중이고, 없으면 내주는 중이다. */
   const submitting = approvalRequired ? requestingIssue : confirming;
@@ -244,6 +283,22 @@ export function RequestActions({
     const form = new FormData(e.currentTarget);
     const out = fd();
 
+    /**
+     * ③ **반환 — 수량을 아예 안 싣는다** (2026-11-26).
+     *
+     * 🔴 **신청한 그대로 받는다**(쓰는 분이 나눠 받는다는 말을 한 적이 없다). 수량을 안 보내면
+     *    서버가 「남은 수량 전부」로 읽고(`confirmRequest` 의 `quantities` 가 `undefined`),
+     *    반환은 `buildIssueInput` 이 payload 를 **통째로** 넘기므로 신청한 줄 그대로 원장에 간다.
+     * 🔴 **상자에 수량 칸이 없으니 읽을 것도 없다** — 여기서 `readQuantities` 를 부르면 없는 칸을
+     *    읽어 「남은 수량」으로 되채운 값을 보내게 되고, 그것은 **보낸 적 없는 값**이다.
+     * 🔵 「이번 회차에 남길 말」도 안 싣는다 — 반환은 회차가 하나뿐이라 그 칸을 그리지 않는다.
+     */
+    if (isReturn) {
+      setIssueError(null);
+      startTransition(() => confirmAction(out));
+      return;
+    }
+
     if (approvalRequired) {
       const quantities = readQuantities(form);
       if (quantities === null) return;
@@ -291,8 +346,10 @@ export function RequestActions({
               setOpen("issue");
             }}
           >
-            {/* 🔴 절차가 쓰이고 있으면 이 단추는 **재고를 빼지 않는다** — 이름도 그렇게 말한다(`part-issue-gate.ts`). */}
-            {submitting ? (approvalRequired ? "올리는 중" : "내주는 중") : partIssueConfirmLabel(approvalRequired)}
+            {/* 🔴 절차가 쓰이고 있으면 이 단추는 **재고를 빼지 않는다** — 이름도 그렇게 말한다(`part-issue-gate.ts`).
+                🔴 **반환은 그 두 이름 중 어느 것도 아니다** (2026-11-26): 재고를 빼는 일도, 결재를 올리는 일도
+                   아니라 **돌려받는** 일이다. 그래서 글자를 저 표에서 고르지 않고 반환 쪽 한 벌에서 가져온다. */}
+            {submitting ? (isReturn ? RETURN_CONFIRM_BUSY_LABEL : approvalRequired ? "올리는 중" : "내주는 중") : isReturn ? RETURN_CONFIRM_BUTTON_LABEL : partIssueConfirmLabel(approvalRequired)}
           </button>
         )
       ) : null}
@@ -324,12 +381,22 @@ export function RequestActions({
       ) : null}
       {error ? <span className="text-xs text-red-600">{error}</span> : null}
 
-      {/* ① 확인 = 이번 회차 불출 — 줄별 수량. 🔴 절차가 쓰이고 있으면 **같은 상자가 결재를 올린다**(조각 11c) */}
+      {/* ① 확인 = 이번 회차 불출 — 줄별 수량. 🔴 절차가 쓰이고 있으면 **같은 상자가 결재를 올린다**(조각 11c)
+          🔴 **반환도 같은 상자다** (2026-11-26). 상자를 한 벌 더 만들지 않는 까닭 둘: ① 보일 것이 거의
+             같다(요청 비고 · 줄마다 부품과 수량 · 돌아가기/끝내기) — 베껴 두면 「비면 안 그린다」와
+             이름표 글자가 두 벌이 되어 한쪽만 고쳐지는 날이 온다. ② 갈리는 것은 **글자와 수량 칸
+             하나**뿐이라, 갈림을 상자 안에 적어 두는 편이 두 상자를 맞대어 보는 것보다 눈에 잘 띈다. */}
       <Modal open={open === "issue"} onClose={() => setOpen(null)}>
         <form onSubmit={submitIssue} className="flex flex-col gap-3">
-          <h3 className="text-base font-semibold">{approvalRequired ? "이번에 내보낼 수량" : "이번에 내줄 수량"}</h3>
-          {/* 🔴 **무엇이 달라졌는지 먼저 말한다** — 단추 이름만 바뀌면 사람은 눌러 보고 나서야 재고가 안 빠진다는 것을 안다. */}
-          {approvalRequired ? <p className="rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs text-blue-900">{PART_ISSUE_REQUEST_DIALOG_NOTICE}</p> : null}
+          <h3 className="text-base font-semibold">{isReturn ? RETURN_CONFIRM_TITLE : approvalRequired ? "이번에 내보낼 수량" : "이번에 내줄 수량"}</h3>
+          {/* 🔴 **무엇이 달라졌는지 먼저 말한다** — 단추 이름만 바뀌면 사람은 눌러 보고 나서야 재고가 안 빠진다는 것을 안다.
+              🔴 **반환도 같은 자리에서 말한다**: 옆 상자는 줄마다 수량을 적게 하는데 여기는 입력 칸이
+                 아예 없어서, 까닭을 안 적으면 **고장으로 읽힌다**(`RETURN_CONFIRM_NOTICE` 의 주석). */}
+          {isReturn ? (
+            <p className="rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs text-blue-900">{RETURN_CONFIRM_NOTICE}</p>
+          ) : approvalRequired ? (
+            <p className="rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs text-blue-900">{PART_ISSUE_REQUEST_DIALOG_NOTICE}</p>
+          ) : null}
           {/* 🔴 **신청한 사람이 적은 말 — 읽는 글이다** (2026-10-22). 결재를 올리기(또는 내주기) **전에**
               A/S 가 무슨 말을 적었는지 여기서 읽는다. 🔴 **자리로 가른다**: 맨 위에 두어, 아래쪽 입력 칸
               (「신청 사유」·「이번 회차에 남길 말」)과 줄 목록을 사이에 두고 떨어뜨린다. 🔴 **이름표로도
@@ -346,10 +413,13 @@ export function RequestActions({
               요청 비고 (신청한 사람이 적은 말): “{requestNote}”
             </p>
           ) : null}
-          <p className="text-xs text-zinc-500">
-            칸을 <b>비워 두면 그 줄의 남은 수량 전부</b>를 {approvalRequired ? "올립니다" : "내줍니다"}. 이번에 안 줄 줄에는 <b>0</b> 을 적으십시오. 남은 수량이 있으면 이 신청은{" "}
-            <b>확인 대기에 그대로 남습니다.</b>
-          </p>
+          {/* 🔵 수량 칸을 쓰는 법 — 🔴 **반환에는 그 칸이 없으므로 이 줄도 없다**(있으면 거짓말이다). */}
+          {isReturn ? null : (
+            <p className="text-xs text-zinc-500">
+              칸을 <b>비워 두면 그 줄의 남은 수량 전부</b>를 {approvalRequired ? "올립니다" : "내줍니다"}. 이번에 안 줄 줄에는 <b>0</b> 을 적으십시오. 남은 수량이 있으면 이 신청은{" "}
+              <b>확인 대기에 그대로 남습니다.</b>
+            </p>
+          )}
           {/* 🔵 **위로 맞춘다**(`items-start`, 2026-10-21) — 아래 자세한 내용이 붙으면서 왼쪽이 두세 줄이 됐다.
               가운데로 맞추면 수량 칸이 줄 한가운데로 내려가 **어느 부품의 칸인지**가 한눈에 안 들어온다.
               🔵 `min-w-0 flex-1` 은 긴 품번·도번이 수량 칸을 상자 밖으로 밀어내지 않게 하는 자리다. */}
@@ -360,7 +430,8 @@ export function RequestActions({
                   {labelOf(l)}{" "}
                   <span className="text-xs text-zinc-500">
                     요청 {l.quantity}
-                    {l.issued > 0 ? ` 중 ${Math.min(l.quantity, l.issued)} 나감 · ${remainingOf(l)} 남음` : ""}
+                    {/* 🔵 반환은 한 번에 다 들어와 회차가 쪼개지지 않는다 — 「나감/남음」이 설 일이 없다. */}
+                    {l.issued > 0 ? (isReturn ? ` 중 ${Math.min(l.quantity, l.issued)} 돌아옴 · ${remainingOf(l)} 남음` : ` 중 ${Math.min(l.quantity, l.issued)} 나감 · ${remainingOf(l)} 남음`) : ""}
                   </span>
                   {/* 🔴 **어느 부품인지 가리는 값들**(고객사 품명·품명2·교산 품번·도번)과 **딱지 둘**(소유구분·유상/무상).
                       같은 품명이 여럿인 묶음이 실제로 16개 있어, 상자를 뜯으러 가기 **전에** 여기서 갈려야 한다
@@ -368,21 +439,36 @@ export function RequestActions({
                       곧 내주는(또는 결재에 올리는) 행위이고, 틀리면 **청구가 잘못 간다.**
                       🔵 값이 없는 칸은 아예 안 그린다 — 그 규칙도 모양도 `RequestItemDetails` 한 곳에 있다. */}
                   <RequestItemDetails item={l} />
+                  {/* 🔴 **어느 수리 건에서 나간 것을 돌려주나** (2026-11-26) — 쓰는 분이 상자에 보여
+                      달라고 한 셋 중 하나다(무엇을 · 몇 개 · 어느 수리 건에서). 🔵 반환이 아닌 줄에는
+                      값이 없어 조각이 저 안에서 아무것도 안 그린다 — 여기서 종류로 가리지 않는다. */}
+                  <ReturnSourceLine intakeNumbers={l.returnIntakeNumbers} />
                 </span>
-                <span className="flex items-center gap-1">
-                  <input
-                    type="number"
-                    name={`q:${l.partId}`}
-                    min={0}
-                    max={remainingOf(l)}
-                    step={1}
-                    inputMode="numeric"
-                    placeholder={String(remainingOf(l))}
-                    aria-label={`${labelOf(l)} 이번에 내줄 수량`}
-                    className={`${FIELD} tabular w-24 text-right`}
-                  />
-                  <span className="text-xs text-zinc-500">개</span>
-                </span>
+                {/* 🔴 **반환에는 수량 칸이 없다** (2026-11-26, 쓰는 분이 고치는 자리를 말한 적이 없다) —
+                    신청한 그대로 받는다. 🔵 그래도 **몇 개인지는 보인다**: 입력 칸 자리에 숫자를 그대로
+                    세운다. 칸을 `readOnly` 로 두지 않는 까닭은, 읽기 전용 입력 칸이 **눌러 보고 나서야
+                    못 고치는 줄 아는** 자리이기 때문이다. */}
+                {isReturn ? (
+                  <span className="flex items-center gap-1 text-sm">
+                    <b className="tabular">{l.quantity}</b>
+                    <span className="text-xs text-zinc-500">개</span>
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1">
+                    <input
+                      type="number"
+                      name={`q:${l.partId}`}
+                      min={0}
+                      max={remainingOf(l)}
+                      step={1}
+                      inputMode="numeric"
+                      placeholder={String(remainingOf(l))}
+                      aria-label={`${labelOf(l)} 이번에 내줄 수량`}
+                      className={`${FIELD} tabular w-24 text-right`}
+                    />
+                    <span className="text-xs text-zinc-500">개</span>
+                  </span>
+                )}
               </li>
             ))}
           </ul>
@@ -390,7 +476,10 @@ export function RequestActions({
               🔴 서버 쪽 두 글자 울타리도 함께 풀었다(`requestPartIssueAction`). 한쪽만 풀면 눌러도 거절당하거나 아예 못 누른다.
               🔵 절차가 없을 때의 「이번 회차에 남길 말」도 **그대로 선택**이다. 두 칸은 뜻이 달라 한 칸으로 합치지 않는다:
               사유는 결재자에게 하는 말이고, 회차 메모는 기록에 남기는 말이다. */}
-          {approvalRequired ? (
+          {/* 🔴 **반환에는 두 칸 다 안 선다** (2026-11-26): 「신청 사유」는 결재자에게 하는 말인데
+              반환은 결재를 안 타고, 「이번 회차에 남길 말」은 회차가 쪼개질 때 쓰는 말인데 반환은
+              한 번에 다 들어온다. 쓸 데 없는 칸을 내밀면 사람은 적어야 하는 줄 안다. */}
+          {isReturn ? null : approvalRequired ? (
             <label className="flex flex-col gap-1 text-xs text-zinc-500">
               {PART_ISSUE_REASON_LABEL}
               <input name="reason" maxLength={500} className={FIELD} placeholder={PART_ISSUE_REASON_PLACEHOLDER} />
@@ -408,8 +497,19 @@ export function RequestActions({
             <button type="button" className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-100" onClick={() => setOpen(null)} disabled={submitting}>
               돌아가기
             </button>
+            {/* 🔴 끝내는 단추의 글자는 **쓰는 분이 정했다** — 반환은 [반환 완료]다(2026-11-26). */}
             <button type="submit" className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50" disabled={submitting}>
-              {submitting ? (approvalRequired ? "올리는 중" : "내주는 중") : approvalRequired ? PART_ISSUE_REQUEST_SUBMIT_LABEL : "내주기"}
+              {submitting
+                ? isReturn
+                  ? RETURN_CONFIRM_BUSY_LABEL
+                  : approvalRequired
+                    ? "올리는 중"
+                    : "내주는 중"
+                : isReturn
+                  ? RETURN_CONFIRM_SUBMIT_LABEL
+                  : approvalRequired
+                    ? PART_ISSUE_REQUEST_SUBMIT_LABEL
+                    : "내주기"}
             </button>
           </div>
         </form>

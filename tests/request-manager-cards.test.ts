@@ -174,7 +174,10 @@ describe("🔴 카드가 칸을 다시 적지 않는다 — 표와 같은 함수
 
   it("🔴 표와 카드가 그 함수들을 **함께** 부른다", () => {
     for (const [name, slice] of [["카드", card], ["표", table]] as const) {
-      for (const call of ["typeCell(r, \"", "aboutCell(r)", "requesterCell(r)", "statusBadge(r, issueLock)", "statusNotes(r)", "<RequestItems lines={r.lines} />"]) {
+      // 🔵 신청 항목 표는 2026-11-26 부터 **종류도** 받는다 — 반환이면 머리글이 갈리고 「가용」 칸이 빠진다
+      //    (`RequestItems` 의 주석). 🔴 **글자를 통째로 재는 것은 그대로다**: 한쪽만 종류를 안 넘기면
+      //    그 배치에서만 반환이 「불출 · 가용」으로 그려지는데, 그 어긋남은 오류를 내지 않는다.
+      for (const call of ["typeCell(r, \"", "aboutCell(r)", "requesterCell(r)", "statusBadge(r, issueLock)", "statusNotes(r)", "<RequestItems type={r.type} lines={r.lines} />"]) {
         assert.ok(slice.includes(call), `${name} 가 ${call} 를 안 쓴다`);
       }
     }
@@ -225,7 +228,8 @@ describe("카드 한 장의 차례 (2026-10-22)", () => {
       assert.notEqual(i, -1, `카드에서 ${needle} 를 찾지 못했다 — 모양이 바뀌었으면 시험도 함께 고쳐라`);
       return i;
     };
-    const order = ["statusBadge(r, issueLock)", "aboutCell(r)", "requesterCell(r)", "<RequestItems lines={r.lines} />", "statusNotes(r)", "rowActions(r)"];
+    // 🔵 신청 항목 표의 글자가 2026-11-26 에 바뀌었다(종류를 함께 넘긴다) — **차례를 재는 일은 그대로다**.
+    const order = ["statusBadge(r, issueLock)", "aboutCell(r)", "requesterCell(r)", "<RequestItems type={r.type} lines={r.lines} />", "statusNotes(r)", "rowActions(r)"];
     const places = order.map(at);
     for (let i = 1; i < places.length; i += 1) {
       assert.ok(places[i - 1] < places[i], `카드의 차례가 틀어졌다: ${order[i - 1]} 가 ${order[i]} 보다 뒤에 있다`);
