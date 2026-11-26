@@ -3,8 +3,13 @@ import { and, asc, count, desc, eq, gte, ilike, inArray, lte, or, sql } from "dr
 import { db } from "@/db/client";
 import { parts } from "@/db/schema/parts";
 import { stockEntries, stockTransactions, type ChargeType, type EntryType, type Purpose } from "@/db/schema/stock";
+// 🔴 **「대기 중인 반환 신청」을 빼는 셈은 저장소에 한 벌뿐이다** (2026-11-26) — A/S 가 묻는 통로와
+//    반환 화면이 **같은 함수**를 쓴다. 두 벌로 적으면 한 부품에 두 화면이 **다른 최댓값**을 말하고,
+//    담당자가 화면에서 전부 돌려주면 그 신청의 [반환 완료]가 나중에 넘쳐서 거절된다.
+import { pendingByTransaction, remainingOf } from "@/lib/api/return-candidates";
 import { sheetNoText } from "./codes";
 import type { EntryListFilter } from "./form";
+import { listPendingReturnPayloads } from "./requests";
 
 /** 기록 내역·상세 창에 내려보내는 줄. 직렬화 가능한 값만. */
 export interface EntryLineRow {
@@ -239,6 +244,15 @@ export interface ReturnCandidate {
   counterparty: string;
   taken: number;
   returned: number;
+  /**
+   * **대기 중인 반환 신청**에 이 줄로 적혀 있는 수량 (2026-11-26).
+   *
+   * 🔴 **화면에 적어야 하는 값이다.** 이 값만큼 아래 `remaining` 이 줄어드는데, 말해 주지 않으면
+   *    담당자는 「어제는 5개였는데 왜 3개지」를 알 길이 없다 — 그 줄에 아무 표시도 남지 않는다.
+   * 🔵 A/S 가 올린 반환 신청이 한 건도 없으면 언제나 0 이고, 화면은 0 일 때 아무것도 안 그린다.
+   */
+  pending: number;
+  /** 지금 **돌려줄 수 있는** 수량 = `taken − returned − pending`. 🔴 통로가 A/S 에 내주는 값과 **같은 셈**이다. */
   remaining: number;
 }
 
@@ -305,22 +319,39 @@ async function readReturnableTransactions(filter: ReturnableFilter) {
   return found.filter((r) => !r.corrected && r.delta < 0);
 }
 
+/**
+ * 반환 화면이 고르는 줄 — 🔴 **대기 중인 반환 신청까지 뺀 최댓값**을 준다 (2026-11-26).
+ *
+ * ── 🔴 **왜 뺄셈이 늘었나** ────────────────────────────────────────────
+ * 그 전에는 `나간 − 이미 반환` 이었고, A/S 가 올린 **대기 중인 반환 신청을 몰랐다.** 같은 날 A/S 에서
+ * 반환 신청이 올라오기 시작했으므로(`POST /api/v1/stock-requests` 의 `type: "RETURN"`) 그대로 두면
+ * **한 부품에 두 화면이 다른 최댓값**을 말한다: 담당자가 이 화면에서 전부 돌려주면, 나중에 그 신청의
+ * [확인]이 원장에서 **넘쳐서 거절된다**(`ledger.ts` 의 `return_exceeds`) — 그때는 A/S 쪽에 「접수됨」이
+ * 떠 있고 어디서 어긋났는지 아무도 모른다.
+ * 🔵 **셈은 통로와 같은 함수 하나다**(`remainingOf`) — 여기서 다시 적으면 그 갈림이 또 생긴다.
+ * 🔴 **줄이 한 줄도 없으면 신청 표를 열지 않는다** — 뺄 것이 없어 **답이 같다**(읽는 통로와 같은 건너뛰기).
+ */
 export async function returnCandidates(partId: string): Promise<ReturnCandidate[]> {
   const rows = await readReturnableTransactions({ partId });
+  const pending = rows.length === 0 ? new Map<string, number>() : pendingByTransaction(await listPendingReturnPayloads());
   return rows
-    .map((r) => ({
-      transactionId: r.transactionId,
-      type: r.type,
-      occurredOn: r.occurredOn,
-      sheetYear: r.sheetYear,
-      sheetNo: r.sheetNo,
-      intakeNumber: r.intakeNumber,
-      usagePlace: r.usagePlace,
-      counterparty: r.counterparty,
-      taken: -r.delta,
-      returned: r.returned,
-      remaining: -r.delta - r.returned,
-    }))
+    .map((r) => {
+      const waiting = pending.get(r.transactionId) ?? 0;
+      return {
+        transactionId: r.transactionId,
+        type: r.type,
+        occurredOn: r.occurredOn,
+        sheetYear: r.sheetYear,
+        sheetNo: r.sheetNo,
+        intakeNumber: r.intakeNumber,
+        usagePlace: r.usagePlace,
+        counterparty: r.counterparty,
+        taken: -r.delta,
+        returned: r.returned,
+        pending: waiting,
+        remaining: remainingOf(-r.delta, r.returned, waiting),
+      };
+    })
     .filter((r) => r.remaining > 0);
 }
 

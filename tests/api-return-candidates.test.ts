@@ -25,10 +25,12 @@ import type { EntryInput } from "../src/lib/stock/form";
  * 🔴 그래서 **DB 에서만 가려지는 울타리는 소스 글자로 잰다**(아래 ⑤). 🔵 재기 전에 **주석을 걷어낸다** —
  *    주석에 그 글자가 적혀 있으면 조건이 사라져도 시험이 통과한다(이 저장소에서 실제로 겪은 함정).
  *
- * 🔵 **`pending`(대기 중인 반환 신청)은 지금 언제나 0 이다.** 반환 신청을 세우는 일은 **다음 조각**이고,
- *    2026-11-26 개발 DB 실측으로 `stock_requests` 29줄이 전부 `USE` 다. 그래서 아래 ③ 의 pending 시험들은
- *    **시험 안에서 신청을 만들어** 잰다 — 그 뺄셈이 다음 조각보다 **먼저** 서 있어야 같은 부품을 두 번
- *    신청해 넘기는 길이 처음부터 막힌다.
+ * 🔵 **`pending`(대기 중인 반환 신청)은 이 시험을 쓸 때 언제나 0 이었다** — 2026-11-26 개발 DB 실측으로
+ *    `stock_requests` 29줄이 전부 `USE` 였고, 신청을 세우는 일은 「다음 조각」이었다. 🔴 **그 다음 조각이
+ *    같은 날 왔다**: A/S 가 `POST /api/v1/stock-requests` 에 `type: "RETURN"` 으로 올린다
+ *    (`tests/api-return-request.test.ts`). 그래서 아래 ③ 의 pending 시험들이 **시험 안에서 신청을 만들어**
+ *    재던 것은 이제 실제로 일어나는 일이고, 그 뺄셈이 **먼저** 서 있었기에 같은 부품을 두 번 신청해
+ *    넘기는 길이 처음부터 막혀 있었다.
  */
 
 /* 🔴 실제 고객사명·사람 이름을 쓰지 않는다 — 공개 저장소에 박힌다. 부품 이름은 이 저장소의 데모 관례(「예시 」)를 따른다. */
@@ -100,7 +102,7 @@ describe("① 돌려줄 수 있는 부품 — 묻는 법", () => {
 /* ② 대기 중인 반환 신청 읽기 — `pending` 의 재료                       */
 /* ================================================================== */
 describe("② 대기 중인 반환 신청 펴기", () => {
-  it("🔵 지금은 그런 신청이 **한 줄도 없어 언제나 빈 셈**이다 (2026-11-26 실측: 신청이 전부 USE)", () => {
+  it("🔵 대기 중인 반환 신청이 하나도 없으면 **빈 셈**이다 (A/S 가 아직 한 건도 안 올린 날)", () => {
     const pending = pendingByTransaction([]);
     assert.equal(pending.size, 0);
     assert.equal(pending.get(TX_A), undefined);
@@ -220,7 +222,7 @@ describe("③ 부품별로 합쳐 돌려줄 수 있는 수량을 센다", () => 
     assert.ok(dropped > 0, "빠지는 줄이 한 번도 안 나왔다 — 재지 않은 시험이다");
   });
 
-  it("🔴 **대기 중인 반환 신청이 있으면 그만큼 `remaining` 이 준다** — 🔵 그런 신청은 다음 조각이 세운다(여기서는 시험용으로 만든다)", () => {
+  it("🔴 **대기 중인 반환 신청이 있으면 그만큼 `remaining` 이 준다** — 🔵 그런 신청은 통로가 세운다(여기서는 시험용으로 만든다)", () => {
     const pending = pendingByTransaction([returnRequest([{ transactionId: TX_A, quantity: 2 }])]);
     const [row] = summarizeReturnCandidates([line(TX_A, PART_7, 5, 1)], pending);
     assert.equal(row.taken, 5);

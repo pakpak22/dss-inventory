@@ -2,7 +2,7 @@ import "server-only";
 import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { stockRequests } from "@/db/schema/stock-requests";
-import { approvalRouteScopeForWorkflowKind, type ApprovalRouteScope } from "./route";
+import { approvalRouteScopeForWorkflowKind, isApprovalExemptRequestType, type ApprovalRouteScope } from "./route";
 
 /**
  * ============================================================================
@@ -32,10 +32,24 @@ import { approvalRouteScopeForWorkflowKind, type ApprovalRouteScope } from "./ro
  * 🔴 **번호가 uuid 모양인지는 보지 않는다.** 모양이 틀리면 이 질의가 터지고, 부르는 두 자리가
  *    **이미 `try` 로 감싸** 「잠시 뒤 다시 시도하십시오」로 답한다 — 재고는 한 개도 움직이지 않는다.
  *    여기에 정규식을 또 적으면 이 저장소에 uuid 검사가 세 벌이 된다(`src/lib/stock/form.ts`).
+ *
+ * ── 🔴 **`null` = 「이 신청은 결재를 타지 않는다」** (2026-11-26) ────────
+ * 반환 신청이 그렇다(쓰는 분: 「반환에는 승인 절차가 필요 없어」). 가르는 규칙은 순수 함수
+ * 하나이고(`./route.ts` 의 `isApprovalExemptRequestType`), 여기서는 **종류 칸을 한 칸 더 읽어**
+ * 넘길 뿐이다.
+ * 🔴 **「모름」(`workflow_kind` 가 비어 기존 「부품 불출」로 가는 것)과 전혀 다른 값이다** —
+ *    저쪽은 「절차는 타는데 어느 것인지 가릴 재료가 없다」이고 이쪽은 「절차 자체를 안 탄다」다.
+ *    그래서 기본 용도로 떨어뜨리지 않고 `null` 로 가른다: 기존 「부품 불출」에 결재선이 서 있으면
+ *    (2026-11-26 개발 DB 실측 3단계) 떨어뜨리는 순간 반환이 조용히 결재 대상이 된다.
+ * 🔴 **없는 신청은 여전히 「모름」이다**(`null` 이 아니다) — 그 갈래의 뜻을 지키려고 종류도
+ *    기본값(`"USE"`)으로 떨어뜨린다. 없는 신청이 면제로 새면, 지워진 번호를 들고 두드렸을 때
+ *    문이 열린 것처럼 보인다. 🔵 바로 뒤에서 부르는 두 자리가 제 트랜잭션 안에서 「없는 신청입니다」로
+ *    더 정확히 말한다(위 머리말).
  * ============================================================================
  */
-export async function getApprovalRouteScopeForRequest(requestId: string): Promise<ApprovalRouteScope> {
+export async function getApprovalRouteScopeForRequest(requestId: string): Promise<ApprovalRouteScope | null> {
   // 🔴 **쓸 칸만 읽는다** — 신청 표에 칸이 늘어도 이 자리는 흔들리지 않는다.
-  const [row] = await db().select({ workflowKind: stockRequests.workflowKind }).from(stockRequests).where(eq(stockRequests.id, requestId));
+  const [row] = await db().select({ type: stockRequests.type, workflowKind: stockRequests.workflowKind }).from(stockRequests).where(eq(stockRequests.id, requestId));
+  if (isApprovalExemptRequestType(row?.type ?? "USE")) return null;
   return approvalRouteScopeForWorkflowKind(row?.workflowKind ?? null);
 }

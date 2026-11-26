@@ -369,9 +369,19 @@ async function readRepairCaseFor(input: EntryInput): Promise<RepairCaseSnapshot>
   }
 }
 
-/** 같은 바깥 요청 번호로 이미 들어온 신청. 멱등의 양쪽(미리 보기·부딪힌 뒤)이 **같은 질의**를 쓴다. */
-async function findByExternalKey(externalKey: string): Promise<{ id: string; status: RequestStatus } | null> {
-  const [row] = await db().select({ id: stockRequests.id, status: stockRequests.status }).from(stockRequests).where(eq(stockRequests.externalKey, externalKey));
+/**
+ * 같은 바깥 요청 번호로 이미 들어온 신청. 멱등의 양쪽(미리 보기·부딪힌 뒤)이 **같은 질의**를 쓴다.
+ *
+ * 🔵 **내보내는 까닭** (2026-11-26, 반환 신청 통로): 반환은 신청을 만들기 **전에** 「얼마나 돌려줄 수
+ *    있나」를 세는데, 그 셈이 **대기 중인 제 신청까지 뺀다**(`lib/api/return-candidates.ts`). 그래서
+ *    끊겨서 같은 열쇠로 다시 보내면 **처음 만든 제 신청에 막혀** 400 이 나간다 — 멱등이 통째로
+ *    깨진다. 통로가 **세기 전에** 이 질의로 먼저 찾아보게 하려고 이름만 내보낸다.
+ * 🔴 **종류도 함께 준다** — 되돌려 줄 응답에 「무슨 신청이었나」를 적어야 하는데, 그것은 **저장된 줄의
+ *    종류**지 이번에 보낸 종류가 아니다(열쇠를 다른 종류로 다시 쓰면 둘이 갈린다).
+ * 🔴 **동작은 한 글자도 바뀌지 않았다** — 아래 `createRequest` 가 쓰는 길은 그대로다.
+ */
+export async function findRequestByExternalKey(externalKey: string): Promise<{ id: string; status: RequestStatus; type: EntryType } | null> {
+  const [row] = await db().select({ id: stockRequests.id, status: stockRequests.status, type: stockRequests.type }).from(stockRequests).where(eq(stockRequests.externalKey, externalKey));
   return row ?? null;
 }
 
@@ -397,8 +407,9 @@ function isExternalKeyConflict(e: unknown): boolean {
 export async function createRequest(input: EntryInput, actor: Requester, origin: RequestOrigin = INVENTORY_ORIGIN): Promise<CreatedRequest> {
   const externalKey = origin.externalKey ?? null;
   if (externalKey !== null) {
-    const found = await findByExternalKey(externalKey);
-    if (found) return { ...found, created: false };
+    const found = await findRequestByExternalKey(externalKey);
+    // 🔵 종류는 여기서 쓰지 않는다 — 이 함수가 돌려주는 모양(`CreatedRequest`)은 그대로다.
+    if (found) return { id: found.id, status: found.status, created: false };
   }
   const names = await partNamesOf(linesOf(input).map((l) => l.partId));
   const summary = buildRequestSummary(input, names);
@@ -448,8 +459,8 @@ export async function createRequest(input: EntryInput, actor: Requester, origin:
     });
   } catch (e) {
     if (externalKey !== null && isExternalKeyConflict(e)) {
-      const found = await findByExternalKey(externalKey);
-      if (found) return { ...found, created: false };
+      const found = await findRequestByExternalKey(externalKey);
+      if (found) return { id: found.id, status: found.status, created: false };
     }
     throw e;
   }
@@ -1115,10 +1126,14 @@ export async function listRequestsByIntakeNumbers(intakeNumbers: readonly string
  * **대기 중인 반환 신청의 payload** — A/S 가 묻는 「돌려줄 수 있는 부품」 통로가 쓴다
  * (2026-11-26, `GET /api/v1/return-candidates`. 설명은 API.md 8절).
  *
- * 🔴 **지금은 언제나 빈 목록이다.** 이 저장소에는 `type='RETURN'` 인 신청이 아직 **한 줄도 없다**
- *    (2026-11-26 개발 DB 실측: 신청 29줄이 전부 `USE`). 반환 신청을 **세우는 일은 다음 조각**이고,
- *    그래도 읽는 자리를 미리 두는 까닭은 `lib/api/return-candidates.ts` 의 `pendingByTransaction`
- *    머리말에 적혀 있다 — 한 줄이라도 서는 순간 없으면 **두 번 신청해 넘기는 길**이 열린다.
+ * 🔴 **2026-11-26 **부터 실제로 줄이 담긴다.** 이 함수가 섰을 때는 `type='RETURN'` 인 신청이 한 줄도
+ *    없었고(그날 아침 개발 DB 실측: 신청 29줄이 전부 `USE`) 「다음 조각이 세운다」고 적혀 있었다 —
+ *    **그 다음 조각이 같은 날 왔다**: A/S 가 `POST /api/v1/stock-requests` 에 `type: "RETURN"` 으로
+ *    올리면 여기 걸리는 신청이 선다(`src/app/api/v1/stock-requests/route.ts`).
+ * 🔵 미리 만들어 둔 까닭은 `lib/api/return-candidates.ts` 의 `pendingByTransaction` 머리말에 있다 —
+ *    한 줄이라도 서는 순간 이 뺄셈이 없으면 **두 번 신청해 넘기는 길**이 열린다.
+ * 🔴 **읽는 자리가 둘이 됐다**: 「돌려줄 수 있는 부품」 통로와 **반환 화면**(`lib/stock/queries.ts` 의
+ *    `returnCandidates`). 둘이 같은 값을 빼야 한 부품에 **두 화면이 다른 최댓값**을 말하지 않는다.
  * 🔴 **거르는 상태는 `PENDING_REQUEST_STATUSES` 하나다** — 「대기」를 가르는 글자가 적힌 곳은 이
  *    저장소에 그 한 벌뿐이어야 한다(`./codes` 의 그 상수 주석). 여기에 상태를 손으로 적으면,
  *    상태가 하나 늘어난 날 그 상태의 반환 신청이 `pending` 에서 **조용히 빠진다.**

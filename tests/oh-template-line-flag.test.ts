@@ -66,10 +66,20 @@ const ROWS: ApiPartRow[] = [
   { no: 7, id: "22222222-2222-4222-8222-222222222222", isDeleted: false },
 ];
 
+/**
+ * 🔴 **종류를 못 박는다** (2026-11-26). 통로가 받는 모양이 **종류로 갈리는 묶음**이 되면서
+ * (`type: "USE" | "RETURN"`), 사용 줄을 보려면 먼저 좁혀야 한다 — O/H 표시는 **사용 줄에만** 있는
+ * 칸이라 그 좁히기가 곧 이 시험의 전제다. 🔵 단언은 한 줄도 약해지지 않았다: 이 줄이 틀리면 시험이 선다.
+ */
+function assertUse<T extends { type: string }>(value: T): asserts value is Extract<T, { type: "USE" }> {
+  assert.equal(value.type, "USE", "사용 신청이 아니다 — O/H 표시는 사용 줄에만 있는 칸이다");
+}
+
 /** 본문 → 신청 payload 까지 한 번에. 🔵 가운데 되짚기를 건너뛰지 않는다(거기서도 떨어질 수 있다). */
 function payloadFor(body: unknown) {
   const parsed = parseApiStockRequest(body);
   assert.ok(parsed.ok, parsed.ok ? "" : parsed.message);
+  assertUse(parsed.value);
   const resolved = resolveApiRequestLines(parsed.value.lines, ROWS);
   assert.ok(resolved.ok, resolved.ok ? "" : resolved.message);
   const input = buildApiUseRequest(parsed.value, resolved.lines, "2026-10-22");
@@ -81,12 +91,14 @@ describe("㉠ 받는다 — 안 보냈다고 거절하지 않는다", () => {
   it("🔴 보낸 줄은 참이다", () => {
     const r = parseApiStockRequest({ ...BODY, lines: [{ no: 165, quantity: 1, chargeType: "PAID", fromOhTemplate: true }] });
     assert.ok(r.ok);
+    assertUse(r.value);
     assert.equal(r.value.lines[0].fromOhTemplate, true);
   });
 
   it("🔴 **칸을 안 보내도 받는다** — 거짓으로 눕고 신청은 선다 (유상/무상과 일부러 다르다)", () => {
     const r = parseApiStockRequest(BODY);
     assert.ok(r.ok, "O/H 표시가 없다고 신청을 거절했다 — 현장에서 부품을 못 받는다");
+    assertUse(r.value);
     assert.equal(r.value.lines[0].fromOhTemplate, false);
   });
 
@@ -94,6 +106,7 @@ describe("㉠ 받는다 — 안 보냈다고 거절하지 않는다", () => {
     for (const bad of ["true", "TRUE", 1, "1", {}, [], null] as unknown[]) {
       const r = parseApiStockRequest({ ...BODY, lines: [{ no: 165, quantity: 1, chargeType: "PAID", fromOhTemplate: bad }] });
       assert.ok(r.ok, `${JSON.stringify(bad)} 때문에 신청이 거절됐다`);
+      assertUse(r.value);
       assert.equal(r.value.lines[0].fromOhTemplate, false, JSON.stringify(bad) ?? "undefined");
     }
   });
@@ -107,6 +120,7 @@ describe("㉠ 받는다 — 안 보냈다고 거절하지 않는다", () => {
       ],
     });
     assert.ok(r.ok);
+    assertUse(r.value);
     assert.deepEqual(
       r.value.lines.map((l) => [l.no, l.fromOhTemplate]),
       [

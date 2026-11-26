@@ -134,7 +134,12 @@ describe("① 🔴 A/S 에 못 물어봐도 신청은 선다 (2026-10-22)", () =
 
   it("🔵 **같은 열쇠로 다시 보낸 호출에는 안 묻는다** — 멱등 되돌림이 먼저다", () => {
     const body = bodyOf(src("src/lib/stock/requests.ts"), "export async function createRequest(");
-    const idempotent = body.indexOf("findByExternalKey(externalKey)");
+    /**
+     * 🔵 **이름이 `findRequestByExternalKey` 로 바뀌었다** (2026-11-26) — 반환 신청 통로가 **세기
+     * 전에** 같은 질의로 먼저 찾아보려고 내보내면서 붙인 이름이다(그 파일 주석). 🔴 **재는 것은
+     * 그대로다**: 멱등 되돌림이 A/S 에 묻는 줄보다 **앞**인가.
+     */
+    const idempotent = body.indexOf("findRequestByExternalKey(externalKey)");
     const asked = body.indexOf("readRepairCaseFor(input)");
     assert.ok(idempotent > 0 && asked > 0, "자리를 찾지 못했다 — 모양이 바뀌었으면 시험도 함께 고쳐라");
     assert.ok(idempotent < asked, "끊겨서 다시 보낼 때마다 A/S 에 또 묻는다");

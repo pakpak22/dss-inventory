@@ -1,7 +1,7 @@
 import type { RequestStatus } from "@/db/schema/stock-requests";
 import { isWorkflowKind, type WorkflowKind } from "@/lib/approval/route";
-import { CHARGE_LABEL, CHARGE_TYPES, INTAKE_NUMBER_RE, REQUEST_STATUS_LABEL, isChargeType, type ChargeType, type EntryType } from "@/lib/stock/codes";
-import { MAX_LINES, MAX_QTY, type EntryInput } from "@/lib/stock/form";
+import { CHARGE_LABEL, CHARGE_TYPES, ENTRY_TYPE_LABEL, INTAKE_NUMBER_RE, REQUEST_STATUS_LABEL, isChargeType, type ChargeType, type EntryType } from "@/lib/stock/codes";
+import { MAX_LINES, MAX_QTY, type EntryInput, type ReturnLine } from "@/lib/stock/form";
 
 /**
  * A/S 가 보내는 **반출 신청**의 검사와 모양 — 순수 함수 (2026-10-15, `POST /api/v1/stock-requests`).
@@ -10,14 +10,35 @@ import { MAX_LINES, MAX_QTY, type EntryInput } from "@/lib/stock/form";
  *    전부 덮는다. 통로 파일(`src/app/api/v1/stock-requests/route.ts`)은 이 함수들을 부르고 DB 만 만진다.
  *
  * 규칙 넷 (2026-10-15 사용자 승인 설계):
- *  1. **종류는 「사용」 고정**이다. 바깥이 종류를 고르게 하지 않는다 — 지금 쓸 일이 그것 하나다.
+ *  1. **종류는 「사용」과 「반환」 둘뿐이다.** 바깥이 종류를 **자유롭게** 고르게 하지 않는다 — 모르는
+ *     종류·다른 종류(입고·폐기·대여·조정·소유 옮김)는 **전부 거절**이다.
+ *     ── 🔴 2026-11-26 **에 「사용 고정」이 깨졌다 — 지우지 말고 고쳐 적는다** ──
+ *     그 전 문장은 **「종류는 「사용」 고정이다. 바깥이 종류를 고르게 하지 않는다 — 지금 쓸 일이 그것
+ *     하나다.」** 였다. 까닭이 「쓸 일이 하나뿐」이었지 「바깥은 종류를 고를 자격이 없다」가 아니었고,
+ *     그래서 **쓸 일이 둘이 된 날**(A/S 에 [반환 요청] 화면이 섰다) 하나가 더 열렸다.
+ *     🔴 **그래도 「자유롭게」로 푸는 것은 다른 일이다**: 종류마다 payload 모양도, 확인 뒤 원장에
+ *     쓰이는 일도 다르다(반출은 수량이 빠지고 반환은 들어온다). 아는 둘만 **이름으로 적어** 연다.
+ *  1-1. 🔵 **칸이 없으면 「사용」이다.** A/S 의 기존 호출은 `type` 을 아예 안 보낸다 — 거기에 400 을
+ *     돌려주면 **그날부터 부품 불출 신청이 통째로 막힌다.** 「안 보냄 = 지금까지 하던 그것」이 안전한
+ *     쪽이고, 새로 여는 반환만 **이름을 적어 보내게** 한다.
  *  2. **상한은 화면과 같은 값**(`MAX_LINES`·`MAX_QTY`, `src/lib/stock/form.ts`). 여기서 새 숫자를 정하면
  *     화면으로 적은 신청과 통로로 온 신청이 다른 규칙을 받는다.
  *  3. **인수번호는 A/S 가 보낸 것을 확인된 것으로 본다** — 출처가 A/S 자신이라 되물을 데가 없다.
  *     여기서는 **모양만**(D + 숫자 6자리) 본다. 🔵 담당자가 [확인]을 누르는 순간 원장이 제 규칙대로
  *     A/S 조회 통로에 한 번 더 묻는다(`ledger.ts`) — 그쪽은 손대지 않았다.
+ *     🔵 **반환에서는 인수번호가 「어느 건에서 나간 것을 돌려주나」를 가리는 열쇠**다 — 돌려줄 수 있는
+ *     원장 줄을 그 번호로 찾는다(`src/lib/api/return-allocation.ts`).
  *  4. 🔴 **틀린 줄을 조용히 건너뛰지 않는다.** 한 줄이라도 틀리면 통째로 400 이다. 줄 하나가 사라진 채
  *     신청이 서면 아무도 모르고, A/S 쪽에서는 「보냈는데 왜 안 왔지」가 된다.
+ *
+ * ── 🔴 반환이 사용과 **다른 점 셋** (2026-11-26) ──────────────────────────
+ *  ① **줄에 유상·무상이 없다.** 돈이 걸리는 값은 나갈 때 정해졌고, 돌아오는 것에 다시 매기지 않는다.
+ *  ② **A/S 는 원장 줄 번호를 모른다** — 알 길이 없다(저쪽은 재고에 관한 것을 제 표에 저장하지 않는다,
+ *     2026-10-15 결정). 그래서 **부품 번호와 수량만** 받고, 「어느 불출 줄에 되돌려 붙일지」는 재고
+ *     관리가 쪼갠다(`./return-allocation.ts`).
+ *  ③ **사유(`reason`)를 받지 않는다** — 반환 payload(`EntryInput` 의 RETURN)에는 사유 칸이 **아예
+ *     없다.** 받아서 버리면 A/S 가 적어 보낸 말이 조용히 사라지므로, 비어 있지 않으면 **거절하고
+ *     `note` 로 보내라고 말한다**(아래 파싱).
  */
 
 /** 줄 하나 — 🔴 **재고 관리의 부품 No.** 다(UUID 가 아니다. API.md 2절의 `no`). */
@@ -55,7 +76,22 @@ export interface ApiRequestLineInput {
 /** 거절 문구에 쓰는 「PAID(유상) 또는 FREE(무상)」. 🔴 글자를 손으로 적지 않고 **코드값 한 벌에서** 만든다. */
 const CHARGE_CHOICES = CHARGE_TYPES.map((c) => `${c}(${CHARGE_LABEL[c]})`).join(" 또는 ");
 
-export interface ApiStockRequestInput {
+/**
+ * **반환 줄 하나** — 🔵 부품 번호와 수량뿐이다 (2026-11-26, 머리말 ①·②).
+ *
+ * 🔴 **원장 줄 번호(`transactionId`)가 없다.** A/S 는 그것을 모르고, 알게 해서도 안 된다 — 저쪽이 우리
+ *    내부 번호를 보관하게 되는 모양을 두 시스템이 일부러 피해 왔다(2026-10-15 결정). 번호로 쪼개는 일은
+ *    재고 관리가 한다(`./return-allocation.ts`).
+ * 🔴 **유상·무상이 없다.** 돈이 걸린 값은 나갈 때 줄에 적혔고, 돌아오는 것에 다시 매기면 **같은 부품에
+ *    두 개의 청구 근거**가 생긴다.
+ */
+export interface ApiReturnLineInput {
+  no: number;
+  quantity: number;
+}
+
+/** 두 종류가 **똑같이** 받는 칸들. 🔵 갈라 두면 한쪽에만 칸이 늘어 모양이 어긋난다. */
+interface ApiStockRequestBase {
   /**
    * 바깥 요청 번호 — **A/S 쪽 요청 id**. 🔴 같은 값으로 두 번 부르면 **새로 만들지 않고 처음 만든 신청을
    * 그대로 돌려준다**(응답의 `created: false`). 통신이 끊기면 실제로 두 번 오기 때문이다(담당자 답변3 4절).
@@ -64,7 +100,6 @@ export interface ApiStockRequestInput {
   intakeNumber: string;
   /** 신청자 — **포털 번호**(`sub`)로 재고 관리의 사람과 잇는다. 없는 사람이어도 신청은 받는다. */
   requester: { sub: string; name: string };
-  lines: ApiRequestLineInput[];
   reason: string;
   note: string;
   /**
@@ -75,9 +110,30 @@ export interface ApiStockRequestInput {
    *    바꿔도 저쪽 자료를 안 고치게 하려는 것이다.
    * 🔴 **모르면 `null` 이다.** A/S 는 모를 때 칸을 아예 안 보내고(수리 건이 없을 수 있다), 모르는
    *    글자가 와도 여기서 `null` 로 떨어진다(아래 파싱). 그때는 기존 「부품 불출」 절차로 간다.
+   * 🔵 **반환 신청에서는 이 값이 절차를 고르지 않는다** (2026-11-26) — 반환은 종류와 상관없이 결재를
+   *    타지 않기 때문이다(`src/lib/approval/route.ts` 의 `isApprovalExemptRequestType`). 그래도 받아
+   *    적어 두는 까닭은 「그 신청이 어느 수리 건의 것이었나」가 나중에 쓰이는 사실이기 때문이다.
    */
   workflowKind: WorkflowKind | null;
 }
+
+/** 부품을 **내 달라**는 신청 (2026-10-15부터의 그것. 한 글자도 바뀌지 않았다). */
+export interface ApiUseRequestInput extends ApiStockRequestBase {
+  type: "USE";
+  lines: ApiRequestLineInput[];
+}
+
+/** 나간 부품을 **돌려주겠다**는 신청 (2026-11-26). */
+export interface ApiReturnRequestInput extends ApiStockRequestBase {
+  type: "RETURN";
+  lines: ApiReturnLineInput[];
+}
+
+/**
+ * 🔴 **종류로 갈리는 묶음이다**(`EntryInput` 과 같은 모양) — 줄의 생김새가 다르므로 타입이 둘을 섞지
+ * 못하게 막는다. 종류를 안 보고 `lines` 를 읽으려 하면 **tsc 가 그 자리에서 멈춘다.**
+ */
+export type ApiStockRequestInput = ApiUseRequestInput | ApiReturnRequestInput;
 
 export type ParseApiStockRequestResult = { ok: true; value: ApiStockRequestInput } | { ok: false; message: string };
 
@@ -111,6 +167,22 @@ function text(v: unknown, max: number): string {
 export { text as trimTextField, asRecord as asObjectField, MAX_SUB, MAX_NAME };
 
 /**
+ * **받을 수 있는 종류 둘** (2026-11-26. 그 전에는 「사용」 하나였다 — 머리말 1번).
+ *
+ * 🔴 **`satisfies` 로 원장 종류 목록과 맞물려 있다** — 오타(`"RETRUN"`)나 없어진 종류를 적으면 tsc 가
+ *    그 자리에서 멈춘다. 🔵 그래도 **원장의 모든 종류를 여는 것이 아니다**: 여기 이름을 적은 둘만 열린다.
+ */
+export const API_REQUEST_TYPES = ["USE", "RETURN"] as const satisfies readonly EntryType[];
+export type ApiRequestType = (typeof API_REQUEST_TYPES)[number];
+
+/** 거절 문구에 쓰는 「USE(사용) 또는 RETURN(반환)」. 🔴 위 `CHARGE_CHOICES` 와 같은 관례 — 글자를 손으로 적지 않는다. */
+const TYPE_CHOICES = API_REQUEST_TYPES.map((t) => `${t}(${ENTRY_TYPE_LABEL[t]})`).join(" 또는 ");
+
+function isApiRequestType(v: unknown): v is ApiRequestType {
+  return typeof v === "string" && (API_REQUEST_TYPES as readonly string[]).includes(v);
+}
+
+/**
  * 받은 본문을 검사한다. 🔴 **첫 번째 잘못에서 멈추고 무엇이 틀렸는지 말한다** — 부르는 쪽이 고칠 수 있게
  * 칸 이름과 받은 값을 함께 적는다.
  */
@@ -119,6 +191,19 @@ export function parseApiStockRequest(raw: unknown): ParseApiStockRequestResult {
     return { ok: false, message: "본문은 JSON 객체여야 합니다." };
   }
   const body = raw as Record<string, unknown>;
+
+  /**
+   * 🔴 **종류를 맨 먼저 가린다** — 줄을 보는 규칙이 종류마다 다르다(반환 줄에는 유상·무상이 없다).
+   * 🔵 **칸이 없으면(또는 `null` 이면) 「사용」**이다(머리말 1-1): A/S 의 기존 호출이 이 칸을 안 보내고,
+   *    거기에 400 을 돌려주면 그날부터 부품 불출 신청이 통째로 막힌다. `null` 도 「안 보냄」과 같이 본다 —
+   *    둘 다 「고르지 않았다」는 뜻이고, 가를 수 있어도 할 수 있는 일이 다르지 않다.
+   * 🔴 **그 밖의 값은 전부 거절한다.** 원장이 아는 다른 종류(입고·폐기·대여·조정·소유 옮김)도 마찬가지다 —
+   *    payload 모양도 확인 뒤에 일어나는 일도 달라서, 받아 두면 **담당자가 [확인]을 누르는 날** 터진다.
+   */
+  if (body.type !== undefined && body.type !== null && !isApiRequestType(body.type)) {
+    return { ok: false, message: `type 은 ${TYPE_CHOICES}입니다. 받은 값: ${JSON.stringify(body.type)}. 칸을 안 보내면 ${API_REQUEST_TYPES[0]} 로 봅니다.` };
+  }
+  const type: ApiRequestType = isApiRequestType(body.type) ? body.type : "USE";
 
   const requestKey = text(body.requestKey, MAX_KEY);
   if (!requestKey) {
@@ -140,7 +225,12 @@ export function parseApiStockRequest(raw: unknown): ParseApiStockRequestResult {
   if (body.lines.length === 0) return { ok: false, message: "lines 가 비어 있습니다. 부품을 한 줄 이상 보내십시오." };
   if (body.lines.length > MAX_LINES) return { ok: false, message: `한 건에 ${MAX_LINES}줄까지입니다 (받은 줄 수: ${body.lines.length}). 나누어 보내십시오.` };
 
-  const lines: ApiRequestLineInput[] = [];
+  /**
+   * 🔵 **줄을 한 바퀴만 돈다.** 부품 번호·수량·중복은 두 종류가 **똑같이** 보고, 갈리는 것은 유상·무상
+   *    하나뿐이다 — 종류마다 고리를 따로 돌면 공통 검사가 두 벌이 되어 한쪽만 고쳐지는 날이 온다.
+   */
+  const useLines: ApiRequestLineInput[] = [];
+  const returnLines: ApiReturnLineInput[] = [];
   const seen = new Set<number>();
   for (const [i, item] of body.lines.entries()) {
     const line = asRecord(item);
@@ -154,6 +244,16 @@ export function parseApiStockRequest(raw: unknown): ParseApiStockRequestResult {
     if (typeof line.quantity !== "number" || !Number.isInteger(line.quantity) || line.quantity < 1 || line.quantity > MAX_QTY) {
       return { ok: false, message: `${at}(No. ${line.no}): quantity 는 1 이상 ${MAX_QTY.toLocaleString("en-US")} 이하의 정수입니다. 받은 값: ${JSON.stringify(line.quantity ?? null)}` };
     }
+    /**
+     * 🔴 **반환 줄은 여기서 끝난다** (2026-11-26) — 유상·무상도 O/H 표시도 보지 않는다(머리말 ①).
+     *    🔵 보냈더라도 **거절하지 않고 그냥 안 본다**: 저쪽이 불출 줄 모양을 그대로 베껴 보낼 수 있고,
+     *       그 칸이 있다고 반환을 막으면 돌아온 물건이 장부에 안 올라간다. 사유(`reason`)만은 예외라
+     *       거절한다 — 그것은 **사람이 적은 말**이라 사라지면 아무도 모른다(아래).
+     */
+    if (type === "RETURN") {
+      returnLines.push({ no: line.no, quantity: line.quantity });
+      continue;
+    }
     // 🔴 기본값으로 채우지 않는다 — 청구에 걸리는 값이다(위 `chargeType` 주석).
     if (!isChargeType(line.chargeType)) {
       return { ok: false, message: `${at}(No. ${line.no}): chargeType 은 ${CHARGE_CHOICES}입니다. **기본값이 없으니 줄마다 보내십시오.** 받은 값: ${JSON.stringify(line.chargeType ?? null)}` };
@@ -163,7 +263,7 @@ export function parseApiStockRequest(raw: unknown): ParseApiStockRequestResult {
      * 🔵 글자 `"true"` 도 숫자 `1` 도 `true` 로 봐 주지 않는다: 기계가 보내는 값이라 조용히 고쳐 주면
      *    「보냈는데 왜 안 뜨지」가 「보낸 적 없는데 떴다」로 바뀌는 날이 온다.
      */
-    lines.push({ no: line.no, quantity: line.quantity, chargeType: line.chargeType, fromOhTemplate: line.fromOhTemplate === true });
+    useLines.push({ no: line.no, quantity: line.quantity, chargeType: line.chargeType, fromOhTemplate: line.fromOhTemplate === true });
   }
 
   /**
@@ -180,7 +280,22 @@ export function parseApiStockRequest(raw: unknown): ParseApiStockRequestResult {
    */
   const workflowKind = isWorkflowKind(body.workflowKind) ? body.workflowKind : null;
 
-  return { ok: true, value: { requestKey, intakeNumber, requester: { sub, name }, lines, reason: text(body.reason, 500), note: text(body.note, 1000), workflowKind } };
+  const reason = text(body.reason, 500);
+  const base = { requestKey, intakeNumber, requester: { sub, name }, reason, note: text(body.note, 1000), workflowKind };
+
+  if (type === "RETURN") {
+    /**
+     * 🔴 **반환에는 사유 칸이 없다 — 보내면 거절한다** (2026-11-26, 머리말 ③). 반환 payload
+     *    (`EntryInput` 의 RETURN)에 그 칸이 **아예 없어서**, 받아 두면 갈 데가 없어 버려진다.
+     *    사람이 적은 말이 조용히 사라지는 것은 재고가 어긋나는 것보다 늦게 드러난다.
+     * 🔵 **빈 글자는 그냥 지나간다** — 저쪽이 칸을 비운 채 보내는 것은 「적을 말이 없다」라 잃을 것이 없다.
+     */
+    if (reason !== "") {
+      return { ok: false, message: `반환 신청에는 reason 을 쓰지 않습니다 (받은 값: ${JSON.stringify(reason)}). 적을 말은 note 로 보내십시오 — 반환 기록에는 사유 칸이 없어 받아 두면 그대로 사라집니다.` };
+    }
+    return { ok: true, value: { ...base, type: "RETURN", lines: returnLines } };
+  }
+  return { ok: true, value: { ...base, type: "USE", lines: useLines } };
 }
 
 /** 부품 되짚기에 쓰는 한 줄 — 통로가 `parts` 에서 읽어 넘긴다. */
@@ -246,7 +361,7 @@ export function resolveApiRequestLines(lines: readonly ApiRequestLineInput[], fo
  *    모양이 갈려, 읽는 쪽이 「없음」과 「거짓」을 따로 다루게 된다. **없으면 아님** 한 줄로 끝내려는 것이고,
  *    저쪽이 종류를 모를 때 칸을 아예 안 보내는 것(`workflowKind`)과 같은 수법이다.
  */
-export function buildApiUseRequest(value: ApiStockRequestInput, lines: readonly ResolvedApiLine[], todayIso: string): EntryInput {
+export function buildApiUseRequest(value: ApiUseRequestInput, lines: readonly ResolvedApiLine[], todayIso: string): EntryInput {
   return {
     type: "USE",
     occurredOn: todayIso,
@@ -265,6 +380,37 @@ export function buildApiUseRequest(value: ApiStockRequestInput, lines: readonly 
       // 🔴 참일 때만 적는다(머리말) — 거짓이면 칸 자체가 없고, 그것이 옛 줄과 같은 모양이다.
       ...(l.fromOhTemplate ? { fromOhTemplate: true } : {}),
     })),
+  };
+}
+
+/**
+ * 신청에 담길 **반환**의 내용 — 🔴 **기존 반환이 쓰는 모양 그대로다** (2026-11-26).
+ *
+ * 🔴 **새 모양을 발명하지 않는다.** 줄은 `src/lib/stock/form.ts` 의 `ReturnLine`
+ *    (`{ transactionId, quantity, note }`)이고, 그것은 **화면에서 적는 반환과 한 글자도 같다**.
+ *    까닭 둘:
+ *     ① 담당자가 [확인]을 누르면 이 payload 그대로 원장에 쓰인다(`confirmRequest` → `recordEntryIn`).
+ *        모양이 다르면 그 순간 터지거나, 더 나쁘게는 **줄이 하나도 안 적힌 채 성공한다.**
+ *     ② **앞 조각이 이 모양을 읽어 「대기 중인 양」을 센다**(`./return-candidates.ts` 의
+ *        `returnRequestLines` — `payload.lines[].transactionId`). 어긋나면 `pending` 이 **영영 0** 이고,
+ *        아무도 안 깨지는데 같은 부품을 두 번 신청해 넘기는 길이 열린다. 🔵 그래서 시험이 여기서 만든
+ *        payload 를 **그 함수에 직접 먹여 본다**(`tests/api-return-request.test.ts`).
+ *
+ * 바깥이 보내지 않는 칸을 여기서 정한다 — 위 `buildApiUseRequest` 와 같은 관례다:
+ *  - `type` **RETURN 고정**(이 함수는 반환만 만든다).
+ *  - `occurredOn` = **오늘**(서울). A/S 는 날짜를 보내지 않는다 — 돌려준다고 말한 날이 맞는 말이다.
+ *  - 줄의 `note` 는 **빈 글자**다. A/S 는 줄마다 적을 자리를 주지 않는다(건 하나에 `note` 하나).
+ *
+ * 🔴 **인수번호가 payload 에 들어가지 않는다** — 반환 기록(`EntryInput` 의 RETURN)에는 그 칸이 없다.
+ *    어느 건의 것인지는 **되돌리는 원장 줄이 이미 들고 있다**(그 줄이 달린 불출 건의 인수번호).
+ *    여기에 칸을 지어내면 화면에서 적은 반환과 모양이 갈린다.
+ */
+export function buildApiReturnRequest(value: ApiReturnRequestInput, lines: readonly ReturnLine[], todayIso: string): EntryInput {
+  return {
+    type: "RETURN",
+    occurredOn: todayIso,
+    note: value.note,
+    lines: lines.map((l) => ({ transactionId: l.transactionId, quantity: l.quantity, note: l.note })),
   };
 }
 

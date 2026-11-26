@@ -7,7 +7,10 @@ import { getCurrentApprovalRoute } from "@/lib/approval/queries";
 // 🔴 「이 신청은 어느 절차를 타는가」의 짝표는 저장소에 한 곳뿐이다 — 서버 액션 둘은 이것을 감싼
 //    `getApprovalRouteScopeForRequest` 로 묻고, 이 화면은 신청을 이미 묶음으로 읽어 두었으므로
 //    **같은 순수 함수**를 직접 부른다(줄마다 DB 에 다시 묻지 않으려고).
-import { approvalRouteScopeForWorkflowKind, type ApprovalRouteScope } from "@/lib/approval/route";
+// 🔴 **반환은 결재를 아예 타지 않는다**(2026-11-26, 쓰는 분: 「반환에는 승인 절차가 필요 없어」).
+//    갈래를 비워 두는 것만으로는 안 된다 — 비면 기존 「부품 불출」로 가고 거기엔 결재선이 서 있다.
+//    가르는 규칙은 짝표와 **같은 파일 한 곳**이고, 줄마다 그것을 먼저 묻는다.
+import { approvalRouteScopeForWorkflowKind, isApprovalExemptRequestType, type ApprovalRouteScope } from "@/lib/approval/route";
 import { roleAtLeast } from "@/lib/auth/role";
 import { requireRole } from "@/lib/auth/session";
 import type { RequestDecisionActor } from "@/lib/stock/codes";
@@ -90,7 +93,7 @@ export default async function RequestsPage({ searchParams }: { searchParams: Pro
    * 🔵 지금 목록에 **실제로 쓰이는 용도만** 읽는다 — 신청이 하나도 없으면 판을 한 번도 안 읽는다.
    *    🔴 용도를 가리는 일은 여기서 손으로 적지 않고 순수 함수 하나를 거친다(위 ① 주석).
    */
-  const scopesInUse = [...new Set(requests.map((r) => approvalRouteScopeForWorkflowKind(r.workflowKind)))];
+  const scopesInUse = [...new Set(requests.filter((r) => !isApprovalExemptRequestType(r.type)).map((r) => approvalRouteScopeForWorkflowKind(r.workflowKind)))];
   const [routesInForce, openApprovals, trailsByRequest, decisionActorsByRequest] = await Promise.all([
     Promise.all(scopesInUse.map(async (scope) => [scope, isPartIssueApprovalRouteInForce(await getCurrentApprovalRoute(scope))] as const)),
     listOpenPartIssueStatusesByRequest(requests.map((r) => r.id)),
@@ -105,7 +108,7 @@ export default async function RequestsPage({ searchParams }: { searchParams: Pro
    */
   const approvalRequiredByRequest: Record<string, boolean> = {};
   for (const r of requests) {
-    approvalRequiredByRequest[r.id] = inForceByScope.get(approvalRouteScopeForWorkflowKind(r.workflowKind)) ?? false;
+    approvalRequiredByRequest[r.id] = !isApprovalExemptRequestType(r.type) && (inForceByScope.get(approvalRouteScopeForWorkflowKind(r.workflowKind)) ?? false);
   }
   const issueLocks: Record<string, PartIssueLock> = {};
   for (const [requestId, statuses] of openApprovals) {

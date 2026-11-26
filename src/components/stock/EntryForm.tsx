@@ -377,7 +377,10 @@ export function EntryForm({ parts, initialType, initialPartNo, isAdmin, today, r
                 {c.intakeNumber ? ` · ${c.intakeNumber}` : ""}
                 {c.counterparty ? ` · ${c.counterparty}` : ""}
                 <div className="text-xs text-zinc-500">
-                  가져간 {c.taken}개 · 돌아온 {c.returned}개 · 남은 <b className="tabular">{c.remaining}</b>개{c.usagePlace ? ` · ${c.usagePlace}` : ""}
+                  {/* 🔴 **「신청 중」을 적어 준다** (2026-11-26). A/S 에서 올라온 반환 신청이 있으면 그만큼 「남은」이
+                      줄어드는데, 말해 주지 않으면 담당자는 왜 줄었는지 알 길이 없다 — 그 줄에 아무 표시도 남지 않는다.
+                      🔵 0 이면 아무것도 안 그린다(거의 언제나 0 이다). */}
+                  가져간 {c.taken}개 · 돌아온 {c.returned}개{c.pending > 0 ? ` · 신청 중 ${c.pending}개` : ""} · 남은 <b className="tabular">{c.remaining}</b>개{c.usagePlace ? ` · ${c.usagePlace}` : ""}
                 </div>
               </div>
               <label className={LABEL}>

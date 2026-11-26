@@ -188,8 +188,13 @@ export async function confirmRequestAction(_prev: RequestActionState, formData: 
      *    터지는데, 밖에 두면 그 예외가 그대로 오류 화면이 된다. 안에 두면 **아무것도 내주지 않고**
      *    「잠시 뒤 다시 시도하십시오」로 끝난다 — 막히는 쪽으로 실패한다.
      * 🔵 **문은 여전히 원장 호출보다 앞이다**(시험이 둘의 자리를 잰다).
+     *
+     * 🔴 **용도가 `null` 이면 그 신청은 결재를 아예 타지 않는다** (2026-11-26, 반환). 그때는 판을
+     *    읽지도 않고 지나간다 — 읽어 봐야 「부품 불출」 판이 걸려 **반환이 결재 대상이 된다.**
+     *    가르는 규칙은 `src/lib/approval/route.ts` 한 곳이고, 여기서는 받은 값을 쓰기만 한다.
      */
-    if (isPartIssueApprovalRouteInForce(await getCurrentApprovalRoute(await getApprovalRouteScopeForRequest(id)))) {
+    const scope = await getApprovalRouteScopeForRequest(id);
+    if (scope !== null && isPartIssueApprovalRouteInForce(await getCurrentApprovalRoute(scope))) {
       return { error: PART_ISSUE_APPROVAL_REQUIRED_MESSAGE };
     }
     /**

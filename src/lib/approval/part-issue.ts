@@ -194,6 +194,20 @@ export async function requestPartIssueApproval(
   //    🔵 트랜잭션 밖에서 읽어도 괜찮다: 그 칸은 신청을 만들 때 한 번 적히고 그 뒤로 **아무도 고치지
   //       않는다**(고치는 길이 코드에 없다).
   const scope = await getApprovalRouteScopeForRequest(requestId);
+  /**
+   * 🔴 **결재를 아예 타지 않는 신청**이면 여기서 끝난다 (2026-11-26, 반환). 쓰는 분이 못 박았다:
+   *    「반환에는 승인 절차가 필요 없어」. 가르는 규칙은 `./route.ts` 한 곳이고, 그 판정이 `null` 로
+   *    온다(`./request-scope.ts`).
+   * 🔵 **`NO_ROUTE` 로 답한다** — 뜻이 꼭 맞는 갈래다: 「올릴 결재가 없고, 담당자는 [확인]으로 바로
+   *    처리하면 된다」. 서버 액션이 이 갈래만 가려 「새로 고치면 단추가 [확인]으로 돌아옵니다」로
+   *    바꿔 말한다(`src/app/actions/part-issue.ts`). 🔴 갈래를 새로 만들지 않는 까닭은 그 글자를
+   *    가리는 자리가 거기 하나뿐이라, 새 갈래는 **속사정이 그대로 사람에게 나가기** 때문이다.
+   * 🔵 이 길로 들어오는 것은 **옛 화면을 띄워 둔 탭**뿐이다 — 반환 신청에는 [불출 신청] 단추가
+   *    서지 않는다(`src/app/(app)/requests/page.tsx` 가 같은 규칙으로 가린다).
+   */
+  if (scope === null) {
+    return { ok: false, code: "NO_ROUTE", message: "반환 신청은 승인 절차를 타지 않습니다. 재고 담당자가 [확인]으로 그 자리에서 처리합니다." };
+  }
   const route = await getCurrentApprovalRouteWithSubs(scope);
   const requesterSubs = await requesterSubsToSkipFor(requestId, actor.sub);
   const plan = planPartIssueApproval(route?.steps ?? [], requesterSubs);

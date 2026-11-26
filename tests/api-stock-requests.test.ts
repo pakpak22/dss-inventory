@@ -33,6 +33,16 @@ const message = (raw: unknown): string => {
   return r.ok ? "" : r.message;
 };
 
+/**
+ * 🔴 **종류를 못 박는다** (2026-11-26). 통로가 받는 모양이 **종류로 갈리는 묶음**이 되면서
+ * (`type: "USE" | "RETURN"`), 사용 줄(유상·무상이 달린 줄)을 보려면 먼저 좁혀야 한다.
+ * 🔵 **단언이 약해진 것이 아니다** — 아래 시험들의 전제(「이 본문은 사용 신청이다」)를 **글자로
+ *    적은 것**이고, 종류가 뒤집히면 여기서 선다.
+ */
+function assertUse<T extends { type: string }>(value: T): asserts value is Extract<T, { type: "USE" }> {
+  assert.equal(value.type, "USE", "사용 신청이 아니다 — 유상·무상은 사용 줄에만 있는 칸이다");
+}
+
 describe("받는 값 — 제대로 온 본문 (2026-10-15)", () => {
   it("요청 번호·인수번호·신청자·줄을 그대로 받고, 인수번호는 대문자로 맞춘다", () => {
     const r = parseApiStockRequest(BODY);
@@ -198,6 +208,7 @@ describe("🔴 유상·무상 — 줄마다, 필수, 기본값 없음 (2026-10-1
       ],
     });
     assert.ok(r.ok);
+    assertUse(r.value);
     assert.deepEqual(
       r.value.lines.map((l) => l.chargeType),
       ["PAID", "FREE", "PAID"],
@@ -213,6 +224,7 @@ describe("🔴 유상·무상 — 줄마다, 필수, 기본값 없음 (2026-10-1
       ],
     });
     assert.ok(parsed.ok);
+    assertUse(parsed.value);
     const resolved = resolveApiRequestLines(parsed.value.lines, [
       { no: 165, id: "11111111-1111-4111-8111-111111111111", isDeleted: false },
       { no: 7, id: "22222222-2222-4222-8222-222222222222", isDeleted: false },
@@ -280,11 +292,19 @@ describe("신청에 담기는 내용 — 화면이 만드는 것과 같은 모�
   const value = (() => {
     const r = parseApiStockRequest(BODY);
     assert.ok(r.ok);
+    assertUse(r.value);
     return r.value;
   })();
   const input = buildApiUseRequest(value, [{ partId: "11111111-1111-4111-8111-111111111111", quantity: 2, chargeType: "PAID", fromOhTemplate: false }], "2026-10-15");
 
-  it("🔴 종류는 「사용」 고정이다 — 바깥이 종류를 고르지 않는다", () => {
+  /**
+   * 🔴 **시험 이름을 고쳤다** (2026-11-26). 원래 이름은 「종류는 「사용」 고정이다 — 바깥이 종류를
+   * 고르지 않는다」였는데, 같은 날 **반환**이 열리면서 그 말이 통로 전체에 대해서는 거짓이 됐다
+   * (초록 ✔ 옆의 글은 아무도 의심하지 않는다). 🔵 **재는 것은 그대로다**: `buildApiUseRequest` 가
+   * 만드는 것은 언제나 「사용」이다 — 반환은 **다른 함수**가 만든다(`buildApiReturnRequest`).
+   * 🔵 「그 밖의 종류는 여전히 거절된다」는 아래 별도 묶음이 잰다.
+   */
+  it("🔴 `buildApiUseRequest` 가 만드는 것은 언제나 「사용」이다", () => {
     assert.equal(input.type, "USE");
   });
 
@@ -317,7 +337,8 @@ describe("신청에 담기는 내용 — 화면이 만드는 것과 같은 모�
     // 담기면 그 칸의 뜻이 깨지고, 나중에 짝을 바꿀 때 원장 쪽 자료까지 들춰야 한다.
     const withKind = parseApiStockRequest({ ...BODY, workflowKind: "MATCHER" });
     assert.ok(withKind.ok);
-    const built = buildApiUseRequest(withKind.value, [{ partId: "11111111-1111-4111-8111-111111111111", quantity: 2, chargeType: "PAID", fromOhTemplate: false }], "2026-10-22");
+    assertUse(withKind.value);
+    const built = buildApiUseRequest(withKind.value,[{ partId: "11111111-1111-4111-8111-111111111111", quantity: 2, chargeType: "PAID", fromOhTemplate: false }], "2026-10-22");
     assert.ok(!("workflowKind" in built), "payload 에 종류가 섞여 들어갔다");
     assert.ok(!JSON.stringify(built).includes("MATCHER"), "payload 어딘가에 종류가 적혔다");
   });

@@ -65,8 +65,18 @@ function issuableLines(input: EntryInput): ReadonlyArray<{ partId: string; quant
 export function buildIssueInput(payload: EntryInput, want: ReadonlyMap<string, number> | null, issued: ReadonlyMap<string, number>, names: PartNames = new Map()): BuildIssueResult {
   const requested = issuableLines(payload);
   if (requested === null) {
-    // 줄이 없는 종류(입고·반환·조정·소유 옮김)는 애초에 확인 대기를 거치지 않는다 (codes.ts 의 CONFIRMATION_TYPES).
-    // 그래도 그런 신청이 들어와 있으면 **지금까지 하던 대로** 통째로 넘긴다 — 이 조각에서 기존 동작이 바뀌면 안 된다.
+    /**
+     * 부분 불출이 되지 않는 종류(입고·반환·조정·소유 옮김)는 **통째로** 넘긴다 — 담당자가 [확인]을
+     * 누르면 신청에 담긴 그대로 원장에 쓰인다.
+     *
+     * 🔴 **2026-11-26 에 이 자리에 실제로 신청이 들어오기 시작했다**: A/S 가 올리는 **반환 신청**이다
+     *    (`POST /api/v1/stock-requests` 의 `type: "RETURN"`). 그 전 주석은 「그런 종류는 애초에 확인
+     *    대기를 거치지 않는다(codes.ts 의 `CONFIRMATION_TYPES`) — 들어와 있으면 지금까지 하던 대로」
+     *    였는데, 그 말이 이제 반쪽만 참이다: 🔵 **화면에서 담당자가 적는 반환**은 여전히 신청을 거치지
+     *    않고 곧장 원장으로 간다(그 묶음은 한 글자도 안 바뀌었다). **바깥에서 올라온 반환만** 여기로 온다.
+     * 🔴 **동작은 한 글자도 바뀌지 않았다** — 이 길은 그때도 payload 를 통째로 넘기고 있었다.
+     *    🔵 「이번에 줄 수량」(`want`)은 보지 않는다: 반환은 나눠 받지 않고 한 번에 다 들어온다.
+     */
     return { ok: true, plan: { input: payload, remaining: 0, issuing: 0 } };
   }
   // 요청 줄에 같은 부품이 두 번 들어오는 일은 폼 검사가 막는다 (form.ts: 「같은 부품이 두 번 들어 있습니다」).
