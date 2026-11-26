@@ -135,6 +135,9 @@ function build(over: Partial<Parameters<typeof buildInventoryNotificationItems>[
     issueApprovalsToDecide: { count: 0, oldestAt: null },
     decidedIssueApprovals: [],
     lowStockParts: [],
+    // 🔵 2026-11-26 에 붙은 여섯째 재료(완료된 내 반환 신청). 비어 있는 것이 **이 파일이 재는
+    //    기존 다섯 줄의 모습**이다 — 반환 줄의 규칙은 tests/notifications-return-completed.test.ts 가 잰다.
+    completedReturns: [],
     now: NOW,
     baseUrl: BASE,
     sourceId: SOURCE,
@@ -979,9 +982,19 @@ describe("🔴 두 통로가 포털 번호를 어디서 얻는가 — users 를 
 });
 
 describe("🔴 7일은 한 자리에서만 긋는다 — 결재 반려도 그 함수를 지난다", () => {
-  it("질의가 **같은 함수**로 두 선을 긋는다(rejectionCutoff)", () => {
+  it("질의가 **같은 함수**로 세 선을 긋는다(rejectionCutoff)", () => {
     const queries = src("src/lib/notifications/queries.ts");
-    assert.equal(queries.split("rejectionCutoff(now)").length - 1, 2, "반출 신청 반려와 결재 반려가 서로 다른 선을 쓰고 있다");
+    /**
+     * 🔴 **2026-11-26 에 셋째가 붙었다** — 완료된 내 반환 신청(`listCompletedReturnsFor`)도 7일이다.
+     *    단언을 약하게 하지 않고 **숫자를 늘렸다**: 이 시험이 재는 것은 「몇 군데냐」가 아니라
+     *    **「선을 긋는 자리가 전부 그 함수 하나를 지나느냐」**이고, 아래 둘이 그 뜻을 받친다.
+     */
+    assert.equal(queries.split("rejectionCutoff(now)").length - 1, 3, "반출 신청 반려·결재 반려·반환 완료가 서로 다른 선을 쓰고 있다");
+    // 🔴 숫자만 맞추고 딴 데서 따로 세면 위 한 줄은 아무것도 못 본다 — 손으로 세는 자리가 없어야 한다.
+    assert.ok(!queries.includes("24 * 60 * 60 * 1000"), "질의가 「며칠」을 스스로 세고 있다 — 두 벌이 되면 갈린다");
+    assert.ok(!queries.includes("REJECTED_VISIBLE_DAYS"), "질의가 기간 상수를 직접 들고 있다");
+    // 🔵 `since` 를 받는 질의가 셋이고, 셋 다 **그 함수가 지은 값**을 같은 자리에서 받는다.
+    assert.equal(queries.split(", rejectionCutoff(now), NOTIFICATION_MAX_ITEMS)").length - 1, 3, "선을 받는 질의가 셋이 아니다");
   });
 
   it("🔴 결재 쪽 질의에 날짜 계산을 손으로 적지 않았다 — 부르는 쪽이 건네준다", () => {

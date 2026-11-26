@@ -77,6 +77,9 @@ function bellDetail(over: Partial<DecidedIssueApprovalSource>): string {
       },
     ],
     lowStockParts: [],
+    // 🔵 이 시험이 재는 것은 **대리인 이름**이라 반환 줄은 비운다(2026-11-26 에 붙은 재료) —
+    //    반환은 결재를 타지 않아 대리인이라는 개념 자체가 없다(`CompletedReturnSource` 주석).
+    completedReturns: [],
     now: NOW,
     baseUrl: BASE,
     sourceId: "dss-inventory",
@@ -316,6 +319,9 @@ function rejectedLineDetail(over: Partial<RejectedRequestSource> = {}): string {
     issueApprovalsToDecide: { count: 0, oldestAt: null },
     decidedIssueApprovals: [],
     lowStockParts: [],
+    // 🔵 이 시험이 재는 것은 **대리인 이름**이라 반환 줄은 비운다(2026-11-26 에 붙은 재료) —
+    //    반환은 결재를 타지 않아 대리인이라는 개념 자체가 없다(`CompletedReturnSource` 주석).
+    completedReturns: [],
     now: NOW,
     baseUrl: BASE,
     sourceId: "dss-inventory",

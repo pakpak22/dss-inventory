@@ -26,10 +26,11 @@ import { listInventoryNotifications } from "@/lib/notifications/queries";
  * 쿼리가 접근 로그에 그대로 남기 때문이다.
  *
  * ⚠️ 포털은 이 왕복을 **1.5초**만 기다린다(그쪽 READ_TIMEOUT_MS). 여기서 하는 일은
- * 색인을 타는 질의 다섯뿐이고, 뒤 넷은 **나란히** 나간다 — 사람 되짚기(users_auth_sub_uq) ·
+ * 색인을 타는 질의 일곱뿐이고, 뒤 여섯은 **나란히** 나간다 — 사람 되짚기(users_auth_sub_uq) ·
  * 대기 집계(stock_requests_status_idx) · 내 반려 목록(stock_requests_requester_idx) ·
  * 내 결재 차례 집계(stock_issue_approval_steps_approver_sub_idx) · 결정된 내 결재건
- * (stock_issue_approvals_requester_idx).
+ * (stock_issue_approvals_requester_idx) · 재고 부족 부품 · **완료된 내 반환 신청**
+ * (2026-11-26, stock_requests_requester_idx).
  * ============================================================================
  */
 

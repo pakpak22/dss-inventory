@@ -85,6 +85,30 @@ export const PENDING_REQUEST_STATUSES = ["PENDING", "CONFIRMING", "PARTIAL", "ON
 export const DECIDED_REQUEST_STATUSES = ["CONFIRMED", "REJECTED", "CANCELLED"] as const satisfies readonly RequestStatus[];
 
 /**
+ * **반환이 끝난 것으로 치는 상태** — 종에 「부품 반환이 완료되었습니다」를 세우는 묶음 (2026-11-26).
+ *
+ * 🔴 **한 가지뿐이다.** 담당자가 [반환 완료]를 누르면 `confirmRequest` 가 원장에 쓰고 신청을
+ *    `CONFIRMED` 로 닫는다(`src/lib/stock/requests.ts`). 반려(`REJECTED`)·거둠(`CANCELLED`)은
+ *    **물건이 돌아오지 않은 것**이라 여기 없다 — 그 신청에 종이 울리면 거짓말이 된다.
+ * 🔴 **그런데도 묶음으로 둔다**(글자 하나로 두지 않는다). 질의의 WHERE 와 종 조립이 **같은 한 벌**을
+ *    봐야 하고(`listCompletedReturnsFor` · `buildInventoryNotificationItems`), 상태가 하나 늘어
+ *    「반환이 끝난 자리」가 둘이 되는 날 고칠 곳이 여기 하나이기 때문이다. 선례는 바로 위
+ *    `ACTIONABLE_REQUEST_STATUSES` 와 `notifications/bell-items.ts` 의
+ *    `DECIDED_ISSUE_APPROVAL_STATUSES` 다.
+ *
+ * 🔵 **마감(`closeRequest`)으로 `CONFIRMED` 가 되는 길은 반환에 없다.** 마감은 `PARTIAL` 만 받는데
+ *    (그 함수의 WHERE), 반환은 쪼개 내주는 길이 없어 `buildIssueInput` 이 payload 를 통째로 넘기므로
+ *    (`./issue.ts`) 남는 수량이 0 이고 `PARTIAL` 을 거치지 않는다. 그래서 반환의 `CONFIRMED` 는
+ *    언제나 **실제로 돌려받은 것**이다.
+ */
+export const COMPLETED_RETURN_STATUSES = ["CONFIRMED"] as const satisfies readonly RequestStatus[];
+
+/** 그 반환 신청은 **돌려받기가 끝난** 것인가. 🔴 판정이 적힌 자리는 위 묶음 하나다. */
+export function isCompletedReturnStatus(status: RequestStatus): boolean {
+  return (COMPLETED_RETURN_STATUSES as readonly RequestStatus[]).includes(status);
+}
+
+/**
  * 지금 **담당자가 손댈 수 있는** 신청 — 머리말 「대기 N」 배지와 알림 종이 세는 묶음 (2026-10-15, 조각 10a).
  *
  * 🔴 **세는 묶음(`PENDING_REQUEST_STATUSES`)에서 보류(`ON_HOLD`)만 뺀 것이다.** 담당자가 사유를 적어

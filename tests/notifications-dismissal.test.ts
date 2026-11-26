@@ -495,6 +495,9 @@ describe("열쇠의 접두사", () => {
       issueApprovalsToDecide: { count: 1, oldestAt: new Date("2026-10-13T00:00:00+09:00") },
       decidedIssueApprovals: [],
       lowStockParts: [{ no: 7, name: "가짜부품", name2: "", quantity: 1, limitQuantity: 5 }],
+      // 🔵 반환 완료 줄(2026-11-26)도 **같은 접두사**를 쓴다 — 열쇠를 짓는 자리가 조립의 `push` 하나라
+      //    종류마다 갈릴 수 없다. 여기서는 다른 줄들만으로도 ①이 재어지므로 비워 둔다.
+      completedReturns: [],
       now: new Date("2026-10-13T09:00:00+09:00"),
       baseUrl: "http://192.168.1.132:3800",
       sourceId: "가짜-클라이언트",

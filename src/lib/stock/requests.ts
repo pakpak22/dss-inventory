@@ -13,6 +13,7 @@ import {
   ACTIONABLE_REQUEST_STATUSES,
   CANCELLABLE_REQUEST_SOURCES,
   CLAIMABLE_REQUEST_STATUSES,
+  COMPLETED_RETURN_STATUSES,
   ENTRY_TYPE_LABEL,
   EXECUTABLE_REQUEST_STATUSES,
   EXTERNALLY_CANCELLABLE_REQUEST_SOURCES,
@@ -1528,6 +1529,84 @@ export async function listRejectedRequestsFor(userId: string, since: Date, limit
       //    없다는 뜻**이고, 그래서 이 한 칸으로 가른다.
       rejectedStep: r.rejectedApproverSub === null ? null : { approverSub: r.rejectedApproverSub, decidedAt: r.decidedAt, decidedBySub: r.rejectedDecidedBySub, decidedByName: r.rejectedDecidedByName },
     })),
+    total: rows[0].total,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* 반환이 끝났을 때의 알림이 쓰는 조회 (2026-11-26)                      */
+/* 🔴 위의 것들은 그대로 둔다 — 더하기만 한다.                           */
+/* ------------------------------------------------------------------ */
+
+/** 종에 실을 「완료된 내 반환 신청」 한 줄. 🔵 반환 **내용**은 싣지 않는다 — `/requests` 에서 본다. */
+export interface CompletedReturnRow {
+  id: string;
+  /**
+   * 🔴 **조립이 한 번 더 거른다**(`buildInventoryNotificationItems`) — 아래 질의가 이미 걸렀지만,
+   *    거르는 묶음이 `./codes` 의 `COMPLETED_RETURN_STATUSES` 한 벌이라 두 자리가 갈라질 수 없다.
+   *    반려·거둬진 반환에 종이 울리면 **거짓말**이 되는 자리라 울타리를 둘로 둔다(반려 줄이 7일 선을
+   *    두 번 보는 것과 같은 결).
+   */
+  status: RequestStatus;
+  summary: string;
+  /** [반환 완료]를 누른 **재고 담당자**의 이름. 🔵 반환은 결재를 안 타므로 대리인이라는 개념이 없다. */
+  decidedByName: string | null;
+  decidedAt: Date | null;
+}
+
+/**
+ * **그 사람이 올린 반환 신청 중 완료된 것**을, `since` 이후에 끝난 것만 (2026-11-26).
+ *
+ * ── 🔴 왜 「확인된 신청은 알리지 않는다」의 예외인가 ────────────────────
+ * 2026-10-13 사용자 결정은 「확인(CONFIRMED)된 신청은 알리지 않는다 — **수량이 바뀌어 화면에서
+ * 바로 보인다**」였다. 그 까닭이 **반환에는 성립하지 않는다**: 반환을 올리는 사람은 A/S 에서
+ * [반환 요청]을 누른 기사이고, 재고 현황 화면을 보고 있지 않다. 담당자가 받아 줬는지를
+ * 알 길이 지금은 **하나도 없다.** 🔴 그래서 **반출(USE·LOAN·DISPOSE) 쪽은 한 글자도 바뀌지
+ * 않는다** — 이 질의는 `type = 'RETURN'` 으로 먼저 좁힌다.
+ *
+ * ── 🔴 「신청한 본인」을 가리는 열쇠가 **둘**이다 ────────────────────────
+ * `stock_requests` 는 신청자를 두 칸에 나눠 들고 있다(그 표 주석 · `approval/requester-subs.ts` 의
+ * COALESCE 규칙): **A/S 에서 실려 온 포털 번호**(`requester_sub`)와 **이 시스템의 `users.id`**
+ * (`requested_by`, 계정이 없으면 비어 있다). 🔵 둘 다 있으면 **같은 사람**이다 — A/S 통로가 받은
+ * 포털 번호로 사람을 찾아 id 를 채우기 때문이다(`app/api/v1/stock-requests/route.ts`).
+ * 🔴 그래서 **둘 중 하나라도 나를 가리키면 내 신청**으로 본다. 한쪽만 보면 조용히 비는 자리가
+ * 생긴다: 포털 번호만 보면 재고 화면에서 올린 신청(그 칸이 빈다)이 빠지고, `users.id` 만 보면
+ * **이 시스템에 계정이 없던 시절에 올라온 A/S 신청**이 빠진다.
+ *
+ * - 🔴 **반려(REJECTED)·거둠(CANCELLED)은 들어오지 않는다** — 물건이 돌아오지 않은 것이라
+ *   「완료」라고 말하면 거짓이 된다. 묶음은 `./codes` 의 `COMPLETED_RETURN_STATUSES` 하나다.
+ * - `since` 는 부르는 쪽이 정한다 — 「7일」이 적힌 곳은 `notifications/bell-items.ts` 하나뿐이어야
+ *   한다(그 파일의 `rejectionCutoff`). 반려 줄과 **같은 함수**로 그은 선이다.
+ * - 🔴 `total` 은 **상한에 걸리기 전의 전체 개수**다(반려 줄과 같은 창 함수 수법) — 배지 숫자가
+ *   참말이어야 한다.
+ */
+export async function listCompletedReturnsFor(who: { userId: string; requesterSub: string }, since: Date, limit: number): Promise<{ rows: CompletedReturnRow[]; total: number }> {
+  const rows = await db()
+    .select({
+      id: stockRequests.id,
+      status: stockRequests.status,
+      summary: stockRequests.summary,
+      decidedByName: stockRequests.decidedByName,
+      decidedAt: stockRequests.decidedAt,
+      total: sql<number>`count(*) over ()`.mapWith(Number),
+    })
+    .from(stockRequests)
+    .where(
+      and(
+        // 🔴 **종류로 먼저 좁힌다** — 이 알림은 반환에만 있다(위 머리말).
+        eq(stockRequests.type, "RETURN"),
+        inArray(stockRequests.status, [...COMPLETED_RETURN_STATUSES]),
+        gte(stockRequests.decidedAt, since),
+        // 🔴 **신청한 본인의 것만.** 두 열쇠 중 하나라도 맞으면 내 신청이다(위 머리말).
+        //    🔵 `requested_by` 쪽은 색인 `stock_requests_requester_idx` 를 탄다.
+        or(eq(stockRequests.requestedBy, who.userId), eq(stockRequests.requesterSub, who.requesterSub)),
+      ),
+    )
+    .orderBy(desc(stockRequests.decidedAt), desc(stockRequests.id))
+    .limit(limit);
+  if (rows.length === 0) return { rows: [], total: 0 };
+  return {
+    rows: rows.map((r) => ({ id: r.id, status: r.status, summary: r.summary, decidedByName: r.decidedByName, decidedAt: r.decidedAt })),
     total: rows[0].total,
   };
 }

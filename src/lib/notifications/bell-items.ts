@@ -1,4 +1,5 @@
 import type { NotificationBellItem } from "@dss/ui";
+import type { RequestStatus } from "@/db/schema/stock-requests";
 import type { Role } from "@/db/schema/users";
 // 🔴 「누구 이름으로 말할 것인가」를 여기서 짓지 않는다 — 결재선 그림·부품 요청 관리의 반려 사유
 //    상자와 **같은 함수**를 지난다. 두 벌로 적으면 같은 반려가 자리마다 다른 사람 이름을 말하고,
@@ -10,11 +11,13 @@ import { roleAtLeast } from "@/lib/auth/role";
 // 🔴 「재고가 한계수량에 걸렸나」는 **부품 어휘**에 있다 — 상세 창의 「부족」 딱지도 같은 함수를
 //    본다(그쪽 주석). 여기에 한 벌 더 적으면 「상세엔 부족이라는데 종은 조용하다」가 생긴다.
 import { isLowStock } from "@/lib/parts/codes";
-import { todaySeoul as seoulDate } from "@/lib/stock/codes";
+// 🔴 「그 반환은 돌려받기가 끝났나」도 여기에 적지 않는다 — 질의의 WHERE 와 **같은 묶음**
+//    (`COMPLETED_RETURN_STATUSES`)을 본다. 두 벌이 되면 반려·거둬진 반환에 종이 울린다.
+import { isCompletedReturnStatus, todaySeoul as seoulDate } from "@/lib/stock/codes";
 
 /**
  * ============================================================================
- * 이 시스템의 **자체 알림** — 반출 신청 둘 · 부품 불출 결재 둘 · 한계수량 하나
+ * 이 시스템의 **자체 알림** — 반출 신청 둘 · 부품 불출 결재 둘 · 한계수량 하나 · 반환 하나
  * ============================================================================
  * 머리말의 알림 종(@dss/ui 의 NotificationBell)이 받는 아홉 칸을 만든다.
  * 이 파일은 **순수 계산만** 한다 — DB 도 React 도 세션도 환경변수도 모른다.
@@ -22,7 +25,7 @@ import { todaySeoul as seoulDate } from "@/lib/stock/codes";
  * 주소 · client_id)는 부르는 쪽이 날라다 준다(notifications/queries.ts).
  *
  * ── 🔴 「읽음」 표를 만들지 않는다 ───────────────────────────────────────
- * 다섯 가지 알림이 모두 **이미 있는 표의 상태와 값만으로** 풀린다:
+ * 여섯 가지 알림이 모두 **이미 있는 표의 상태와 값만으로** 풀린다:
  *
  *  | 누구에게          | 무엇                      | 어디로      | 언제 사라지나                       |
  *  |-------------------|---------------------------|-------------|-------------------------------------|
@@ -31,6 +34,14 @@ import { todaySeoul as seoulDate } from "@/lib/stock/codes";
  *  | ADMIN(재고 담당)  | 「재고가 한계수량 이하」  | `/?part=No.`| 재고가 한계수량을 넘으면 저절로     |
  *  | 결재를 올린 본인  | 「불출 결재가 승인/반려」 | `/approvals`| 승인=**실행되면**, 반려=**7일**     |
  *  | 신청한 본인       | 「반출 신청이 반려됨」    | `/requests` | **결정된 지 7일**이 지나면 저절로   |
+ *  | 반환을 올린 본인  | 「부품 반환이 완료됨」    | `/requests` | **끝난 지 7일**이 지나면 저절로     |
+ *
+ * 🔵 **2026-11-26 에 여섯째가 붙었다** — A/S 에서 올린 반환 신청을 담당자가 [반환 완료]로 받으면
+ * 올린 본인에게 한 줄. **새 종류를 만들지 않고** 「결재 결과」 갈래에 얹었다(쓰는 분 지시: 「[반환
+ * 완료]시에는 [결재 결과]를 따르도록」) — 받는 사람이 **올린 본인**으로 그 갈래와 같고, 포털에서
+ * 그 갈래를 끄면 반환 알림도 **함께 꺼지는 것**이 그 지시의 알맹이다. 🔴 반환은 결재를 타지 않지만
+ * (`approval/route.ts` 의 `isApprovalExemptRequestType`) 이 줄은 결재를 **보지 않는다** — 신청 표의
+ * 상태 하나로 풀린다(아래 ③-2).
  *
  * 🔵 **2026-10-16 에 다섯째가 붙었다** — 한계수량(`parts.limit_quantity`)은 새 칸이지만, 이 파일의
  * 약속은 **읽음 표를 만들지 않는 것**이지 칸을 안 더하는 것이 아니다. 그 줄도 다른 넷과 똑같이
@@ -79,6 +90,13 @@ export const NOTIFICATION_KINDS = {
    * 🔴 **그래도 둘은 글자로 갈린다** — 줄의 제목이 다르다(아래 조립 ③의 두 문장). 색만으로
    * 가르지 않는 것이 이 저장소의 관례이고, 같은 종류라 색도 같으므로 **글자가 유일한
    * 구분**이다. 제목을 다듬을 때 그 사실을 잊지 마라.
+   *
+   * 🔵 **2026-11-26 에 「부품 반환이 완료되었습니다」가 같은 종류로 들어왔다**(조립 ③-2).
+   * 🔴 **갈래를 새로 만들지 않은 것이 쓰는 분의 지시다** — 「[반환 완료]시에는 [결재 결과]를
+   *    따르도록」. 위와 같은 잣대로도 맞는다: 이 종류가 답하는 물음은 **「누가 받는가」** 하나이고,
+   *    반환 완료도 **올린 본인**이 받는다. 🔴 그래서 포털에서 이 갈래를 끄면 **반환 알림도 함께
+   *    꺼진다** — 그것이 지시의 알맹이다. 🔴 **글자가 유일한 구분**이라는 위 규칙은 이제 **넷**을
+   *    가른다(승인 · 반려 · 실행 대기 반려 · 반환 완료).
    */
   issueApprovalDecided: "STOCK_ISSUE_APPROVAL_DECIDED",
   /**
@@ -125,6 +143,17 @@ export const ISSUE_APPROVAL_TO_DECIDE_NOTIFICATION_ID = "ISSUE_APPROVALS_TO_DECI
 
 /** 「결재 결과」 알림 id 의 앞머리. */
 export const ISSUE_APPROVAL_DECIDED_ID_PREFIX = "ISSUE_APPROVAL_DECIDED";
+
+/**
+ * 「부품 반환이 완료됨」 줄 id 의 앞머리 (2026-11-26).
+ *
+ * 🔴 **종류는 「결재 결과」와 같지만 id 는 겹치면 안 된다.** 뒤에 붙는 것이 저쪽은 **결재건 id**,
+ *    이쪽은 **신청 id** 인데 둘 다 uuid 라 앞머리가 같으면 **다른 줄이 같은 열쇠**를 가질 수 있다.
+ *    그러면 조립의 `seen` 이 뒤엣것을 **말없이 버리고**(아래 push), 포털·종의 「지움」도 한 열쇠로
+ *    묶여 엉뚱한 줄이 함께 사라진다. 🔵 오류가 나지 않아 영영 안 드러나는 자리다.
+ * 🔵 `REQUEST_REJECTED`(반려 줄)와도 다르다 — 같은 신청 id 를 쓰지만 앞머리가 갈라 준다.
+ */
+export const RETURN_COMPLETED_ID_PREFIX = "RETURN_COMPLETED";
 
 /**
  * 「재고 부족」 줄 id 의 앞머리. 🔴 뒤에 붙는 것은 **부품 No.** 다(uuid 가 아니다) — 그 줄이 가리키는
@@ -451,6 +480,33 @@ export type DecidedIssueApprovalSource = {
 };
 
 /**
+ * 알림으로 만들 「완료된 내 반환 신청」 한 줄 (2026-11-26). 종에 필요한 칸만 받는다.
+ *
+ * 🔴 **결재건이 아니라 신청이다.** 반환은 결재를 타지 않으므로(`approval/route.ts` 의
+ *    `isApprovalExemptRequestType`) 단계도, 대리인도, 「누구 자리였나」도 없다 — 위
+ *    `DecidedIssueApprovalSource` 가 들고 있는 `decidedBy`(갈래) 칸이 **여기엔 없는 것이 참말**이다.
+ *    [반환 완료]를 누른 사람은 언제나 **그 자리에서 직접 누른 재고 담당자**다.
+ * 🔵 **어느 부품을 몇 개 돌려받았는지**는 싣지 않는다 — 신청 때 지어 둔 한 줄 요약(`summary`)만
+ *    쓴다. 이 줄은 포털을 거쳐 **다른 시스템의 종에도** 실려 나간다(반려 줄과 같은 잣대).
+ */
+export type CompletedReturnSource = {
+  /** `stock_requests.id`. 알림 id 가 이 값에서 나온다. */
+  id: string;
+  /**
+   * 🔴 **조립이 한 번 더 본다**(아래 ③-2). 질의가 이미 `COMPLETED_RETURN_STATUSES` 로 걸렀지만,
+   *    **반려·거둬진 반환에 종이 울리면 거짓말**이 되는 자리라 울타리를 둘로 둔다. 두 자리가 같은
+   *    묶음 하나를 보므로 갈라질 수 없다.
+   */
+  status: RequestStatus;
+  /** 신청 때 붙여 둔 한 줄 요약(종류·날짜·수리 건·부품). */
+  summary: string;
+  /** [반환 완료]를 누른 담당자 이름. 없으면 빈 칸으로 그린다. */
+  decidedByName: string | null;
+  /** 🔴 **7일 선을 긋는 값**이다. 비어 있으면(있을 수 없지만) 줄이 서지 않는다(`isRejectionVisible`). */
+  decidedAt: Date | null;
+};
+
+/**
  * 알림으로 만들 「재고가 한계수량에 걸린 부품」 한 줄 (2026-10-16). 종에 필요한 칸만 받는다.
  *
  * 🔴 **고르는 일은 여기서 하지 않는다.** 「재고 ≤ 한계수량」도, 「한계수량이 null 이면 빼기」도,
@@ -509,6 +565,16 @@ export function issueApprovalDecidedNotificationId(approvalId: string): string {
   return `${ISSUE_APPROVAL_DECIDED_ID_PREFIX}:${approvalId}`;
 }
 
+/**
+ * **반환 신청** id → 알림 id (2026-11-26). 🔴 같은 신청에는 **언제나 같은 값**이 나온다.
+ *
+ * 🔴 뒤에 붙는 것이 결재건이 아니라 **신청**(`stock_requests.id`)이다 — 반환은 결재를 타지 않아
+ *    결재건 자체가 없다. 앞머리가 저쪽과 다른 까닭은 위 상수 주석에.
+ */
+export function returnCompletedNotificationId(requestId: string): string {
+  return `${RETURN_COMPLETED_ID_PREFIX}:${requestId}`;
+}
+
 /** " · " 로 잇되 빈 토막은 뺀다. */
 function joinDetail(parts: Array<string | null | undefined>): string {
   return parts
@@ -521,7 +587,8 @@ function joinDetail(parts: Array<string | null | undefined>): string {
  * 재료 → 종이 받는 목록과 개수.
  *
  * ── 차례 ────────────────────────────────────────────────────────────────
- * **할 일이 위, 결과가 아래**다. ⓪ 결재 차례 → ① 확인 대기 → ④ 재고 부족 → ③ 결재 결과 → ② 반출 신청 반려.
+ * **할 일이 위, 결과가 아래**다. ⓪ 결재 차례 → ① 확인 대기 → ④ 재고 부족 → ③ 결재 결과 → ③-2 반환 완료 → ② 반출 신청 반려.
+ * 🔵 ③-2 가 ③ 바로 뒤인 것은 **같은 갈래**이기 때문이다(2026-11-26) — 색이 같은 줄끼리 모여 선다.
  * ⓪ 가 맨 위인 까닭: 그 줄만이 **남이 나를 기다리고 있는** 일이다(결재가 안 나면 부품이 안
  * 나간다). ④ 는 할 일 묶음의 **끝**이다 — 사람을 기다리게 하는 일이 아니라 미리 챙기는 일이다.
  * 줄 안의 차례는 질의가 정한 그대로 쓴다 — 두 곳에서 각자 정렬하면 언젠가 갈린다.
@@ -548,6 +615,14 @@ export function buildInventoryNotificationItems(input: {
   decidedIssueApprovals: readonly DecidedIssueApprovalSource[];
   /** 🔴 자르기 전의 건수. 안 넘기면 받은 줄 수로 본다. */
   decidedIssueApprovalsTotal?: number;
+  /**
+   * 내가 올린 반환 신청 중 **담당자가 [반환 완료]로 받은 것** — 7일 (2026-11-26). 이미 상한에서 잘린 줄.
+   *
+   * 🔴 **비워 넘기는 것이 「반환이 없다」다** — 빠뜨리면 tsc 가 잡는다(기본값을 두지 않는 까닭).
+   */
+  completedReturns: readonly CompletedReturnSource[];
+  /** 🔴 자르기 전의 건수. 안 넘기면 받은 줄 수로 본다. */
+  completedReturnsTotal?: number;
   /**
    * 재고가 한계수량 이하인 부품 — **이미 상한(`MAX_LOW_STOCK_ITEMS`)에서 잘린** 줄,
    * 모자란 만큼 큰 순서(질의가 정한 차례 그대로).
@@ -675,6 +750,7 @@ export function buildInventoryNotificationItems(input: {
   //    🔴 **역할을 보지 않는다** — ⓪과 같은 까닭(`/approvals` 의 문이 `requireSession` 이다).
   const showDecided = receivesIssueApprovalDecidedNotification();
   let decidedShown = 0;
+  let returnShown = 0;
   if (showDecided) {
     for (const row of input.decidedIssueApprovals) {
       // 🔴 질의가 이미 걸렀지만 여기서 한 번 더 본다(②와 같은 모양). **마지막 갈래가 핵심이다**:
@@ -715,6 +791,42 @@ export function buildInventoryNotificationItems(input: {
           ? joinDetail([row.summary, "아직 불출 전", `올린 날 ${seoulDate(row.requestedAt)}`])
           : joinDetail([row.summary, row.decidedByName ? `${approvalDecidedByName(row.decidedByName, row.decidedBy)} 반려` : null, row.decidedAt ? seoulDate(row.decidedAt) : null]),
         approvalsHref,
+      );
+    }
+
+    // ③-2 반환을 **올린 본인**에게 — 「부품 반환이 완료되었습니다」. **건마다 한 줄**이다 (2026-11-26).
+    //
+    //    🔴 **같은 `if (showDecided)` 안에 있는 것이 이 줄의 핵심이다.** 쓰는 분 지시가 「[반환
+    //       완료]시에는 [결재 결과]를 따르도록」이었고, 「따른다」는 **같은 갈래의 같은 관문을 지난다**는
+    //       뜻이다 — 포털에서 그 갈래를 끄면 반환 알림도 **함께 꺼져야** 한다. 여기서 빠져나와 제
+    //       관문을 세우면 끄는 길이 둘이 되고, 끈 사람은 왜 하나가 남는지 알 수 없다.
+    //    🔴 **반환은 결재를 타지 않는다**(`isApprovalExemptRequestType`). 그래서 위 ③ 의 재료
+    //       (`decidedIssueApprovals`)에는 반환이 **한 줄도 없다** — 2026-11-26 까지 [반환 완료]를
+    //       눌러도 종이 한 번도 울리지 않은 까닭이 그것이다. 결재를 거치지 않는 신청은 **신청 표의
+    //       상태**로만 풀린다.
+    //    🔴 **7일 선은 ②·③ 과 같은 함수로 긋는다**(`isRejectionVisible`). 반환 완료는 **이미 끝난 일**이라
+    //       더 할 일이 없어 승인 줄처럼 남겨 둘 까닭이 없다. 손으로 다시 적으면 두 벌이 되어 갈린다.
+    //    🔴 **가는 곳은 `/requests` 다**(`/approvals` 가 아니다). 결재건이 없으므로 승인 요청건 화면에는
+    //       그 신청이 **한 줄도 없다** — 눌러서 빈 화면을 보는 막다른 길이 된다. 반환 신청의 내용과
+    //       「확인됨」은 부품 요청 관리에서 본다(2026-11-26 조각: `return-request-view.ts`).
+    for (const row of input.completedReturns) {
+      // 🔴 질의가 이미 걸렀지만 여기서 한 번 더 본다(②·③ 과 같은 모양). **반려·거둬진 반환에
+      //    종이 울리면 거짓말**이다 — 물건이 돌아오지 않았다. 묶음은 `COMPLETED_RETURN_STATUSES` 하나다.
+      if (!isCompletedReturnStatus(row.status)) continue;
+      if (!isRejectionVisible(row.decidedAt, input.now)) continue;
+      returnShown += 1;
+      push(
+        returnCompletedNotificationId(row.id),
+        NOTIFICATION_KINDS.issueApprovalDecided,
+        // 🔴 **위 셋과 다른 말이어야 한다** — 같은 종류라 색이 같아 **글자가 유일한 구분**이다
+        //    (`NOTIFICATION_KINDS.issueApprovalDecided` 주석). 「불출」로 시작하는 저 셋과 달리 이 줄은
+        //    부품이 **돌아온** 일이라, 첫 낱말부터 갈라 둔다.
+        "부품 반환이 완료되었습니다",
+        // 🔴 돌려받은 **부품 줄**은 싣지 않는다 — /requests 에서 본다. 어느 신청인지와 누가 언제
+        //    받았는지만 가린다. 🔵 이름에 꼬리(「… 대리」)가 붙지 않는 것이 참말이다 — 반환은 결재를
+        //    타지 않아 대리인이라는 개념 자체가 없다(`CompletedReturnSource` 주석).
+        joinDetail([row.summary, row.decidedByName ? `${row.decidedByName} 받음` : null, row.decidedAt ? seoulDate(row.decidedAt) : null]),
+        requestsHref,
       );
     }
   }
@@ -770,6 +882,14 @@ export function buildInventoryNotificationItems(input: {
     decidedCount = decidedTotal > input.decidedIssueApprovals.length ? decidedTotal : decidedShown;
   }
 
+  // 반환 완료 줄도 **같은 셈**이다(위 둘) — 같은 종류지만 재료가 다른 목록이라 상한도 따로 걸린다.
+  // 🔴 관문도 같은 `showDecided` 다: 그 갈래를 끄면 줄도 숫자도 **함께** 0 이어야 한다.
+  let returnCount = 0;
+  if (showDecided) {
+    const returnTotal = input.completedReturnsTotal ?? input.completedReturns.length;
+    returnCount = returnTotal > input.completedReturns.length ? returnTotal : returnShown;
+  }
+
   // ④ 재고 부족은 **그린 줄을 그대로 센다** — 넘친 종을 「그 밖에 N종 더」 한 줄로 **보여 주므로**
   //    배지와 펼친 목록이 어긋날 자리가 없다. 🔴 ②·③처럼 「잘린 총계」를 쓰지 않는 까닭이 그것이다:
   //    저쪽은 넘친 줄을 **말없이 버리므로** 총계를 써야 참말이 되고, 이쪽은 버리지 않는다.
@@ -778,6 +898,6 @@ export function buildInventoryNotificationItems(input: {
   return {
     items: items.slice(0, NOTIFICATION_MAX_ITEMS),
     // 🔵 묶음 줄(⓪ · ① · ④의 「그 밖에 N종 더」)은 **1** 로 센다 — 펼치면 한 줄이기 때문이다(위 count 주석).
-    count: (showToDecide ? 1 : 0) + (showPending ? 1 : 0) + lowStockCount + decidedCount + rejectedCount,
+    count: (showToDecide ? 1 : 0) + (showPending ? 1 : 0) + lowStockCount + decidedCount + returnCount + rejectedCount,
   };
 }
