@@ -242,8 +242,33 @@ export interface ReturnCandidate {
   remaining: number;
 }
 
-export async function returnCandidates(partId: string): Promise<ReturnCandidate[]> {
-  const rows = await db()
+/**
+ * 반환 후보를 읽는 **거르개** — **부품 하나로**(반환 화면) 또는 **인수번호 하나로**(A/S 통로).
+ *
+ * 🔴 **같은 뺄셈을 두 벌로 적지 않으려고 거르개만 갈아 끼운다** (2026-11-26). 「나간 수량 − 이미 돌아온
+ *    수량」을 세는 자리가 둘이 되면, 기록 취소된 줄을 빼는 조건이나 「사용·대여만」 같은 조건이 한쪽에만
+ *    더해지는 날이 온다 — 그때 두 화면이 **같은 부품에 다른 최댓값**을 말한다.
+ */
+type ReturnableFilter = { partId: string } | { intakeNumber: string };
+
+/**
+ * 부품 하나로 볼 때 읽는 줄 수의 뚜껑 — **100**. 🔵 옛 코드의 값 그대로다(반환 화면이 고르는 목록).
+ *
+ * 🔴 **인수번호로 볼 때는 뚜껑을 씌우지 않는다.** 거기서 자르면 `taken` 이 조용히 줄고, 그러면
+ *    「돌려줄 수 있는 수량」이 **실제보다 작게** 나가 멀쩡한 반환이 막힌다 — 오류 없이 수량만 틀린다.
+ *    한 수리 건에 달리는 반출 줄은 사람이 적는 수라 뚜껑이 없어도 몇십 줄이다.
+ */
+const PART_RETURN_CANDIDATE_LIMIT = 100;
+
+/**
+ * 되돌릴 수 있는 **원장 줄**을 읽는다 — 사용·대여의 나간 줄 중 기록 취소되지 않은 것.
+ *
+ * 🔴 **「이미 돌아온 수량」을 세는 식은 원장의 검사(`lib/stock/ledger.ts` 의 `return_exceeds`)와 같은 식이다** —
+ *    그 줄을 가리키는 반환 줄의 `delta` 합. 그쪽이 **잠그고 다시 세는** 마지막 울타리라, 여기가 더 느슨해도
+ *    더 빡빡해도 안 되고 **같아야** 한다.
+ */
+async function readReturnableTransactions(filter: ReturnableFilter) {
+  const rows = db()
     .select({
       transactionId: stockTransactions.id,
       type: stockEntries.type,
@@ -254,16 +279,35 @@ export async function returnCandidates(partId: string): Promise<ReturnCandidate[
       usagePlace: stockEntries.usagePlace,
       counterparty: stockEntries.counterparty,
       delta: stockTransactions.delta,
+      partNo: parts.no,
+      partName: parts.name,
+      partName2: parts.name2,
+      partCustomerName: parts.customerName,
+      partKyosanPartNo: parts.kyosanPartNo,
+      partDrawingNo: parts.drawingNo,
+      owner: parts.owner,
       returned: sql<number>`coalesce((select sum(r.delta) from stock_transactions r where r.returns_transaction_id = ${stockTransactions.id}), 0)`.mapWith(Number),
       corrected: sql<boolean>`exists (select 1 from stock_transactions r where r.reverses_transaction_id = ${stockTransactions.id})`,
     })
     .from(stockTransactions)
     .innerJoin(stockEntries, eq(stockEntries.id, stockTransactions.entryId))
-    .where(and(eq(stockTransactions.partId, partId), inArray(stockEntries.type, ["USE", "LOAN"])))
-    .orderBy(desc(stockEntries.occurredOn), desc(stockTransactions.createdAt))
-    .limit(100);
+    // 🔵 부품을 여기서 잇는다 — 숨긴 부품도 그대로 온다. 원장 줄이 있는 부품은 **삭제가 막혀 있어**
+    //    (`lib/parts/mutations.ts`) 여기 걸릴 일이 없고, 그래도 생기면 **감추는 것보다 보이는 쪽**이 맞다:
+    //    이미 나간 물건이고 돌려받을 길이 없어지면 재고가 영영 어긋난다.
+    .innerJoin(parts, eq(parts.id, stockTransactions.partId))
+    .where(and("partId" in filter ? eq(stockTransactions.partId, filter.partId) : eq(stockEntries.intakeNumber, filter.intakeNumber), inArray(stockEntries.type, ["USE", "LOAN"])));
+  const found =
+    "partId" in filter
+      ? await rows.orderBy(desc(stockEntries.occurredOn), desc(stockTransactions.createdAt)).limit(PART_RETURN_CANDIDATE_LIMIT)
+      : await rows.orderBy(asc(parts.no), asc(stockTransactions.createdAt));
+  // 🔴 **기록 취소된 줄과 + 줄은 뺀다.** 취소된 반출은 나간 적이 없는 것이고(되돌리는 줄이 이미 쌓였다),
+  //    + 줄은 같은 건에 섞여 들어온 되돌림이라 「나간 수량」이 아니다.
+  return found.filter((r) => !r.corrected && r.delta < 0);
+}
+
+export async function returnCandidates(partId: string): Promise<ReturnCandidate[]> {
+  const rows = await readReturnableTransactions({ partId });
   return rows
-    .filter((r) => !r.corrected && r.delta < 0)
     .map((r) => ({
       transactionId: r.transactionId,
       type: r.type,
@@ -278,6 +322,37 @@ export async function returnCandidates(partId: string): Promise<ReturnCandidate[
       remaining: -r.delta - r.returned,
     }))
     .filter((r) => r.remaining > 0);
+}
+
+/**
+ * **인수번호 하나로** 되돌릴 수 있는 줄 — A/S 가 묻는 통로(`GET /api/v1/return-candidates`)가 쓴다
+ * (2026-11-26. 설명은 API.md 8절, 규칙과 모양은 `lib/api/return-candidates.ts`).
+ *
+ * 🔵 **합치지 않고 줄 그대로 올려 보낸다.** 부품별로 묶고 대기 중인 신청을 빼는 일은 순수 함수가 한다
+ *    (`summarizeReturnCandidates`) — 그래야 「0 인 부품은 빼고 준다」·「음수로 안 나간다」 같은 규칙을
+ *    **DB 없이** 시험이 덮는다. 이 저장소에는 DB 시험이 없다.
+ * 🔴 **남은 수량이 0 인 줄도 뺀 채로 올리지 않는다.** 그 줄도 `taken`·`returned` 에 보태야 부품 합계가
+ *    참말이 된다 — 여기서 미리 걸러 내면 「나간 적이 없는 것」처럼 보인다.
+ * 🔵 돌려주는 모양은 `lib/api/return-candidates.ts` 의 `ReturnableLine` 과 같아야 하고, 어긋나면 통로
+ *    파일(`src/app/api/v1/return-candidates/route.ts`)에서 tsc 가 멈춘다 — 서로 끌어오지 않고 **맞물리는
+ *    자리에서** 잰다(선례: `RequestStatusSource`).
+ */
+export async function returnableLinesByIntake(intakeNumber: string) {
+  const rows = await readReturnableTransactions({ intakeNumber });
+  return rows.map((r) => ({
+    transactionId: r.transactionId,
+    part: {
+      no: r.partNo,
+      name: r.partName,
+      name2: r.partName2,
+      customerName: r.partCustomerName,
+      kyosanPartNo: r.partKyosanPartNo,
+      drawingNo: r.partDrawingNo,
+      owner: r.owner,
+    },
+    taken: -r.delta,
+    returned: r.returned,
+  }));
 }
 
 /** 부품에 원장 줄이 있나 (삭제 막기 — 조각 3 mutations.ts 의 TODO) */

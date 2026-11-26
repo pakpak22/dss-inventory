@@ -16,6 +16,7 @@ import {
   ENTRY_TYPE_LABEL,
   EXECUTABLE_REQUEST_STATUSES,
   EXTERNALLY_CANCELLABLE_REQUEST_SOURCES,
+  PENDING_REQUEST_STATUSES,
   REJECTABLE_REQUEST_STATUSES,
   isChargeType,
   isClosedRequest,
@@ -1108,6 +1109,33 @@ export async function listRequestsByIntakeNumbers(intakeNumbers: readonly string
   //    묻는 법에 따라 [요청 취소] 단추를 그렸다 말았다 한다).
   const subs = requesterSubsOf(rows);
   return views.map((request) => ({ externalKey: keyById.get(request.id) ?? null, request: withRequesterSub(request, subs) }));
+}
+
+/**
+ * **대기 중인 반환 신청의 payload** — A/S 가 묻는 「돌려줄 수 있는 부품」 통로가 쓴다
+ * (2026-11-26, `GET /api/v1/return-candidates`. 설명은 API.md 8절).
+ *
+ * 🔴 **지금은 언제나 빈 목록이다.** 이 저장소에는 `type='RETURN'` 인 신청이 아직 **한 줄도 없다**
+ *    (2026-11-26 개발 DB 실측: 신청 29줄이 전부 `USE`). 반환 신청을 **세우는 일은 다음 조각**이고,
+ *    그래도 읽는 자리를 미리 두는 까닭은 `lib/api/return-candidates.ts` 의 `pendingByTransaction`
+ *    머리말에 적혀 있다 — 한 줄이라도 서는 순간 없으면 **두 번 신청해 넘기는 길**이 열린다.
+ * 🔴 **거르는 상태는 `PENDING_REQUEST_STATUSES` 하나다** — 「대기」를 가르는 글자가 적힌 곳은 이
+ *    저장소에 그 한 벌뿐이어야 한다(`./codes` 의 그 상수 주석). 여기에 상태를 손으로 적으면,
+ *    상태가 하나 늘어난 날 그 상태의 반환 신청이 `pending` 에서 **조용히 빠진다.**
+ * 🔵 **payload 만 읽는다.** 누가 언제 올렸는지는 이 셈에 쓰이지 않고, 칸을 더 실어 보내면 「통로가
+ *    신청 내용을 들여다본다」는 뜻이 생긴다. 반환 줄을 펴는 규칙은 순수 함수 한 곳이다
+ *    (`returnRequestLines`) — DB 없이 시험이 덮는 자리다.
+ * 🔵 **그 수리 건의 것만 골라 읽지 않는다.** 반환 신청은 부품이 아니라 **원장 줄 번호**로 줄을
+ *    가리켜서(`form.ts` 의 `ReturnLine`) payload 를 파고들지 않으면 걸러지지 않는데, 대기 중인
+ *    반환 신청은 담당자가 바로바로 처리하는 몇 건이라 다 읽어도 된다. 🔴 뚜껑(limit)을 씌우지
+ *    않는 것은 일부러다 — 잘리면 `pending` 이 작아져 **넘치는 반환을 열어 준다.**
+ */
+export async function listPendingReturnPayloads(): Promise<unknown[]> {
+  const rows = await db()
+    .select({ payload: stockRequests.payload })
+    .from(stockRequests)
+    .where(and(eq(stockRequests.type, "RETURN"), inArray(stockRequests.status, [...PENDING_REQUEST_STATUSES])));
+  return rows.map((r) => r.payload);
 }
 
 /**
